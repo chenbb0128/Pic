@@ -1,10 +1,15 @@
-import { computed } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { buildExportFileName } from '../domain/export/fileName'
+import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
+import { copyText } from '../services/clipboard'
 import { exportLayoutPng, formatBytes } from '../services/pngExporter'
 import { useEditorStore } from '../stores/editor'
 
 export function usePngExport() {
   const store = useEditorStore()
+  const copyResult = ref<'idle' | 'copied' | 'manual'>('idle')
+  const buttonConfirmed = ref(false)
+  let feedbackTimer: ReturnType<typeof setTimeout> | undefined
   const canExport = computed(() => {
     if (store.mode === 'full2') return store.assets2.length > 0
     if (store.mode === 'full3') return store.assets3.length > 0
@@ -18,6 +23,8 @@ export function usePngExport() {
     }
     store.exporting = true
     store.clearGenerated()
+    copyResult.value = 'idle'
+    buttonConfirmed.value = false
     store.exportStatus = '正在准备高清 PNG…'
     try {
       const result = await exportLayoutPng({
@@ -46,6 +53,23 @@ export function usePngExport() {
     link.click()
   }
 
+  async function copyOrderText(): Promise<boolean> {
+    const copied = await copyText(XIAOHONGSHU_ORDER_TEXT)
+    copyResult.value = copied ? 'copied' : 'manual'
+    if (copied) {
+      buttonConfirmed.value = true
+      if (feedbackTimer) clearTimeout(feedbackTimer)
+      feedbackTimer = setTimeout(() => { buttonConfirmed.value = false }, 2500)
+    }
+    return copied
+  }
+
+  async function downloadAndCopy(): Promise<void> {
+    if (!store.generated) return
+    download()
+    await copyOrderText()
+  }
+
   function openPreview(): void {
     if (!store.generated) return
     const popup = window.open('', '_blank')
@@ -62,5 +86,20 @@ export function usePngExport() {
     popup.document.body.append(image)
   }
 
-  return { canExport, generate, download, openPreview }
+  onScopeDispose(() => {
+    if (feedbackTimer) clearTimeout(feedbackTimer)
+  })
+
+  return {
+    canExport,
+    copyResult,
+    buttonConfirmed,
+    orderText: XIAOHONGSHU_ORDER_TEXT,
+    orderUrl: XIAOHONGSHU_ORDER_URL,
+    generate,
+    download,
+    downloadAndCopy,
+    copyOrderText,
+    openPreview,
+  }
 }

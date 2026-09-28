@@ -5,6 +5,7 @@
         <RouterLink class="font-bold text-slate-900" to="/workspace">贴纸排版</RouterLink>
         <nav class="flex items-center gap-1 text-sm" aria-label="主导航">
           <RouterLink class="rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-100" active-class="bg-slate-100 text-slate-900" to="/workspace">工作台</RouterLink>
+          <RouterLink class="rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-100" active-class="bg-slate-100 text-slate-900" to="/pricing">价格</RouterLink>
           <RouterLink class="rounded-lg px-3 py-2 text-slate-600 hover:bg-slate-100" active-class="bg-slate-100 text-slate-900" to="/help">帮助</RouterLink>
         </nav>
       </div>
