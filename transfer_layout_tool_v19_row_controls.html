@@ -1,0 +1,109 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>转印贴 2CM+3CM V17 三模式排版·印刷高清模式</title><style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,'Microsoft YaHei',sans-serif;background:#f3f4f6;color:#111827}.app{display:grid;grid-template-columns:340px 1fr;min-height:100vh}.side{background:#fff;border-right:1px solid #e5e7eb;padding:20px;overflow:auto}.side h1{font-size:20px;margin:0 0 6px}.muted{font-size:12px;color:#6b7280;line-height:1.55}.group{margin-top:16px}.label{font-size:13px;font-weight:700;margin-bottom:7px}.drop{border:2px dashed #cbd5e1;border-radius:11px;padding:14px 10px;text-align:center;cursor:pointer;background:#fafafa}.drop:hover,.drop.drag{border-color:#111827;background:#f3f4f6}.thumbs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin-top:7px}.thumb{aspect-ratio:1;width:100%;object-fit:contain;background:#eef0f3;border-radius:5px}.thumbitem{min-width:0}.q{font-size:10px;line-height:1.25;margin-top:2px;text-align:center}.q.ok{color:#15803d}.q.warn{color:#b45309}.q.bad{color:#b91c1c}.btn{width:100%;border:0;border-radius:9px;padding:11px 12px;font-weight:700;cursor:pointer;background:#111827;color:#fff;margin-top:8px}.btn.secondary{background:#eef0f3;color:#111827}.row{display:grid;grid-template-columns:1fr 105px;gap:8px;align-items:center;margin:8px 0}.row select,.row input{width:100%;padding:7px;border:1px solid #d1d5db;border-radius:7px;background:#fff}.sep{height:1px;background:#e5e7eb;margin:15px 0}.main{padding:20px;display:flex;flex-direction:column;min-width:0}.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}.pill{font-size:12px;background:#fff;border:1px solid #e5e7eb;border-radius:999px;padding:7px 10px}.stagewrap{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto;background:#dfe3e8;border-radius:14px;padding:20px;min-height:520px}.stage{box-shadow:0 12px 40px #0002;background-color:#fff;background-image:linear-gradient(45deg,#e5e7eb 25%,transparent 25%),linear-gradient(-45deg,#e5e7eb 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#e5e7eb 75%),linear-gradient(-45deg,transparent 75%,#e5e7eb 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}.stage canvas{display:block;max-width:100%;height:auto}.legend{display:flex;gap:14px;margin-top:10px;font-size:12px;color:#4b5563}.dot{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px}.d2{background:#2563eb}.d3{background:#db2777}@media(max-width:900px){.app{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid #e5e7eb}.main{padding:10px}}
+
+.customer-note{margin-top:8px;padding:10px 12px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:9px;font-size:12px;color:#475569;line-height:1.55}
+@media(max-width:700px){
+body{background:#fff}.app{display:flex;flex-direction:column}.side{padding:14px;border:0;overflow:visible}.side h1{font-size:22px}.main{padding:0 12px 100px}.label{font-size:15px}.drop{padding:22px 12px;font-size:15px;border-radius:14px}.btn{min-height:48px;font-size:15px;border-radius:12px}.row{grid-template-columns:92px 1fr}.row select,.row input,#layoutMode{min-height:44px;font-size:16px}.thumbs{grid-template-columns:repeat(4,1fr)}.toolbar{gap:6px;margin:10px 0}.pill{font-size:11px;padding:6px 8px}.stagewrap{min-height:0;padding:8px}.stage{width:100%}.stage canvas{width:100%;height:auto}.legend{display:none}#export{position:fixed;left:12px;right:12px;bottom:12px;width:calc(100% - 24px);z-index:30;box-shadow:0 8px 24px #0004}}
+</style></head><body><div class="app"><aside class="side"><h1>转印贴自助排版</h1><div class="muted">选择排版规格，上传透明底素材，系统会自动排版并生成高清透明 PNG。</div><div class="customer-note">手机可直接使用。建议用 Chrome、Edge 或 Safari 打开；生成高清图时请不要退出页面。</div>
+<div class="group"><div class="label">① 选择规格</div><select id="layoutMode" style="width:100%;padding:9px;border:1px solid #d1d5db;border-radius:7px;background:#fff"><option value="mixed" selected>2CM + 3CM 混合版（48 + 24）</option><option value="full2">2CM 铺满整版（120个）</option><option value="full3">3CM 铺满整版（56个）</option></select><div id="modeInfo" class="muted" style="margin-top:6px">混合版：2CM 48个 + 3CM 24个。</div>
+<div id="rowControls" style="margin-top:10px">
+  <div class="row"><span>2CM 行数</span><select id="rows2Ctl"></select></div>
+  <div class="row"><span>3CM 行数</span><select id="rows3Ctl"></select></div>
+  <div id="rowInfo" class="muted">可调整行数；系统自动计算数量和间距。</div>
+</div></div><div class="group"><div class="label">② 上传 2CM 素材</div><div class="drop" id="drop2">点击选择透明 PNG<br><span class="muted">只填充上方 2CM 区</span></div><input id="files2" type="file" accept="image/png,image/webp" multiple hidden><div id="status2" class="muted" style="margin-top:5px">未上传</div><div class="thumbs" id="thumbs2"></div><button class="btn secondary" id="clear2">清空2CM素材</button></div>
+<div class="group"><div class="label">③ 上传 3CM 素材</div><div class="drop" id="drop3">点击选择透明 PNG<br><span class="muted">只填充下方 3CM 区</span></div><input id="files3" type="file" accept="image/png,image/webp" multiple hidden><div id="status3" class="muted" style="margin-top:5px">未上传</div><div class="thumbs" id="thumbs3"></div><button class="btn secondary" id="clear3">清空3CM素材</button></div>
+<div class="sep"></div><div class="group"><div class="label">④ 生成成品</div><div class="row"><span>导出精度</span><select id="dpi"><option value="300" selected>300 DPI</option><option value="600">600 DPI</option></select></div><div class="row"><span>文件名称</span><input id="fileName" type="text" placeholder="例如：张三-0924"></div><div class="muted" style="margin-top:-3px">可自定义下载名称；无需输入 .png，系统会自动添加。</div><div id="qualitySummary" class="muted" style="margin:7px 0">上传素材后自动检测印刷清晰度。</div><button class="btn" id="export">生成高清透明 PNG</button><div id="exportStatus" class="muted" style="margin-top:7px">PNG无损透明底；高质量渐进缩放；写入真实DPI，Illustrator按293×210mm读取。</div><div id="exportPanel" style="display:none;margin-top:8px"><a id="saveLink" class="btn" style="display:block;text-decoration:none;text-align:center">下载高清PNG</a><button class="btn secondary" id="openPng">打开高清PNG（右键另存为）</button><div id="fileInfo" class="muted" style="margin-top:6px"></div></div></div></aside>
+<main class="main"><div class="toolbar"><span class="pill">293 × 210 mm</span><span class="pill">自动水平/垂直均匀分布</span><span class="pill" id="pill2">2CM：12×4 = 48</span><span class="pill" id="pill3">3CM：8×3 = 24</span><span class="pill">印刷高清检测</span></div><div class="stagewrap"><div class="stage"><canvas id="cv" width="1172" height="840"></canvas></div></div><div class="legend"><span><i class="dot d2"></i>上：2CM区域 48个</span><span><i class="dot d3"></i>下：3CM区域 24个</span><span>水平贴齐左右画板；垂直贴齐上下画板；辅助框不导出</span></div></main></div>
+<script>
+const MM_W=293,MM_H=210,PREVIEW_W=1172,PREVIEW_H=840;const cv=document.getElementById('cv'),ctx=cv.getContext('2d');let assets2=[],assets3=[];
+const mmx=mm=>mm/MM_W*PREVIEW_W,mmy=mm=>mm/MM_H*PREVIEW_H;
+// Fixed counts, distributed to the full 293x210mm artboard.
+// Horizontal: first/last item edges align to artboard edges, remaining space is evenly distributed between columns.
+// Vertical: 2CM block starts at top, 3CM block ends at bottom; all remaining vertical space is evenly distributed across the 6 internal row gaps.
+const cols2=12,rows2=4,size2=20,cols3=8,rows3=3,size3=30;
+const gapX2=(MM_W-cols2*size2)/(cols2-1); // 53/11 = 4.81818mm
+const gapX3=(MM_W-cols3*size3)/(cols3-1); // 53/7  = 7.57143mm
+const verticalGap=(MM_H-(rows2*size2+rows3*size3))/(rows2+rows3-1); // 40/6 = 6.66667mm
+function makeDistributedSlots(x0,y0,size,gapX,gapY,cols,rows,type){let a=[];for(let r=0;r<rows;r++)for(let c=0;c<cols;c++)a.push({x:x0+c*(size+gapX),y:y0+r*(size+gapY),size,type});return a}
+const slots2=makeDistributedSlots(0,0,size2,gapX2,verticalGap,cols2,rows2,'2cm');
+const y3=rows2*size2+rows2*verticalGap;
+const slots3=makeDistributedSlots(0,y3,size3,gapX3,verticalGap,cols3,rows3,'3cm');
+// Full-sheet modes: keep exact 20/30mm artwork boxes, align outer edges to 293x210mm, distribute remaining space evenly.
+const full2Cols=12,full2Rows=10,full2GapX=(MM_W-full2Cols*size2)/(full2Cols-1),full2GapY=(MM_H-full2Rows*size2)/(full2Rows-1);
+const full3Cols=8,full3Rows=7,full3GapX=(MM_W-full3Cols*size3)/(full3Cols-1),full3GapY=0;
+const full2Slots=makeDistributedSlots(0,0,size2,full2GapX,full2GapY,full2Cols,full2Rows,'2cm');
+const full3Slots=makeDistributedSlots(0,0,size3,full3GapX,full3GapY,full3Cols,full3Rows,'3cm');
+function currentMode(){return document.getElementById('layoutMode')?.value||'mixed'}
+function ctlRows(id,fallback){const e=document.getElementById(id);return e?Math.max(1,+e.value||fallback):fallback}
+function makeFullSlots(size,cols,rows,type){const gx=(MM_W-cols*size)/(cols-1),gy=rows>1?(MM_H-rows*size)/(rows-1):0;return makeDistributedSlots(0,0,size,gx,gy,cols,rows,type)}
+function makeMixedDynamic(r2,r3){
+ const total=r2*size2+r3*size3;
+ const gaps=Math.max(1,r2+r3-1);
+ const gy=(MM_H-total)/gaps;
+ if(gy<0)return null;
+ const s2=makeDistributedSlots(0,0,size2,gapX2,gy,cols2,r2,'2cm');
+ const y3=r2*size2+r2*gy;
+ const s3=makeDistributedSlots(0,y3,size3,gapX3,gy,cols3,r3,'3cm');
+ return {s2,s3,gapY:gy};
+}
+function activeSlots(){
+ const m=currentMode(),r2=ctlRows('rows2Ctl',4),r3=ctlRows('rows3Ctl',3);
+ if(m==='full2')return {s2:makeFullSlots(size2,cols2,r2,'2cm'),s3:[]};
+ if(m==='full3')return {s2:[],s3:makeFullSlots(size3,cols3,r3,'3cm')};
+ const x=makeMixedDynamic(r2,r3); return x||{s2:[],s3:[]};
+}
+function fit(img,sizePx){const ar=img.width/img.height;let w,h;if(ar>=1){w=sizePx;h=w/ar}else{h=sizePx;w=h*ar}return {w,h}}
+function drawHQ(target,img,dx,dy,dw,dh){target.save();target.imageSmoothingEnabled=true;target.imageSmoothingQuality='high';const ratio=Math.max(img.naturalWidth/dw,img.naturalHeight/dh);if(ratio>2.2){let sw=img.naturalWidth,sh=img.naturalHeight,src=img;while(sw/2>dw*1.35&&sh/2>dh*1.35){const nw=Math.max(Math.ceil(dw),Math.floor(sw/2)),nh=Math.max(Math.ceil(dh),Math.floor(sh/2));const t=document.createElement('canvas');t.width=nw;t.height=nh;const tc=t.getContext('2d',{alpha:true});tc.imageSmoothingEnabled=true;tc.imageSmoothingQuality='high';tc.drawImage(src,0,0,sw,sh,0,0,nw,nh);src=t;sw=nw;sh=nh}target.drawImage(src,0,0,sw,sh,dx,dy,dw,dh)}else target.drawImage(img,dx,dy,dw,dh);target.restore()}
+function render(target=ctx,outW=PREVIEW_W,outH=PREVIEW_H,guides=true){target.clearRect(0,0,outW,outH);const sx=outW/MM_W,sy=outH/MM_H,{s2,s3}=activeSlots();function drawGroup(slots,assets){slots.forEach((s,i)=>{if(!assets.length)return;const img=assets[i%assets.length].img;const box=s.size*Math.min(sx,sy);const f=fit(img,box);const cx=(s.x+s.size/2)*sx,cy=(s.y+s.size/2)*sy;drawHQ(target,img,cx-f.w/2,cy-f.h/2,f.w,f.h)})}drawGroup(s2,assets2);drawGroup(s3,assets3);if(guides){target.save();target.lineWidth=1.2;s2.forEach(s=>{target.strokeStyle='rgba(37,99,235,.30)';target.strokeRect(s.x*sx,s.y*sy,s.size*sx,s.size*sy)});s3.forEach(s=>{target.strokeStyle='rgba(219,39,119,.30)';target.strokeRect(s.x*sx,s.y*sy,s.size*sx,s.size*sy)});target.restore()}}
+function fileToURL(f){return new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(f)})}function urlToImg(url){return new Promise((res,rej)=>{const im=new Image();im.onload=()=>res(im);im.onerror=rej;im.src=url})}
+function requiredPx(type,dpi){return Math.round((type===2?20:30)/25.4*dpi)}
+function qualityOf(a,type,dpi){const req=requiredPx(type,dpi),short=Math.min(a.img.naturalWidth,a.img.naturalHeight),ratio=short/req;if(ratio>=1.5)return {cls:'ok',txt:'清晰 ✓'};if(ratio>=1)return {cls:'ok',txt:'够用 ✓'};if(ratio>=.75)return {cls:'warn',txt:'一般 △'};return {cls:'bad',txt:'不足 ⚠'}}
+function updateQuality(){const dpi=+document.getElementById('dpi').value;let all=[...assets2.map(a=>[a,2]),...assets3.map(a=>[a,3])];if(!all.length){document.getElementById('qualitySummary').textContent='上传素材后自动检测印刷清晰度。';return}let bad=0,warn=0;all.forEach(([a,t])=>{const q=qualityOf(a,t,dpi);if(q.cls==='bad')bad++;else if(q.cls==='warn')warn++});const req2=requiredPx(2,dpi),req3=requiredPx(3,dpi);document.getElementById('qualitySummary').textContent=`${dpi} DPI参考：2CM建议≥${req2}px，3CM建议≥${req3}px；当前 ${all.length} 张，${bad?bad+'张不足':warn?warn+'张一般':'全部够用 ✓'}`;renderThumbs(2);renderThumbs(3)}
+async function loadFiles(list,type){const fs=[...list];const arr=type===2?assets2:assets3,st=document.getElementById('status'+type);st.textContent='正在读取 '+fs.length+' 张…';let ok=0;for(const f of fs){try{const url=await fileToURL(f);const img=await urlToImg(url);arr.push({url,img,name:f.name});ok++}catch(e){}}const a=activeSlots();const count=type===2?a.s2.length:a.s3.length;st.textContent='已读取 '+ok+' 张；当前模式将循环填满 '+count+' 个位置';updateQuality();render()}
+function renderThumbs(type){const arr=type===2?assets2:assets3,el=document.getElementById('thumbs'+type),dpi=+document.getElementById('dpi').value;el.innerHTML='';arr.forEach(a=>{const box=document.createElement('div');box.className='thumbitem';const im=document.createElement('img');im.className='thumb';im.src=a.url;im.title=`${a.name}｜${a.img.naturalWidth}×${a.img.naturalHeight}px`;const q=qualityOf(a,type,dpi),lab=document.createElement('div');lab.className='q '+q.cls;lab.textContent=q.txt;box.appendChild(im);box.appendChild(lab);el.appendChild(box)})}
+function setupDrop(type){const drop=document.getElementById('drop'+type),fi=document.getElementById('files'+type);drop.onclick=()=>fi.click();fi.onchange=e=>{loadFiles(e.target.files,type);fi.value=''};drop.ondragover=e=>{e.preventDefault();drop.classList.add('drag')};drop.ondragleave=()=>drop.classList.remove('drag');drop.ondrop=e=>{e.preventDefault();drop.classList.remove('drag');loadFiles(e.dataTransfer.files,type)}}setupDrop(2);setupDrop(3);
+document.getElementById('clear2').onclick=()=>{assets2=[];renderThumbs(2);document.getElementById('status2').textContent='未上传';updateQuality();render()};document.getElementById('clear3').onclick=()=>{assets3=[];renderThumbs(3);document.getElementById('status3').textContent='未上传';updateQuality();render()};document.getElementById('dpi').onchange=()=>{updateQuality()};
+function fillRows(){
+ const a=document.getElementById('rows2Ctl'),b=document.getElementById('rows3Ctl');
+ if(!a.options.length){for(let i=1;i<=10;i++)a.add(new Option(i+' 行',i));for(let i=1;i<=7;i++)b.add(new Option(i+' 行',i));a.value=4;b.value=3}
+}
+function updateModeUI(){
+ fillRows();
+ const m=currentMode(),r2=ctlRows('rows2Ctl',4),r3=ctlRows('rows3Ctl',3),info=document.getElementById('modeInfo'),p2=document.getElementById('pill2'),p3=document.getElementById('pill3'),ri=document.getElementById('rowInfo');
+ const rc=document.getElementById('rowControls');
+ document.getElementById('rows2Ctl').closest('.row').style.display=m==='full3'?'none':'grid';
+ document.getElementById('rows3Ctl').closest('.row').style.display=m==='full2'?'none':'grid';
+ if(m==='full2'){
+   const count=cols2*r2,gy=r2>1?(MM_H-r2*size2)/(r2-1):0;
+   info.textContent=`2CM整版：12列 × ${r2}行 = ${count}个。`;p2.textContent=`2CM：12×${r2} = ${count}`;p3.textContent='3CM：不使用';
+   ri.textContent=gy>=0?`当前垂直间距约 ${gy.toFixed(2)}mm。`:'行数过多，无法放入画板。';
+ }else if(m==='full3'){
+   const count=cols3*r3,gy=r3>1?(MM_H-r3*size3)/(r3-1):0;
+   info.textContent=`3CM整版：8列 × ${r3}行 = ${count}个。`;p2.textContent='2CM：不使用';p3.textContent=`3CM：8×${r3} = ${count}`;
+   ri.textContent=gy>=0?`当前垂直间距约 ${gy.toFixed(2)}mm。`:'行数过多，无法放入画板。';
+ }else{
+   const x=makeMixedDynamic(r2,r3),n2=cols2*r2,n3=cols3*r3;
+   info.textContent=`混合版：2CM ${n2}个 + 3CM ${n3}个。`;p2.textContent=`2CM：12×${r2} = ${n2}`;p3.textContent=`3CM：8×${r3} = ${n3}`;
+   ri.textContent=x?`当前统一垂直间距约 ${x.gapY.toFixed(2)}mm。`:'当前行数组合超过210mm，请减少行数。';
+ }
+ updateQuality();render()
+}
+document.getElementById('layoutMode').onchange=updateModeUI;
+document.getElementById('rows2Ctl').onchange=updateModeUI;
+document.getElementById('rows3Ctl').onchange=updateModeUI;
+
+function canvasBlob(c){return new Promise((res,rej)=>{try{c.toBlob(b=>b?res(b):rej(new Error('PNG编码失败')),'image/png')}catch(e){rej(e)}})}
+// Write PNG pHYs chunk so Illustrator reads the intended physical size (300/600 DPI).
+function crc32(bytes){let c=0xffffffff;for(const b of bytes){c^=b;for(let k=0;k<8;k++)c=(c>>>1)^((c&1)?0xedb88320:0)}return (c^0xffffffff)>>>0}
+function u32be(n){return new Uint8Array([(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255])}
+function concatU8(parts){let n=parts.reduce((a,b)=>a+b.length,0),o=new Uint8Array(n),p=0;for(const b of parts){o.set(b,p);p+=b.length}return o}
+async function setPngDpi(blob,dpi){const src=new Uint8Array(await blob.arrayBuffer());const sig=src.slice(0,8);let pos=8,chunks=[];const ppm=Math.round(dpi/0.0254);const type=new TextEncoder().encode('pHYs');const data=concatU8([u32be(ppm),u32be(ppm),new Uint8Array([1])]);const phys=concatU8([u32be(9),type,data,u32be(crc32(concatU8([type,data])))]);let inserted=false;while(pos<src.length){const len=((src[pos]<<24)|(src[pos+1]<<16)|(src[pos+2]<<8)|src[pos+3])>>>0;const end=pos+12+len;const typ=String.fromCharCode(src[pos+4],src[pos+5],src[pos+6],src[pos+7]);if(typ==='pHYs'){pos=end;continue}chunks.push(src.slice(pos,end));if(typ==='IHDR'&&!inserted){chunks.push(phys);inserted=true}pos=end}return new Blob([concatU8([sig,...chunks])],{type:'image/png'})}
+function fmtBytes(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(2)+' MB'}
+let lastUrl='',lastName='';
+const exportPanel=document.getElementById('exportPanel'),openPng=document.getElementById('openPng'),fileInfo=document.getElementById('fileInfo');
+openPng.onclick=()=>{if(!lastUrl)return;const w=window.open();if(w){w.document.write('<title>'+lastName+'</title><style>html,body{margin:0;background:#888;height:100%}img{display:block;max-width:100%;margin:auto;background-image:linear-gradient(45deg,#ddd 25%,transparent 25%),linear-gradient(-45deg,#ddd 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ddd 75%),linear-gradient(-45deg,transparent 75%,#ddd 75%);background-size:20px 20px;background-position:0 0,0 10px,10px -10px,-10px 0}</style><img src="'+lastUrl+'">');w.document.close()}else{location.href=lastUrl}};
+document.getElementById('export').onclick=async()=>{const btn=document.getElementById('export'),st=document.getElementById('exportStatus'),link=document.getElementById('saveLink');const mode=currentMode();if(mode==='full2'&&!assets2.length){st.textContent='2CM铺满模式请先上传2CM素材';return}if(mode==='full3'&&!assets3.length){st.textContent='3CM铺满模式请先上传3CM素材';return}if(mode==='mixed'&&!assets2.length&&!assets3.length){st.textContent='请先上传2CM或3CM素材';return}btn.disabled=true;btn.textContent='正在生成高清PNG…';exportPanel.style.display='none';await new Promise(r=>setTimeout(r,30));try{const dpi=+document.getElementById('dpi').value,w=Math.round(MM_W/25.4*dpi),h=Math.round(MM_H/25.4*dpi);st.textContent=`正在生成 ${w}×${h}px，请稍候…`;const out=document.createElement('canvas');out.width=w;out.height=h;const oc=out.getContext('2d',{alpha:true,willReadFrequently:false});oc.imageSmoothingEnabled=true;oc.imageSmoothingQuality='high';oc.clearRect(0,0,w,h);render(oc,w,h,false);let blob=await canvasBlob(out);if(!blob||blob.size<1000)throw new Error('生成的PNG文件异常');blob=await setPngDpi(blob,dpi);if(lastUrl)URL.revokeObjectURL(lastUrl);lastUrl=URL.createObjectURL(blob);const customName=document.getElementById('fileName').value.trim().replace(/[\\/:*?\"<>|]/g,'_').replace(/\.png$/i,'');const modeLabel=mode==='full2'?'2CM铺满120个':mode==='full3'?'3CM铺满56个':'2CM48_3CM24';lastName=(customName||`转印贴_${modeLabel}_${dpi}dpi_${w}x${h}_透明`)+'.png';link.href=lastUrl;link.download=lastName;link.textContent='下载高清PNG（'+fmtBytes(blob.size)+'）';fileInfo.textContent=`已生成：${w} × ${h} px｜${dpi} DPI已写入PNG｜AI物理尺寸约293×210mm｜PNG透明底｜${fmtBytes(blob.size)}｜无JPG/WebP转换`;exportPanel.style.display='block';st.textContent='✓ 高清PNG已生成。请点击下方“下载高清PNG”。';}catch(e){st.textContent='导出失败：'+(e&&e.message?e.message:e)}finally{btn.disabled=false;btn.textContent='生成高清透明 PNG'}};
+function applyMobileCustomerMode(){if(window.matchMedia('(max-width:700px)').matches){const d=document.getElementById('dpi');if(d){d.value='300';[...d.options].forEach(o=>{if(o.value==='600')o.disabled=true});}}}
+applyMobileCustomerMode();
+updateModeUI();
+</script></body></html>

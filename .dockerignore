@@ -1,0 +1,14 @@
+.git
+.gitignore
+.github
+.pnpm-store
+**/node_modules
+web/dist
+**/.cache
+**/.vite
+**/.turbo
+.idea
+.vscode
+*.swp
+*.log
+
