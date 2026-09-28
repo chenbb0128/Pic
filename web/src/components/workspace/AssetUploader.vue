@@ -43,10 +43,10 @@ function qualityClass(width: number, height: number) {
       @dragleave="dragging = false"
       @drop="onDrop"
     >
-      点击选择透明 PNG / WebP
+      点击选择 PNG / WebP / JPG / JPEG
       <span class="mt-1 block text-xs text-slate-500">{{ hint }}</span>
     </button>
-    <input ref="input" class="hidden" type="file" accept="image/png,image/webp" multiple @change="onInput" />
+    <input ref="input" class="hidden" type="file" accept="image/png,image/webp,image/jpeg,.jpg,.jpeg" multiple @change="onInput" />
     <p class="text-xs text-slate-500" aria-live="polite">{{ loading ? '正在处理…' : status }}</p>
     <div v-if="errors.length" class="space-y-1 rounded-lg bg-red-50 p-2 text-xs text-red-700" role="alert">
       <p v-for="error in errors" :key="error">{{ error }}</p>

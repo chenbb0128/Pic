@@ -1,7 +1,7 @@
 import type { AssetRecord } from '../domain/assets/types'
 import type { StickerType } from '../domain/layout/types'
 
-export const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/webp'] as const
+export const ACCEPTED_IMAGE_TYPES = ['image/png', 'image/webp', 'image/jpeg'] as const
 
 function makeId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
@@ -20,7 +20,7 @@ function decodeImage(url: string): Promise<HTMLImageElement> {
 
 export async function loadImageFile(file: File, type: StickerType): Promise<AssetRecord> {
   if (!ACCEPTED_IMAGE_TYPES.includes(file.type as (typeof ACCEPTED_IMAGE_TYPES)[number])) {
-    throw new Error(`${file.name} 不是 PNG 或 WebP 图片。`)
+    throw new Error(`${file.name} 不是 PNG、WebP、JPG 或 JPEG 图片。`)
   }
 
   const url = URL.createObjectURL(file)

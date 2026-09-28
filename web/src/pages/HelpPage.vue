@@ -6,7 +6,7 @@
     </div>
     <section class="space-y-2 rounded-2xl bg-white p-5 shadow-sm">
       <h2 class="text-lg font-bold">1. 准备素材</h2>
-      <p class="text-sm leading-6 text-slate-600">上传透明背景的 PNG 或 WebP。素材会保留比例缩放到 2CM 或 3CM 的方形位置，不会上传到服务器。</p>
+      <p class="text-sm leading-6 text-slate-600">上传 PNG、WebP、JPG 或 JPEG。透明底 PNG/WebP 会保留透明背景；JPG/JPEG 没有透明通道。素材会保留比例缩放到 2CM 或 3CM 的方形位置，不会上传到服务器。</p>
     </section>
     <section class="space-y-2 rounded-2xl bg-white p-5 shadow-sm">
       <h2 class="text-lg font-bold">2. 选择规格</h2>

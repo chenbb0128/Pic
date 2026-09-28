@@ -6,7 +6,7 @@ export interface AssetRecord {
   id: string
   name: string
   type: StickerType
-  mime: 'image/png' | 'image/webp'
+  mime: 'image/png' | 'image/webp' | 'image/jpeg'
   width: number
   height: number
   url: string
