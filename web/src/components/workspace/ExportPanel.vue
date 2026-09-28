@@ -48,12 +48,13 @@ function selectManualText(event: FocusEvent) { (event.target as HTMLTextAreaElem
         class="min-h-12 w-full rounded-lg bg-emerald-700 px-3 font-semibold text-white transition hover:bg-emerald-800"
         @click="downloadAndCopy"
       >
-        {{ buttonConfirmed ? '图片已下载 · 文案已复制 ✓' : '下载图片并复制下单文案' }}
+        {{ buttonConfirmed ? '文案已复制 ✓' : '下载图片并复制下单文案' }}
       </button>
       <div class="grid grid-cols-2 gap-2">
+        <button type="button" class="min-h-10 rounded-lg bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100" @click="copyOrderText">{{ buttonConfirmed ? '文案已复制 ✓' : '复制下单文案' }}</button>
         <button type="button" class="min-h-10 rounded-lg bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100" @click="download">仅下载图片</button>
-        <button type="button" class="min-h-10 rounded-lg bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100" @click="openPreview">打开高清图</button>
       </div>
+      <button type="button" class="min-h-10 w-full rounded-lg bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100" @click="openPreview">打开高清图</button>
 
       <div v-if="copyResult === 'copied'" class="rounded-lg border border-red-200 bg-white p-3" aria-live="polite">
         <p class="text-sm font-semibold text-slate-900">下单文案已复制</p>

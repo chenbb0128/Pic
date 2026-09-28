@@ -1,5 +1,31 @@
 import { describe, expect, it } from 'vitest'
-import { copyText } from './clipboard'
+import { copyText, copyThenDownload } from './clipboard'
+
+describe('copyThenDownload', () => {
+  it('starts copying before downloading without waiting for the copy to finish', async () => {
+    const events: string[] = []
+    let finishCopy: (() => void) | undefined
+
+    const result = copyThenDownload(
+      () => {
+        events.push('copy-started')
+        return new Promise<boolean>((resolve) => {
+          finishCopy = () => {
+            events.push('copy-finished')
+            resolve(true)
+          }
+        })
+      },
+      () => { events.push('downloaded') },
+    )
+
+    expect(events).toEqual(['copy-started', 'downloaded'])
+
+    finishCopy?.()
+    await expect(result).resolves.toBe(true)
+    expect(events).toEqual(['copy-started', 'downloaded', 'copy-finished'])
+  })
+})
 
 describe('copyText', () => {
   it('copies with the Clipboard API when it is available', async () => {

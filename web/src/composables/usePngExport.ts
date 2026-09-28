@@ -1,7 +1,7 @@
 import { computed, onScopeDispose, ref } from 'vue'
 import { buildExportFileName } from '../domain/export/fileName'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
-import { copyText } from '../services/clipboard'
+import { copyText, copyThenDownload } from '../services/clipboard'
 import { exportLayoutPng, formatBytes } from '../services/pngExporter'
 import { useEditorStore } from '../stores/editor'
 
@@ -66,8 +66,7 @@ export function usePngExport() {
 
   async function downloadAndCopy(): Promise<void> {
     if (!store.generated) return
-    download()
-    await copyOrderText()
+    await copyThenDownload(copyOrderText, download)
   }
 
   function openPreview(): void {
