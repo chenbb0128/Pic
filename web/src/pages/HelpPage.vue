@@ -1,3 +1,19 @@
+<script setup lang="ts">
+import { ref } from 'vue'
+import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
+import { copyText } from '../services/clipboard'
+
+const copyStatus = ref<'idle' | 'copied' | 'manual'>('idle')
+
+async function copyOrderText(): Promise<void> {
+  copyStatus.value = await copyText(XIAOHONGSHU_ORDER_TEXT) ? 'copied' : 'manual'
+}
+
+function selectOrderText(event: FocusEvent): void {
+  (event.target as HTMLTextAreaElement).select()
+}
+</script>
+
 <template>
   <article class="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-8">
     <div>
@@ -15,6 +31,48 @@
     <section class="space-y-2 rounded-2xl bg-white p-5 shadow-sm">
       <h2 class="text-lg font-bold">3. 导出文件</h2>
       <p class="text-sm leading-6 text-slate-600">300 DPI 适合大多数场景，600 DPI 文件更大、生成更慢。导出的 PNG 保留透明背景，并写入真实 DPI 信息，物理尺寸约为 293×210mm。</p>
+    </section>
+    <section class="space-y-3 rounded-2xl bg-white p-5 shadow-sm">
+      <h2 class="text-lg font-bold">4. 生成与下载</h2>
+      <ol class="list-decimal space-y-2 pl-5 text-sm leading-6 text-slate-600">
+        <li>确认排版预览、导出精度和文件名称后，点击“生成高清透明 PNG”。</li>
+        <li>生成期间请等待 Loading 完成，600 DPI 在手机上需要更长时间和更多内存。</li>
+        <li>图片生成后，第一次点击绿色按钮复制下单文案。</li>
+        <li>按钮变为“文案已复制，点击下载图片”后，再点击一次下载 PNG。</li>
+      </ol>
+    </section>
+    <section class="space-y-3 rounded-2xl border border-red-200 bg-red-50 p-5 shadow-sm">
+      <div>
+        <h2 class="text-lg font-bold text-slate-900">5. 去小红书下单</h2>
+        <p class="mt-1 text-sm leading-6 text-slate-600">下载图片后，复制下面的文案并打开小红书粘贴，即可进入主页下单。</p>
+      </div>
+      <div class="rounded-xl bg-white p-3 text-sm leading-6 text-slate-700">
+        {{ XIAOHONGSHU_ORDER_TEXT }}
+      </div>
+      <div class="grid gap-2 sm:grid-cols-2">
+        <button
+          type="button"
+          class="min-h-11 rounded-lg bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700"
+          @click="copyOrderText"
+        >
+          {{ copyStatus === 'copied' ? '下单文案已复制 ✓' : '复制下单文案' }}
+        </button>
+        <a
+          class="flex min-h-11 items-center justify-center rounded-lg bg-red-500 px-4 text-sm font-semibold text-white hover:bg-red-600"
+          :href="XIAOHONGSHU_ORDER_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+        >打开小红书去下单</a>
+      </div>
+      <div v-if="copyStatus === 'manual'" class="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3" aria-live="polite">
+        <p class="text-xs leading-5 text-amber-800">浏览器未允许自动复制，请长按下面的文案手动复制。</p>
+        <textarea
+          class="h-24 w-full resize-none rounded-lg border border-amber-300 bg-white p-2 text-xs leading-5 text-slate-700 outline-none focus:ring-2 focus:ring-amber-200"
+          :value="XIAOHONGSHU_ORDER_TEXT"
+          readonly
+          @focus="selectOrderText"
+        />
+      </div>
     </section>
   </article>
 </template>
