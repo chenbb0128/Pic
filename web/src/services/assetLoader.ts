@@ -12,7 +12,12 @@ function decodeImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image()
     image.decoding = 'async'
-    image.onload = () => resolve(image)
+    image.onload = () => {
+      const decoded = typeof image.decode === 'function' ? image.decode() : Promise.resolve()
+      void decoded
+        .then(() => resolve(image))
+        .catch(() => reject(new Error('图片解码失败，请尝试重新选择素材。')))
+    }
     image.onerror = () => reject(new Error('图片无法读取，请确认文件没有损坏。'))
     image.src = url
   })

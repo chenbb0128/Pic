@@ -88,4 +88,20 @@ function selectManualText(event: FocusEvent) { (event.target as HTMLTextAreaElem
       </RouterLink>
     </div>
   </section>
+
+  <Teleport to="body">
+    <div
+      v-if="store.exporting"
+      class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/50 px-5 backdrop-blur-sm"
+      role="status"
+      aria-live="assertive"
+      aria-busy="true"
+    >
+      <div class="w-full max-w-xs rounded-2xl bg-white p-6 text-center shadow-2xl">
+        <span class="mx-auto block h-11 w-11 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900" aria-hidden="true"></span>
+        <p class="mt-4 font-bold text-slate-900">正在生成 {{ store.dpi }} DPI 高清图片</p>
+        <p class="mt-2 text-sm leading-6 text-slate-500">首次生成需要解码素材，请勿关闭页面或重复操作。</p>
+      </div>
+    </div>
+  </Teleport>
 </template>

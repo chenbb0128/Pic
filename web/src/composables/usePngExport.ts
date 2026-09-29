@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { buildExportFileName } from '../domain/export/fileName'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText, runCopyDownloadStep } from '../services/clipboard'
@@ -26,6 +26,10 @@ export function usePngExport() {
     buttonConfirmed.value = false
     store.exportStatus = '正在准备高清 PNG…'
     try {
+      await nextTick()
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
       const result = await exportLayoutPng({
         config: store.config,
         dpi: store.dpi,
