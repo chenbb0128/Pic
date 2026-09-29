@@ -1,7 +1,7 @@
-import { computed, onScopeDispose, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { buildExportFileName } from '../domain/export/fileName'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
-import { copyText, copyThenDownload } from '../services/clipboard'
+import { copyText, runCopyDownloadStep } from '../services/clipboard'
 import { exportLayoutPng, formatBytes } from '../services/pngExporter'
 import { useEditorStore } from '../stores/editor'
 
@@ -9,7 +9,6 @@ export function usePngExport() {
   const store = useEditorStore()
   const copyResult = ref<'idle' | 'copied' | 'manual'>('idle')
   const buttonConfirmed = ref(false)
-  let feedbackTimer: ReturnType<typeof setTimeout> | undefined
   const canExport = computed(() => {
     if (store.mode === 'full2') return store.assets2.length > 0
     if (store.mode === 'full3') return store.assets3.length > 0
@@ -56,17 +55,17 @@ export function usePngExport() {
   async function copyOrderText(): Promise<boolean> {
     const copied = await copyText(XIAOHONGSHU_ORDER_TEXT)
     copyResult.value = copied ? 'copied' : 'manual'
-    if (copied) {
-      buttonConfirmed.value = true
-      if (feedbackTimer) clearTimeout(feedbackTimer)
-      feedbackTimer = setTimeout(() => { buttonConfirmed.value = false }, 2500)
-    }
+    buttonConfirmed.value = copied
     return copied
   }
 
-  async function downloadAndCopy(): Promise<void> {
+  async function copyOrDownload(): Promise<void> {
     if (!store.generated) return
-    await copyThenDownload(copyOrderText, download)
+    buttonConfirmed.value = await runCopyDownloadStep(
+      buttonConfirmed.value,
+      copyOrderText,
+      download,
+    )
   }
 
   function openPreview(): void {
@@ -85,10 +84,6 @@ export function usePngExport() {
     popup.document.body.append(image)
   }
 
-  onScopeDispose(() => {
-    if (feedbackTimer) clearTimeout(feedbackTimer)
-  })
-
   return {
     canExport,
     copyResult,
@@ -97,7 +92,7 @@ export function usePngExport() {
     orderUrl: XIAOHONGSHU_ORDER_URL,
     generate,
     download,
-    downloadAndCopy,
+    copyOrDownload,
     copyOrderText,
     openPreview,
   }

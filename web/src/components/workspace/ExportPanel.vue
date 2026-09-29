@@ -13,7 +13,7 @@ const {
   orderUrl,
   generate,
   download,
-  downloadAndCopy,
+  copyOrDownload,
   copyOrderText,
   openPreview,
 } = usePngExport()
@@ -46,10 +46,13 @@ function selectManualText(event: FocusEvent) { (event.target as HTMLTextAreaElem
       <button
         type="button"
         class="min-h-12 w-full rounded-lg bg-emerald-700 px-3 font-semibold text-white transition hover:bg-emerald-800"
-        @click="downloadAndCopy"
+        @click="copyOrDownload"
       >
-        {{ buttonConfirmed ? '文案已复制 ✓' : '下载图片并复制下单文案' }}
+        {{ buttonConfirmed ? '文案已复制，点击下载图片' : '第一步：复制下单文案' }}
       </button>
+      <p class="text-center text-xs leading-5 text-emerald-800">
+        {{ buttonConfirmed ? '第二步：再次点击上方按钮即可下载图片。' : '复制成功后，按钮会切换为下载图片。' }}
+      </p>
       <div class="grid grid-cols-2 gap-2">
         <button type="button" class="min-h-10 rounded-lg bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100" @click="copyOrderText">{{ buttonConfirmed ? '文案已复制 ✓' : '复制下单文案' }}</button>
         <button type="button" class="min-h-10 rounded-lg bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-100" @click="download">仅下载图片</button>

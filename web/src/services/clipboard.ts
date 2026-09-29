@@ -4,13 +4,14 @@ export interface ClipboardWriter {
 
 export type LegacyCopy = (text: string) => boolean
 
-export async function copyThenDownload(
+export async function runCopyDownloadStep(
+  copied: boolean,
   copy: () => Promise<boolean>,
   download: () => void,
 ): Promise<boolean> {
-  const copyTask = copy()
+  if (!copied) return copy()
   download()
-  return copyTask
+  return true
 }
 
 function getBrowserClipboard(): ClipboardWriter | undefined {

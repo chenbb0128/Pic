@@ -1,29 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import { copyText, copyThenDownload } from './clipboard'
+import { copyText, runCopyDownloadStep } from './clipboard'
 
-describe('copyThenDownload', () => {
-  it('starts copying before downloading without waiting for the copy to finish', async () => {
+describe('runCopyDownloadStep', () => {
+  it('copies on the first click and only downloads on a later click', async () => {
     const events: string[] = []
-    let finishCopy: (() => void) | undefined
+    let copied = false
 
-    const result = copyThenDownload(
-      () => {
-        events.push('copy-started')
-        return new Promise<boolean>((resolve) => {
-          finishCopy = () => {
-            events.push('copy-finished')
-            resolve(true)
-          }
-        })
-      },
+    copied = await runCopyDownloadStep(
+      copied,
+      async () => { events.push('copied'); return true },
       () => { events.push('downloaded') },
     )
 
-    expect(events).toEqual(['copy-started', 'downloaded'])
+    expect(copied).toBe(true)
+    expect(events).toEqual(['copied'])
 
-    finishCopy?.()
-    await expect(result).resolves.toBe(true)
-    expect(events).toEqual(['copy-started', 'downloaded', 'copy-finished'])
+    copied = await runCopyDownloadStep(
+      copied,
+      async () => { events.push('copied-again'); return true },
+      () => { events.push('downloaded') },
+    )
+
+    expect(copied).toBe(true)
+    expect(events).toEqual(['copied', 'downloaded'])
   })
 })
 
