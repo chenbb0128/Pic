@@ -6,7 +6,7 @@ import PreviewStage from '../components/workspace/PreviewStage.vue'
 </script>
 
 <template>
-  <div class="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-4 p-3 sm:p-5 lg:flex-row">
+  <div class="flex min-h-0 w-full min-w-0 flex-1 flex-col gap-4 overflow-x-hidden p-3 sm:p-5 lg:flex-row">
     <aside class="w-full shrink-0 space-y-5 rounded-2xl bg-white p-4 shadow-sm sm:p-5 lg:w-[340px] lg:overflow-y-auto">
       <div>
         <h1 class="text-xl font-bold text-slate-900">转印贴自助排版</h1>
