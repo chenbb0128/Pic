@@ -4,6 +4,7 @@ import { fitSizeMm, resizeAssetSize, rotatedBounds } from '../domain/studio/asse
 import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSize'
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
 import { arrangeItems, orientedPaperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement } from '../domain/studio/layout'
+import { resizePlacement } from '../domain/studio/placementAdjustments'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
 import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanvasPng, type LocalImage } from '../services/studioImage'
@@ -54,6 +55,7 @@ const exportProgress = ref<number | null>(null)
 const adjusting = ref(false)
 const background = ref<'checker' | 'white' | 'dark'>('checker')
 const drag = ref<DragState | null>(null)
+const selectedPlacementIndex = ref<number | null>(null)
 const status = ref('选择图片并设置尺寸后，画布会实时显示排版。')
 const generated = ref<{ url: string; name: string; size: number } | null>(null)
 const orderCopied = ref(false)
@@ -89,6 +91,9 @@ function overlaps(a: Placement, b: Placement): boolean {
 const normalAuto = computed(() => layout.value.placements.filter((placement) =>
   lockedPlacements.value.every((locked) => !overlaps(placement, locked))))
 const placements = computed(() => [...lockedPlacements.value, ...(manualPlacements.value ?? normalAuto.value)])
+const selectedPlacement = computed(() => selectedPlacementIndex.value === null ? null : placements.value[selectedPlacementIndex.value] ?? null)
+const selectedAsset = computed(() => assets.value.find((asset) => asset.id === selectedPlacement.value?.itemId))
+const selectedLocked = computed(() => selectedPlacementIndex.value !== null && selectedPlacementIndex.value < lockedPlacements.value.length)
 const overflow = computed(() => layout.value.overflow + layout.value.placements.length - normalAuto.value.length)
 const previewWidth = 1200
 const previewHeight = computed(() => Math.round(previewWidth * paper.value.heightMm / paper.value.widthMm))
@@ -122,6 +127,17 @@ function setQuantity(id: string, value: number): void {
 
 function setRotation(id: string, value: number): void {
   if (Number.isFinite(value)) updateAsset(id, { rotationDeg: ((Math.round(value) % 360) + 360) % 360 })
+}
+
+function setSelectedWidth(valueCm: number): void {
+  if (!selectedPlacement.value || selectedPlacementIndex.value === null || selectedLocked.value) return
+  try {
+    const normalIndex = selectedPlacementIndex.value - lockedPlacements.value.length
+    manualPlacements.value = resizePlacement(manualPlacements.value ?? normalAuto.value, normalIndex, valueCm * 10, paper.value)
+    status.value = '已调整选中图片大小；其他副本保持不变。'
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '请输入有效尺寸。'
+  }
 }
 
 function clearGenerated(): void {
@@ -218,7 +234,7 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
   const imageById = new Map(assets.value.map((asset) => [asset.id, asset]))
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
-  for (const slot of placements.value) {
+  for (const [index, slot] of placements.value.entries()) {
     const asset = imageById.get(slot.itemId)
     if (!asset) continue
     const x = slot.xMm * scaleX
@@ -228,15 +244,21 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
     context.save()
     context.translate(x + w / 2, y + h / 2)
     context.rotate(asset.rotationDeg * Math.PI / 180)
-    const drawWidth = asset.widthMm * scaleX
-    const drawHeight = asset.heightMm * scaleY
+    const originalBounds = rotatedBounds(asset.widthMm, asset.heightMm, asset.rotationDeg)
+    const slotScale = slot.widthMm / originalBounds.widthMm
+    const drawWidth = asset.widthMm * slotScale * scaleX
+    const drawHeight = asset.heightMm * slotScale * scaleY
     if (asset.ratioLocked) drawImageContained(context, asset.image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
     else context.drawImage(asset.image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
     context.restore()
     if (guides) {
-      context.strokeStyle = adjusting.value ? 'rgba(124,58,237,.8)' : 'rgba(99,102,241,.28)'
-      context.lineWidth = adjusting.value ? 2 : 1
+      const selected = adjusting.value && selectedPlacementIndex.value === index
+      context.save()
+      context.strokeStyle = selected ? '#fbbf24' : adjusting.value ? 'rgba(124,58,237,.8)' : 'rgba(99,102,241,.28)'
+      context.lineWidth = selected ? 3 : adjusting.value ? 2 : 1
+      if (selected) context.setLineDash([8, 5])
       context.strokeRect(x, y, w, h)
+      context.restore()
     }
   }
 }
@@ -248,8 +270,10 @@ function renderPreview(): void {
   if (context) render(context, canvas.width, canvas.height, true)
 }
 
-watch([paper, gapXmm, gapYmm, autoGap, mode, assets], () => { manualPlacements.value = null })
+watch([paper, gapXmm, gapYmm, autoGap, mode, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
 watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
+watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
+watch(adjusting, (active) => { if (!active) selectedPlacementIndex.value = null })
 onMounted(() => { void nextTick(renderPreview) })
 onBeforeUnmount(() => {
   assets.value.forEach((asset) => URL.revokeObjectURL(asset.url))
@@ -274,7 +298,8 @@ function onPointerDown(event: PointerEvent): void {
     if (point.xMm >= slot.xMm && point.xMm <= slot.xMm + slot.widthMm && point.yMm >= slot.yMm && point.yMm <= slot.yMm + slot.heightMm) break
     index -= 1
   }
-  if (index < 0) return
+  if (index < 0) { selectedPlacementIndex.value = null; return }
+  selectedPlacementIndex.value = index
   const slot = placements.value[index]
   const asset = assets.value.find((item) => item.id === slot.itemId)
   const group = asset?.lockedGroupId ? groups.value.find((item) => item.id === asset.lockedGroupId) : undefined
@@ -321,6 +346,7 @@ function onPointerEnd(event: PointerEvent): void {
 
 function resetLayout(): void {
   manualPlacements.value = null
+  selectedPlacementIndex.value = null
   adjusting.value = false
   status.value = '已重新自动排版；锁组保留原有位置。'
 }
@@ -336,6 +362,7 @@ function clearAll(): void {
   assets.value = []
   groups.value = []
   manualPlacements.value = null
+  selectedPlacementIndex.value = null
   clearGenerated()
   status.value = '已清空，可以重新添加图片。'
 }
@@ -491,8 +518,20 @@ function downloadOnly(): void {
         <span v-if="overflow" class="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">{{ overflow }} 个未排入</span>
         <span class="rounded-full bg-white px-3 py-1.5">{{ dpi }} DPI</span>
       </div>
-      <div class="flex min-h-[45dvh] min-w-0 flex-1 items-center justify-center overflow-auto rounded-2xl bg-slate-800 p-3 sm:min-h-[480px] sm:p-6 lg:min-h-0">
+      <div class="relative flex min-h-[45dvh] min-w-0 flex-1 items-center justify-center overflow-auto rounded-2xl bg-slate-800 p-3 sm:min-h-[480px] sm:p-6 lg:min-h-0">
         <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas block h-auto max-h-[calc(100dvh-260px)] max-w-full shadow-2xl lg:max-h-full" :class="[`bg-${background}`, { 'is-adjusting': adjusting }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" />
+        <div v-if="adjusting && selectedPlacement" class="absolute bottom-4 left-1/2 z-10 w-[min(92%,22rem)] -translate-x-1/2 rounded-xl border border-amber-400 bg-slate-900 p-3 text-white shadow-2xl">
+          <div class="flex items-center justify-between gap-2 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-2 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
+          <p v-if="selectedLocked" class="mt-2 text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
+          <div v-else class="mt-2 flex items-center justify-center gap-2 text-xs">
+            <span class="shrink-0">宽度</span>
+            <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="缩小选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
+            <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900" :value="(selectedPlacement.widthMm / 10).toFixed(1)" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
+            <span class="shrink-0">cm</span>
+            <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="放大选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
+          </div>
+          <p class="mt-2 text-center text-[11px] text-slate-400">拖动画布上的图片调整位置</p>
+        </div>
       </div>
       <div class="sticky bottom-2 z-10 space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg lg:static">
         <p class="text-xs text-slate-600" aria-live="polite">{{ status }}</p>
@@ -504,7 +543,7 @@ function downloadOnly(): void {
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
         </div>
-        <p v-if="adjusting" class="text-xs text-indigo-700">拖动画布上的图片微调位置；锁组会整体移动。</p>
+        <p v-if="adjusting" class="text-xs text-indigo-700">点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动。</p>
         <p v-if="!dpiInfo.allowed" class="text-xs text-amber-700">当前尺寸与 DPI 超出浏览器安全范围，请选择较低 DPI。</p>
         <div v-if="generated" class="space-y-2 border-t border-slate-100 pt-2">
           <div class="flex flex-wrap items-center gap-2 text-xs"><span class="text-emerald-700">{{ generated.name }} · {{ formatBytes(generated.size) }}</span><a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a></div>
