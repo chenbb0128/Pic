@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { fitSizeMm, resizeAssetSize, rotatedBounds } from '../domain/studio/assetGeometry'
 import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSize'
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
-import { arrangeItems, orientedPaperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement } from '../domain/studio/layout'
+import { imageSizePresets } from '../domain/studio/imageSizeConversion'
+import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement } from '../domain/studio/layout'
 import { resizePlacement } from '../domain/studio/placementAdjustments'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
@@ -32,7 +33,7 @@ interface DragState {
 
 const preset = ref<PaperPreset>('A4')
 const orientation = ref<Orientation>('landscape')
-const customWidth = ref(297)
+const customWidth = ref(293)
 const customHeight = ref(210)
 const dpi = ref(500)
 const mode = ref<LayoutMode>('balanced')
@@ -62,9 +63,10 @@ const orderCopied = ref(false)
 const manualCopy = ref(false)
 const dpiChoices = [300, 500, 800, 1000]
 const paperOptions = [
-  { value: 'A4' as const, label: 'A4', size: '297×210mm', portraitSize: '210×297mm' },
-  { value: 'A5' as const, label: 'A5', size: '210×148mm', portraitSize: '148×210mm' },
-  { value: 'A6' as const, label: 'A6', size: '148×105mm', portraitSize: '105×148mm' },
+  ...imageSizePresets.map((option) => {
+    const size = paperSize(option.value, 'landscape')
+    return { value: option.value, label: option.label, size: `${size.widthMm}×${size.heightMm}mm`, portraitSize: `${size.heightMm}×${size.widthMm}mm` }
+  }),
   { value: 'custom' as const, label: '自由', size: '自定尺寸', portraitSize: '自定尺寸' },
 ]
 
@@ -451,7 +453,7 @@ function downloadOnly(): void {
       <h1 class="border-b border-[#31415f] px-4 py-3 text-sm font-bold text-[#c796ff]">✦ 小星贴自动排版</h1>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">◩&nbsp; 纸张</h2>
-        <div class="grid grid-cols-4 gap-1">
+        <div class="grid grid-cols-3 gap-1">
           <button v-for="option in paperOptions" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': preset === option.value }" @click="preset = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ orientation === 'landscape' ? option.size : option.portraitSize }}</small></button>
         </div>
         <div class="mt-1 grid grid-cols-2 gap-1">

@@ -2,9 +2,9 @@
 const paperPrices = [
   { size: 'A3', area: '293 × 420mm', price: '9.92元/张' },
   { size: 'A4', area: '293 × 210mm', price: '5.05元/张', current: true },
-  { size: 'A5', area: '210 × 144mm', price: '2.69元/张' },
+  { size: 'A5', area: '144 × 210mm', price: '2.69元/张' },
   { size: 'A6', area: '144 × 105mm', price: '1.88元/张' },
-  { size: 'A7', area: '105 × 74mm', price: '1.02元/张' },
+  { size: 'A7', area: '75 × 105mm', price: '1.02元/张' },
 ]
 </script>
 
@@ -14,7 +14,7 @@ const paperPrices = [
       <div>
         <p class="text-sm font-semibold text-sky-700">UV 转印贴定制</p>
         <h1 class="mt-1 text-3xl font-bold text-slate-900">价格与制作说明</h1>
-        <p class="mt-2 text-sm leading-6 text-slate-600">当前排版工具生成的是 A4 有效排版范围：293 × 210mm。</p>
+        <p class="mt-2 text-sm leading-6 text-slate-600">排版工具支持 A3～A7 有效排版尺寸，具体规格见下表。</p>
       </div>
       <RouterLink class="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-700" to="/workspace">
         返回工作台

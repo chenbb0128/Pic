@@ -10,7 +10,7 @@ export const imageSizePresets: ImageSizePreset[] = [
   { value: 'A4', label: 'A4', widthMm: 293, heightMm: 210 },
   { value: 'A5', label: 'A5', widthMm: 144, heightMm: 210 },
   { value: 'A6', label: 'A6', widthMm: 144, heightMm: 105 },
-  { value: 'A7', label: 'A7', widthMm: 72, heightMm: 105 },
+  { value: 'A7', label: 'A7', widthMm: 75, heightMm: 105 },
 ]
 
 export function outputPixelSize(preset: ImageSizePreset, dpi: number): { width: number; height: number } {

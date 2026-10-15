@@ -1,4 +1,6 @@
-export type PaperPreset = 'A4' | 'A5' | 'A6' | 'custom'
+import { imageSizePresets, type ImageSizePreset } from './imageSizeConversion'
+
+export type PaperPreset = ImageSizePreset['value'] | 'custom'
 export type Orientation = 'landscape' | 'portrait'
 export type LayoutMode = 'balanced' | 'compact' | 'custom'
 
@@ -29,19 +31,15 @@ export interface ArrangeOptions {
 export interface ArrangeResult { placements: Placement[]; overflow: number }
 
 export function paperSize(preset: PaperPreset, orientation: Orientation): PaperSize {
-  const sizes = {
-    A4: { widthMm: 297, heightMm: 210 },
-    A5: { widthMm: 210, heightMm: 148 },
-    A6: { widthMm: 148, heightMm: 105 },
-  }
   if (preset === 'custom') throw new Error('自定义纸张需要输入宽度和高度。')
-  const size = sizes[preset]
+  const option = imageSizePresets.find((item) => item.value === preset)!
+  const size = { widthMm: Math.max(option.widthMm, option.heightMm), heightMm: Math.min(option.widthMm, option.heightMm) }
   return orientation === 'landscape' ? size : { widthMm: size.heightMm, heightMm: size.widthMm }
 }
 
 export function horizontalPaperSize(preset: PaperPreset, customWidth: number, customHeight: number): PaperSize {
   if (preset !== 'custom') return paperSize(preset, 'landscape')
-  const widthMm = Math.min(420, Math.max(50, Number(customWidth) || 297))
+  const widthMm = Math.min(420, Math.max(50, Number(customWidth) || 293))
   const heightMm = Math.min(420, Math.max(50, Number(customHeight) || 210))
   return { widthMm: Math.max(widthMm, heightMm), heightMm: Math.min(widthMm, heightMm) }
 }

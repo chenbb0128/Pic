@@ -30,7 +30,7 @@ function selectOrderText(event: FocusEvent): void {
     </section>
     <section class="space-y-2 rounded-2xl bg-white p-5 shadow-sm">
       <h2 class="text-lg font-bold">3. 导出文件</h2>
-      <p class="text-sm leading-6 text-slate-600">A4 纸张为 297×210mm，A5 为 210×148mm，A6 为 148×105mm。300 DPI 适合大多数场景，600 DPI 文件更大、生成更慢。导出的 PNG 保留透明背景，并写入真实 DPI 信息。</p>
+      <p class="text-sm leading-6 text-slate-600">有效排版尺寸：A3 为 293×420mm，A4 为 293×210mm，A5 为 144×210mm，A6 为 144×105mm，A7 为 75×105mm。横排、竖排会交换宽高。300 DPI 适合大多数场景，600 DPI 文件更大、生成更慢。导出的 PNG 保留透明背景，并写入真实 DPI 信息。</p>
     </section>
     <section class="space-y-2 rounded-2xl bg-white p-5 shadow-sm">
       <h2 class="text-lg font-bold">4. 工具箱入口</h2>

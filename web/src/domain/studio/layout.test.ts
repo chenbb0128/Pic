@@ -2,24 +2,30 @@ import { describe, expect, it } from 'vitest'
 import { arrangeItems, horizontalPaperSize, orientedPaperSize, paperSize } from './layout'
 
 describe('paperSize', () => {
-  it('uses the reference site sheet dimensions and rotates them for portrait', () => {
-    expect(paperSize('A4', 'landscape')).toEqual({ widthMm: 297, heightMm: 210 })
-    expect(paperSize('A4', 'portrait')).toEqual({ widthMm: 210, heightMm: 297 })
-    expect(paperSize('A5', 'landscape')).toEqual({ widthMm: 210, heightMm: 148 })
-    expect(paperSize('A6', 'landscape')).toEqual({ widthMm: 148, heightMm: 105 })
+  it('uses the requested printable dimensions and rotates them for portrait', () => {
+    expect(paperSize('A3', 'landscape')).toEqual({ widthMm: 420, heightMm: 293 })
+    expect(paperSize('A3', 'portrait')).toEqual({ widthMm: 293, heightMm: 420 })
+    expect(paperSize('A4', 'landscape')).toEqual({ widthMm: 293, heightMm: 210 })
+    expect(paperSize('A4', 'portrait')).toEqual({ widthMm: 210, heightMm: 293 })
+    expect(paperSize('A5', 'landscape')).toEqual({ widthMm: 210, heightMm: 144 })
+    expect(paperSize('A5', 'portrait')).toEqual({ widthMm: 144, heightMm: 210 })
+    expect(paperSize('A6', 'landscape')).toEqual({ widthMm: 144, heightMm: 105 })
+    expect(paperSize('A6', 'portrait')).toEqual({ widthMm: 105, heightMm: 144 })
+    expect(paperSize('A7', 'landscape')).toEqual({ widthMm: 105, heightMm: 75 })
+    expect(paperSize('A7', 'portrait')).toEqual({ widthMm: 75, heightMm: 105 })
   })
 })
 
 describe('horizontalPaperSize', () => {
   it('keeps both preset and reversed custom paper horizontal', () => {
-    expect(horizontalPaperSize('A4', 100, 200)).toEqual({ widthMm: 297, heightMm: 210 })
+    expect(horizontalPaperSize('A4', 100, 200)).toEqual({ widthMm: 293, heightMm: 210 })
     expect(horizontalPaperSize('custom', 100, 200)).toEqual({ widthMm: 200, heightMm: 100 })
   })
 })
 
 describe('orientedPaperSize', () => {
   it('rotates preset and custom sheets into portrait dimensions', () => {
-    expect(orientedPaperSize('A4', 'portrait', 297, 210)).toEqual({ widthMm: 210, heightMm: 297 })
+    expect(orientedPaperSize('A4', 'portrait', 297, 210)).toEqual({ widthMm: 210, heightMm: 293 })
     expect(orientedPaperSize('custom', 'portrait', 297, 210)).toEqual({ widthMm: 210, heightMm: 297 })
     expect(orientedPaperSize('custom', 'portrait', 100, 200)).toEqual({ widthMm: 100, heightMm: 200 })
     expect(orientedPaperSize('custom', 'landscape', 100, 200)).toEqual({ widthMm: 200, heightMm: 100 })

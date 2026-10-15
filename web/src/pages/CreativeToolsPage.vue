@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { imageSizePresets } from '../domain/studio/imageSizeConversion'
 import { paperSize, type Orientation, type PaperPreset } from '../domain/studio/layout'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
@@ -52,11 +53,10 @@ const exporting = ref(false)
 const generated = ref<{ url: string; name: string } | null>(null)
 const copied = ref(false)
 let dragAt: { x: number; y: number } | null = null
-const paperOptions = [
-  { value: 'A4' as const, label: 'A4', size: '297×210mm' },
-  { value: 'A5' as const, label: 'A5', size: '210×148mm' },
-  { value: 'A6' as const, label: 'A6', size: '148×105mm' },
-]
+const paperOptions = computed(() => imageSizePresets.map((option) => {
+  const size = paperSize(option.value, orientation.value)
+  return { value: option.value, label: option.label, size: `${size.widthMm}×${size.heightMm}mm` }
+}))
 
 const paper = computed(() => paperSize(preset.value, orientation.value))
 const outputRatio = computed(() => kind.value === 'recolor' && image.value
