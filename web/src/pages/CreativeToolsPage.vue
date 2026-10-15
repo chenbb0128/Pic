@@ -7,6 +7,7 @@ import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
 import { renderCreative, type CreativeKind, type CreativeSettings, type FrameShape, type PolkaShape } from '../services/creativeCanvas'
 import { canvasPng, downloadBlob, loadLocalImage, type LocalImage } from '../services/studioImage'
+import { creativeFonts, creativeFontGroups, ensureCreativeFont } from '../services/creativeFonts'
 
 const route = useRoute()
 const kind = computed(() => route.params.kind as CreativeKind)
@@ -28,6 +29,10 @@ const orientation = ref<Orientation>('landscape')
 const dpi = ref(300)
 const text = ref('小星贴')
 const font = ref('Arial, sans-serif')
+const selectedFont = computed(() => creativeFonts.find(option => option.value === font.value))
+const fontLoading = ref(false)
+const fontError = ref('')
+let previewVersion = 0
 const fontMm = ref(8)
 const cellMm = ref(20)
 const gapMm = ref(5)
@@ -115,19 +120,34 @@ async function onFileChange(event: Event): Promise<void> {
   }
 }
 
-function renderPreview(): void {
+async function renderPreview(): Promise<void> {
+  const version = ++previewVersion
   const canvas = preview.value
   if (!canvas) return
+  const current = settings.value
+  const usesFont = current.kind === 'name' || current.kind === 'text'
+  fontLoading.value = usesFont && !!selectedFont.value?.file
+  fontError.value = ''
   try {
-    count.value = renderCreative(canvas, settings.value)
+    if (usesFont) await ensureCreativeFont(current.font)
+    if (version !== previewVersion) return
+    count.value = renderCreative(canvas, current)
   } catch (error) {
+    if (version !== previewVersion) return
+    // A failed web font must not look like a successful fallback-font preview.
+    canvas.width = canvas.width
+    count.value = 0
     status.value = error instanceof Error ? error.message : '预览失败。'
+    if (usesFont) fontError.value = status.value
+  } finally {
+    if (version === previewVersion) fontLoading.value = false
   }
 }
 
 watch(settings, () => { clearGenerated(); void nextTick(renderPreview) })
 onMounted(() => { void nextTick(renderPreview) })
 onBeforeUnmount(() => {
+  previewVersion += 1
   if (image.value) URL.revokeObjectURL(image.value.url)
   clearGenerated()
 })
@@ -147,6 +167,7 @@ function onPointerMove(event: PointerEvent): void {
 function onPointerUp(): void { dragAt = null }
 
 async function exportPng(): Promise<void> {
+  if (exporting.value) return
   if ((kind.value === 'recolor' || kind.value === 'frame') && !image.value) {
     status.value = '请先选择一张图片。'
     return
@@ -154,26 +175,30 @@ async function exportPng(): Promise<void> {
   exporting.value = true
   status.value = '正在生成透明 PNG…'
   clearGenerated()
+  const current = settings.value
+  const exportDpi = dpi.value
+  let canvas: HTMLCanvasElement | undefined
   try {
     await nextTick()
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
-    const width = kind.value === 'recolor' && image.value ? image.value.width : Math.round(settings.value.widthMm / 25.4 * dpi.value)
-    const height = kind.value === 'recolor' && image.value ? image.value.height : Math.round(settings.value.heightMm / 25.4 * dpi.value)
+    if (current.kind === 'name' || current.kind === 'text') await ensureCreativeFont(current.font)
+    const width = current.kind === 'recolor' && current.image ? current.image.width : Math.round(current.widthMm / 25.4 * exportDpi)
+    const height = current.kind === 'recolor' && current.image ? current.image.height : Math.round(current.heightMm / 25.4 * exportDpi)
     if (width * height > 40_000_000) throw new Error('当前图片太大，请降低 DPI 或使用更小图片。')
-    const canvas = document.createElement('canvas')
+    canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = height
-    const rendered = renderCreative(canvas, settings.value)
+    const rendered = renderCreative(canvas, current)
     if (!rendered) throw new Error('没有可导出的内容，请检查图片或文字。')
-    const blob = await canvasPng(canvas, dpi.value)
+    const blob = await canvasPng(canvas, exportDpi)
+    if (settings.value !== current || dpi.value !== exportDpi) throw new Error('设置已更改，请重新生成 PNG。')
     const url = URL.createObjectURL(blob)
-    generated.value = { url, name: `${titles[kind.value]}-${Date.now()}.png` }
+    generated.value = { url, name: `${titles[current.kind]}-${Date.now()}.png` }
     status.value = `已生成 ${width} × ${height}px 透明 PNG`
-    canvas.width = 0
-    canvas.height = 0
   } catch (error) {
     status.value = error instanceof Error ? error.message : '导出失败。'
   } finally {
+    if (canvas) { canvas.width = 0; canvas.height = 0 }
     exporting.value = false
   }
 }
@@ -223,7 +248,13 @@ async function copyOrder(): Promise<void> {
       <section v-if="kind === 'name' || kind === 'text'" class="space-y-3">
         <h2 class="text-xs font-bold uppercase tracking-widest text-indigo-200">文字</h2>
         <textarea v-model="text" :rows="kind === 'text' ? 5 : 2" class="w-full rounded-lg bg-slate-800 p-3 text-sm text-white" :placeholder="kind === 'text' ? '每行一个文字或短句' : '输入姓名或短句'" />
-        <label class="block text-xs">字体<select v-model="font" class="mt-1 h-10 w-full rounded bg-slate-800 px-2 text-white"><option value="Arial, sans-serif">无衬线</option><option value="Georgia, serif">衬线</option><option value="cursive">手写</option><option value="monospace">等宽</option></select></label>
+        <label class="block text-xs">字体<select v-model="font" class="mt-1 h-11 w-full rounded bg-slate-800 px-2 text-white"><optgroup v-for="group in creativeFontGroups" :key="group.label" :label="group.label"><option v-for="option in group.fonts" :key="option.id" :value="option.value">{{ option.label }}</option></optgroup></select></label>
+        <div class="rounded-lg border border-slate-700 bg-slate-800 p-3" aria-live="polite">
+          <p v-if="fontLoading" class="text-xs text-indigo-200">字体加载中，首次使用需要下载，请稍候…</p>
+          <template v-else-if="fontError"><p class="text-xs leading-5 text-rose-300">{{ fontError }}</p><button type="button" class="mt-2 min-h-9 text-xs text-indigo-200 underline" @click="renderPreview">重新加载字体</button></template>
+          <p v-else class="break-words text-2xl leading-relaxed" :style="{ fontFamily: font, fontWeight: selectedFont?.file ? 400 : 700 }">{{ selectedFont?.latinOnly ? 'Happy Day 2026' : (text.trim().split(/\r?\n/)[0] || '可爱手写 小星贴 2026') }}</p>
+          <p class="mt-2 text-[11px] leading-5 text-slate-400">{{ selectedFont?.latinOnly ? '此字体适合英文和数字，中文将使用系统字体。' : selectedFont?.file ? '字体由本站按需加载，预览与导出使用同一字体；生僻字可能使用系统字体补全。' : '系统字体的显示效果随设备而异。' }}</p>
+        </div>
         <div class="grid grid-cols-2 gap-2 text-xs"><label>字号 mm<input v-model.number="fontMm" type="number" min="1" max="40" step="0.5" class="mt-1 h-10 w-full rounded bg-slate-800 px-2 text-white" /></label><label>{{ kind === 'text' ? '方格 mm' : '间距 mm' }}<input v-if="kind === 'text'" v-model.number="cellMm" type="number" min="5" max="100" class="mt-1 h-10 w-full rounded bg-slate-800 px-2 text-white" /><input v-else v-model.number="gapMm" type="number" min="0" max="50" step="0.5" class="mt-1 h-10 w-full rounded bg-slate-800 px-2 text-white" /></label></div>
         <label v-if="kind === 'text'" class="block text-xs">特效<select v-model="textEffect" class="mt-1 h-10 w-full rounded bg-slate-800 px-2 text-white"><option value="none">无</option><option value="outline">描边</option><option value="shadow">阴影</option><option value="glow">发光</option></select></label>
       </section>
@@ -242,7 +273,7 @@ async function copyOrder(): Promise<void> {
       </div>
       <div class="sticky bottom-2 z-10 space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg lg:static">
         <p class="text-xs text-slate-600" aria-live="polite">{{ status }}</p>
-        <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-11 rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-50" :disabled="exporting" @click="exportPng">{{ exporting ? '生成中…' : '生成透明 PNG' }}</button><button type="button" class="min-h-11 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-50" :disabled="!generated" @click="download">下载图片</button></div>
+        <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-11 rounded-xl bg-indigo-600 px-4 text-sm font-bold text-white disabled:opacity-50" :disabled="exporting || fontLoading" @click="exportPng">{{ exporting ? '生成中…' : fontLoading ? '字体加载中…' : '生成透明 PNG' }}</button><button type="button" class="min-h-11 rounded-xl bg-slate-900 px-4 text-sm font-bold text-white disabled:opacity-50" :disabled="!generated" @click="download">下载图片</button></div>
         <div v-if="generated" class="flex flex-wrap items-center gap-3 text-xs"><span class="text-emerald-700">{{ generated.name }}</span><button type="button" class="font-bold text-rose-600" @click="copyOrder">{{ copied ? '文案已复制 ✓' : '复制下单文案' }}</button><a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a></div>
       </div>
     </main>

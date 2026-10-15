@@ -1,4 +1,5 @@
 import type { LocalImage } from './studioImage'
+import { creativeFontCss } from './creativeFonts'
 
 export type CreativeKind = 'recolor' | 'polka' | 'frame' | 'name' | 'text'
 export type FrameShape = 'circle' | 'heart' | 'rect' | 'rounded' | 'star'
@@ -145,7 +146,7 @@ function drawName(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, 
   if (!text) return 0
   const pxPerMm = canvas.width / settings.widthMm
   const fontSize = settings.fontMm * pxPerMm
-  context.font = `bold ${fontSize}px ${settings.font}`
+  context.font = creativeFontCss(settings.font, fontSize)
   context.textBaseline = 'middle'
   context.fillStyle = settings.color
   const textWidth = context.measureText(text).width
@@ -172,7 +173,7 @@ function drawTextGrid(context: CanvasRenderingContext2D, canvas: HTMLCanvasEleme
   if (!columns || !rows) return 0
   context.textAlign = 'center'
   context.textBaseline = 'middle'
-  context.font = `bold ${settings.fontMm * pxPerMm}px ${settings.font}`
+  context.font = creativeFontCss(settings.font, settings.fontMm * pxPerMm)
   const total = Math.min(1000, columns * rows)
   for (let index = 0; index < total; index += 1) {
     const x = (index % columns + 0.5) * cell
