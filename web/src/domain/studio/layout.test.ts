@@ -33,6 +33,64 @@ describe('orientedPaperSize', () => {
 })
 
 describe('arrangeItems', () => {
+  it.each([false, true])('stacks small patterns beside a tall one without overlap (autoGap=%s)', (autoGap) => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 58 }, mode: 'custom', gapXmm: 4, gapYmm: 4, autoGap,
+      items: [
+        { id: 'B', widthMm: 10, heightMm: 10, quantity: 9, selected: true },
+        { id: 'A', widthMm: 50, heightMm: 50, quantity: 1, selected: true, important: true },
+      ],
+    })
+    expect(result.placements).toHaveLength(10)
+    expect(result.overflow).toBe(0)
+    expect(result.placements[0].itemId).toBe('A')
+    const small = result.placements.filter(p => p.itemId === 'B')
+    expect(new Set(small.map(p => p.xMm)).size).toBe(3)
+    expect(small.slice(0, 3).every(p => p.xMm === small[0].xMm)).toBe(true)
+    expect(small[0].yMm).toBe(4)
+    expect(small[1].yMm).toBe(autoGap ? 19 : 18)
+    expect(small[2].yMm).toBe(autoGap ? 34 : 32)
+    const gap = autoGap ? 5 : 4
+    for (const [i, p] of result.placements.entries()) {
+      expect(p.xMm).toBeGreaterThanOrEqual(4)
+      expect(p.yMm).toBeGreaterThanOrEqual(4)
+      expect(p.xMm + p.widthMm).toBeLessThanOrEqual(104)
+      expect(p.yMm + p.heightMm).toBeLessThanOrEqual(54)
+      for (const q of result.placements.slice(i + 1)) {
+        expect(p.xMm + p.widthMm + gap <= q.xMm + 0.001 || q.xMm + q.widthMm + gap <= p.xMm + 0.001 ||
+          p.yMm + p.heightMm + gap <= q.yMm + 0.001 || q.yMm + q.heightMm + gap <= p.yMm + 0.001).toBe(true)
+      }
+    }
+  })
+
+  it('fills the last tall row with small columns before starting another row', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 210, heightMm: 112 }, mode: 'custom', gapXmm: 4, gapYmm: 4,
+      items: [
+        { id: 'A', widthMm: 50, heightMm: 50, quantity: 5, selected: true },
+        { id: 'B', widthMm: 10, heightMm: 10, quantity: 20, selected: true },
+      ],
+    })
+    expect(result.overflow).toBe(0)
+    expect(result.placements).toHaveLength(25)
+    expect(Math.max(...result.placements.map(p => p.yMm + p.heightMm))).toBe(108)
+    expect(result.placements.filter(p => p.itemId === 'B').every(p => p.yMm >= 58 && p.yMm < 108)).toBe(true)
+  })
+
+  it('keeps the remaining row space available when an intermediate pattern does not fit', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 68 }, mode: 'custom', gapMm: 4,
+      items: [
+        { id: 'A', widthMm: 60, heightMm: 60, quantity: 1, selected: true },
+        { id: 'B', widthMm: 40, heightMm: 60, quantity: 1, selected: true },
+        { id: 'C', widthMm: 10, heightMm: 10, quantity: 6, selected: true },
+      ],
+    })
+    expect(result.placements.filter(p => p.itemId === 'C')).toHaveLength(6)
+    expect(result.placements.filter(p => p.itemId === 'B')).toHaveLength(0)
+    expect(result.overflow).toBe(1)
+  })
+
   it('places priority images first in custom mode, keeping upload order within each priority', () => {
     const result = arrangeItems({
       paper: { widthMm: 108, heightMm: 58 }, gapMm: 0, mode: 'custom',

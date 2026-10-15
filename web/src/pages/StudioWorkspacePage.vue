@@ -621,7 +621,7 @@ async function generate(): Promise<void> {
       blob = await canvasPng(canvas, dpi.value)
     }
     const url = URL.createObjectURL(blob)
-    const name = `转印贴-${preset.value}-画板${activeBoardIndex.value + 1}-${dpi.value}DPI-${Date.now()}.png`
+    const name = boardPngName(preset.value, paper.value, activeBoardIndex.value)
     generated.value = { url, name, size: blob.size }
     status.value = `已生成 ${size.width} × ${size.height}px · ${formatBytes(blob.size)}${overflow.value ? ` · ${overflow.value} 个未排入` : ''}`
   } catch (error) {
@@ -631,6 +631,11 @@ async function generate(): Promise<void> {
     exportProgress.value = null
     exporting.value = false
   }
+}
+
+function boardPngName(preset: PaperPreset, paper: PaperSize, index: number, date = new Date()): string {
+  const day = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date).replace(/-/g, '')
+  return `${day}_${preset === 'custom' ? '自定义' : preset}_${paper.widthMm}x${paper.heightMm}mm_画板${index + 1}.png`
 }
 
 async function exportAllBoards(): Promise<void> {
@@ -649,7 +654,7 @@ async function exportAllBoards(): Promise<void> {
       return
     }
   }
-  const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  const date = new Date()
   exporting.value = true
   let completed = 0
   try {
@@ -682,8 +687,7 @@ async function exportAllBoards(): Promise<void> {
       }
       const url = URL.createObjectURL(blob)
       try {
-        const format = scene.preset === 'custom' ? '自定义' : scene.preset
-        downloadBlob(url, `${date}_${format}_${scene.paper.widthMm}x${scene.paper.heightMm}mm_画板${scene.index + 1}.png`)
+        downloadBlob(url, boardPngName(scene.preset, scene.paper, scene.index, date))
       } finally {
         // Leave enough time for the browser to consume each download, then release its memory.
         setTimeout(() => URL.revokeObjectURL(url), 60_000)
@@ -757,6 +761,7 @@ function downloadOnly(): void {
         <div class="grid grid-cols-4 gap-1">
           <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '优先图按数量逐行' }, { value: 'smart', label: '智能填充', hint: '优先图案先排' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
         </div>
+        <p v-if="mode === 'custom'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">★ 优先图案先按数量逐行排；大图旁的小图可按列纵向叠放，利用同一行的高度。尺寸、数量和留边不变，行内整体居中。</p>
         <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">先尽量满足 ★ 优先图案的数量，再按所选方式排列其他图案；同级大图先排，保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
         <template v-if="mode === 'smart'">
           <h3 class="mb-1 mt-2 text-xs font-medium text-[#a9bbe1]">排列方式</h3>

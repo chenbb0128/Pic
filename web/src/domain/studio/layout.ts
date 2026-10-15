@@ -83,6 +83,55 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
   const placements: Placement[] = []
   let overflow = 0
   let balancedMarginX = 0
+  if (mode === 'custom') {
+    // Keep a row's tall patterns and its stacked small columns as one band.
+    // Center/spread columns together, not each distinct y coordinate independently.
+    interface Column { xMm: number; widthMm: number; slots: Placement[] }
+    interface Band { yMm: number; heightMm: number; columns: Column[] }
+    const bands: Band[] = []
+    for (const item of queue) {
+      let band = bands[bands.length - 1]
+      const column = band?.columns[band.columns.length - 1]
+      const last = column?.slots[column.slots.length - 1]
+      const stackY = last ? last.yMm + last.heightMm + gapYmm : 0
+      if (band && column && last?.itemId === item.id && stackY + item.heightMm <= band.yMm + band.heightMm + 0.001) {
+        const slot = { itemId: item.id, xMm: column.xMm, yMm: stackY, widthMm: item.widthMm, heightMm: item.heightMm }
+        column.slots.push(slot)
+        placements.push(slot)
+        continue
+      }
+      let xMm = column ? column.xMm + column.widthMm + gapXmm : PAPER_MARGIN_MM
+      let yMm = band?.yMm ?? PAPER_MARGIN_MM
+      const newBand = !band || xMm + item.widthMm > right + 0.001
+      if (newBand && band) { xMm = PAPER_MARGIN_MM; yMm += band.heightMm + gapYmm }
+      // Don't advance the cursor on failure: a later, smaller pattern may still fit.
+      if (yMm + item.heightMm > bottom + 0.001) continue
+      if (newBand) {
+        band = { yMm, heightMm: 0, columns: [] }
+        bands.push(band)
+      }
+      band!.heightMm = Math.max(band!.heightMm, item.heightMm)
+      const slot = { itemId: item.id, xMm, yMm, widthMm: item.widthMm, heightMm: item.heightMm }
+      band!.columns.push({ xMm, widthMm: item.widthMm, slots: [slot] })
+      placements.push(slot)
+    }
+    const remainingHeight = paper.heightMm - PAPER_MARGIN_MM * 2 - bands.reduce((sum, band) => sum + band.heightMm, 0)
+    let nextY = PAPER_MARGIN_MM
+    for (const band of bands) {
+      const bandY = options.autoGap ? bands.length === 1 ? (paper.heightMm - band.heightMm) / 2 : nextY : band.yMm
+      const usedWidth = band.columns.reduce((sum, column) => sum + column.widthMm, 0)
+      const bandWidth = usedWidth + gapXmm * (band.columns.length - 1)
+      const columnGap = options.autoGap && band.columns.length > 1
+        ? (paper.widthMm - PAPER_MARGIN_MM * 2 - usedWidth) / (band.columns.length - 1) : gapXmm
+      let nextX = options.autoGap && band.columns.length > 1 ? PAPER_MARGIN_MM : (paper.widthMm - bandWidth) / 2
+      for (const column of band.columns) {
+        for (const slot of column.slots) { slot.xMm += nextX - column.xMm; slot.yMm += bandY - band.yMm }
+        nextX += column.widthMm + columnGap
+      }
+      nextY += band.heightMm + (bands.length > 1 ? remainingHeight / (bands.length - 1) : 0)
+    }
+    return { placements, overflow: requested - placements.length }
+  }
   if (mode === 'balanced') {
     balancedMarginX = Math.min(5, (paper.widthMm - Math.max(...ordered.map((item) => item.widthMm))) / 2)
     const marginY = Math.min(5, (paper.heightMm - Math.max(...ordered.map((item) => item.heightMm))) / 2)
@@ -134,9 +183,8 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
         rowHeight = 0
       }
       if (yMm + item.heightMm > bottom + 0.001) {
-        if (mode === 'custom') overflow += 1
         failedInARow += 1
-        if (mode !== 'custom' && failedInARow >= ordered.length) break
+        if (failedInARow >= ordered.length) break
         continue
       }
       placements.push({ itemId: item.id, xMm, yMm, widthMm: item.widthMm, heightMm: item.heightMm })
@@ -191,5 +239,5 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
       }
     }
   }
-  return { placements, overflow: mode === 'custom' ? requested - placements.length : overflow }
+  return { placements, overflow }
 }

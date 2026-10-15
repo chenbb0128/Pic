@@ -49,7 +49,7 @@ describe('overflow artboards', () => {
       state.generated = { url: 'blob:previous', name: 'previous.png', size: 3 }
       state.overviewOpen = true
       await state.exportAllBoards()
-      expect(downloads).toEqual(['2026-10-16_自定义_108x108mm_画板1.png', '2026-10-16_自定义_60x100mm_画板2.png'])
+      expect(downloads).toEqual(['20261016_自定义_108x108mm_画板1.png', '20261016_自定义_60x100mm_画板2.png'])
       expect(encoded).toEqual([{ width: 1080, height: 1080, dpi: 254 }, { width: 300, height: 500, dpi: 127 }])
       expect(canvases.every(canvas => canvas.width === 0 && canvas.height === 0)).toBe(true)
       expect(state.activeBoardIndex).toBe(1)
@@ -68,7 +68,13 @@ describe('overflow artboards', () => {
       await nextTick()
       await state.exportAllBoards()
       expect(downloads).toHaveLength(3)
-      expect(downloads[2]).toBe('2026-10-16_自定义_108x108mm_画板1.png')
+      expect(downloads[2]).toBe('20261016_自定义_108x108mm_画板1.png')
+      state.assets = [{ ...asset('one', 1), ratioLocked: false }]
+      await nextTick()
+      state.manualPlacements = [{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }]
+      await nextTick()
+      await state.generate()
+      expect(state.generated.name).toBe('20261016_自定义_60x100mm_画板2.png')
     } finally { png.mockRestore(); cleanup(); vi.unstubAllGlobals(); vi.useRealTimers() }
   })
 
