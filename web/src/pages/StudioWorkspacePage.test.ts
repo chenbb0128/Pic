@@ -30,6 +30,66 @@ describe('overflow artboards', () => {
     return { state, asset, cleanup: () => { state.assets = []; state.boards = []; app.unmount() } }
   }
 
+  it('shows saved locked boards and the latest active layout without changing editor state', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 5)]
+      await nextTick()
+      state.lockSelected()
+      state.createRemainingBoard()
+      await nextTick()
+      state.customWidth = 60
+      state.customHeight = 100
+      state.orientation = 'portrait'
+      state.manualPlacements = [{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }]
+      await nextTick()
+      state.generated = { url: 'blob:export', name: 'export.png', size: 10 }
+      state.overviewOpen = true
+      const summary = state.overviewBoards
+      expect(summary).toHaveLength(2)
+      expect(summary[0].placements).toHaveLength(4)
+      expect(summary[1].paper).toEqual({ widthMm: 60, heightMm: 100 })
+      expect(summary[1].placements).toEqual([{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }])
+      await nextTick()
+      expect(state.activeBoardIndex).toBe(1)
+      expect(state.generated?.url).toBe('blob:export')
+      state.editOverviewBoard(0)
+      await nextTick()
+      expect(state.overviewOpen).toBe(false)
+      expect(state.activeBoardIndex).toBe(0)
+      expect(state.groups).toHaveLength(1)
+      expect(state.placements).toHaveLength(4)
+      state.overviewOpen = true
+      state.editOverviewBoard(0)
+      expect(state.overviewOpen).toBe(false)
+    } finally { cleanup() }
+  })
+
+  it('draws each thumbnail using its own paper, image and placement geometry', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [{ ...asset('one', 5), ratioLocked: false }]
+      await nextTick()
+      state.createRemainingBoard()
+      await nextTick()
+      state.customWidth = 60
+      state.customHeight = 100
+      state.orientation = 'portrait'
+      state.manualPlacements = [{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }]
+      state.overviewOpen = true
+      const context = { clearRect() {}, save() {}, restore() {}, rotate() {}, translate: vi.fn(), drawImage: vi.fn() }
+      const canvas = { width: 0, height: 0, getContext: () => context }
+      state.setOverviewCanvas(0, canvas)
+      expect([canvas.width, canvas.height]).toEqual([400, 400])
+      expect(context.drawImage).toHaveBeenCalledTimes(4)
+      context.drawImage.mockClear()
+      state.setOverviewCanvas(1, canvas)
+      expect([canvas.width, canvas.height]).toEqual([240, 400])
+      expect(context.translate).toHaveBeenLastCalledWith(88, 92)
+      expect(context.drawImage).toHaveBeenCalledExactlyOnceWith(state.assets[0].image, -60, -60, 120, 120)
+    } finally { cleanup() }
+  })
+
   it('normalizes gap input to whole millimeters before rearranging', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
@@ -68,6 +128,32 @@ describe('overflow artboards', () => {
     const between = html.match(/<\/canvas>([\s\S]*?)<section\b[^>]*aria-label="选中图片调整"/)
     expect(between).not.toBeNull()
     expect(between![1].replace(/<!--[\s\S]*?-->/g, '').trim()).toBe('</div>')
+  })
+
+  it('renders every artboard preview and its edit entry in overview mode', async () => {
+    const app = createSSRApp({
+      ...Workspace,
+      setup(props: any, context: any) {
+        const state = (Workspace as any).setup(props, context)
+        state.useContours.value = false
+        state.preset.value = 'custom'
+        state.customWidth.value = 108
+        state.customHeight.value = 108
+        state.gapXmm.value = 0
+        state.gapYmm.value = 0
+        state.assets.value = [{ id: 'one', name: '图片', url: 'blob:one', width: 100, height: 100,
+          widthMm: 50, heightMm: 50, quantity: 5, selected: true, rotationDeg: 0, ratioLocked: true }]
+        state.createRemainingBoard()
+        state.overviewOpen.value = true
+        return state
+      },
+    })
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    for (const index of [1, 2]) {
+      expect(html).toContain(`aria-label="画板 ${index} 排版预览"`)
+      expect(html).toContain(`aria-label="编辑画板 ${index}"`)
+    }
   })
 
   it('defaults to custom mode and imports original sizes without tying them to export DPI', async () => {

@@ -4,7 +4,7 @@ import { fitSizeMm, originalSizeMm, resizeAssetSize, rotatedBounds } from '../do
 import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSize'
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
 import { imageSizePresets } from '../domain/studio/imageSizeConversion'
-import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement, type SmartGrouping } from '../domain/studio/layout'
+import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
 import { resizePlacement } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
@@ -51,6 +51,12 @@ interface StudioBoard {
   manualPlacements: Placement[]
 }
 
+interface BoardScene {
+  paper: PaperSize
+  assets: StudioAsset[]
+  placements: Placement[]
+}
+
 const preset = ref<PaperPreset>('A4')
 const orientation = ref<Orientation>('landscape')
 const customWidth = ref(293)
@@ -87,6 +93,8 @@ const manualCopy = ref(false)
 // The active board lives in the editor refs; inactive boards hold independent snapshots.
 const boards = shallowRef<(StudioBoard | null)[]>([null])
 const activeBoardIndex = ref(0)
+const overviewOpen = ref(false)
+const overviewCanvases = new Map<number, HTMLCanvasElement>()
 let switchingBoard = false
 const dpiChoices = [300, 500, 800, 1000]
 const paperOptions = [
@@ -174,6 +182,41 @@ function snapshotBoard(): StudioBoard {
   }
 }
 
+const overviewBoards = computed(() => boards.value.flatMap((saved, index) => {
+  const board = index === activeBoardIndex.value ? snapshotBoard() : saved
+  if (!board) return []
+  return [{
+    index,
+    preset: board.preset,
+    paper: orientedPaperSize(board.preset, board.orientation, board.customWidth, board.customHeight),
+    assets: board.assets,
+    placements: [...flattenGroups(board.groups), ...board.manualPlacements],
+  }]
+}))
+
+function renderOverviewBoard(index: number): void {
+  const canvas = overviewCanvases.get(index)
+  const scene = overviewBoards.value.find((board) => board.index === index)
+  if (!canvas || !scene) return
+  const scale = 400 / Math.max(scene.paper.widthMm, scene.paper.heightMm)
+  canvas.width = Math.max(1, Math.round(scene.paper.widthMm * scale))
+  canvas.height = Math.max(1, Math.round(scene.paper.heightMm * scale))
+  const context = canvas.getContext('2d')
+  if (context) render(context, canvas.width, canvas.height, false, scene)
+}
+
+function setOverviewCanvas(index: number, canvas: HTMLCanvasElement | null): void {
+  if (!canvas) { overviewCanvases.delete(index); return }
+  overviewCanvases.set(index, canvas)
+  renderOverviewBoard(index)
+}
+
+function editOverviewBoard(index: number): void {
+  if (!Number.isInteger(index) || index < 0 || index >= boards.value.length || exporting.value || uploading.value) return
+  selectBoard(index)
+  overviewOpen.value = false
+}
+
 function selectBoard(index: number): void {
   if (index === activeBoardIndex.value || !boards.value[index] || exporting.value || uploading.value) return
   const saved = boards.value[index]!
@@ -197,6 +240,7 @@ function selectBoard(index: number): void {
     manualPlacements.value = saved.manualPlacements.map((slot) => ({ ...slot }))
   } finally { switchingBoard = false }
   adjusting.value = false
+  overviewOpen.value = false
   selectedPlacementIndex.value = null
   drag.value = null
   clearGenerated()
@@ -391,14 +435,15 @@ function mergeAllGroups(): void {
   status.value = `已将 ${merged.length} 个锁组作为整体合并排版。`
 }
 
-function render(context: CanvasRenderingContext2D, width: number, height: number, guides: boolean): void {
+function render(context: CanvasRenderingContext2D, width: number, height: number, guides: boolean,
+  scene: BoardScene = { paper: paper.value, assets: assets.value, placements: placements.value }): void {
   context.clearRect(0, 0, width, height)
-  const scaleX = width / paper.value.widthMm
-  const scaleY = height / paper.value.heightMm
-  const imageById = new Map(assets.value.map((asset) => [asset.id, asset]))
+  const scaleX = width / scene.paper.widthMm
+  const scaleY = height / scene.paper.heightMm
+  const imageById = new Map(scene.assets.map((asset) => [asset.id, asset]))
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
-  for (const [index, slot] of placements.value.entries()) {
+  for (const [index, slot] of scene.placements.entries()) {
     const asset = imageById.get(slot.itemId)
     if (!asset) continue
     const x = slot.xMm * scaleX
@@ -441,8 +486,14 @@ watch([paper, placements, assets, adjusting], () => { void nextTick(renderPrevie
 watch(dpi, clearGenerated)
 watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
 watch(adjusting, (active) => { if (!active) selectedPlacementIndex.value = null })
+watch(() => overviewOpen.value ? overviewBoards.value : null, () => {
+  void nextTick(() => {
+    if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index))
+  })
+})
 onMounted(() => { void nextTick(renderPreview) })
 onBeforeUnmount(() => {
+  overviewCanvases.clear()
   const urls = new Set([...assets.value, ...boards.value.flatMap((board, index) => index !== activeBoardIndex.value ? board?.assets ?? [] : [])].map((asset) => asset.url))
   urls.forEach((url) => { if (url) URL.revokeObjectURL(url) })
   clearGenerated()
@@ -716,10 +767,25 @@ function downloadOnly(): void {
     <main class="flex min-w-0 flex-1 flex-col gap-3 lg:min-h-0 lg:p-5">
       <div class="flex min-w-0 flex-wrap items-center gap-2">
         <div class="flex min-w-0 max-w-full gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="画板切换">
-          <button v-for="(_, index) in boards" :key="index" type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="shrink-0 rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="activeBoardIndex === index ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-600'" @click="selectBoard(index)">画板 {{ index + 1 }}</button>
+          <button v-for="(_, index) in boards" :key="index" type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="shrink-0 rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="activeBoardIndex === index ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-600'" @click="editOverviewBoard(index)">画板 {{ index + 1 }}</button>
         </div>
         <button v-if="countMode" type="button" class="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-40" :disabled="!overflow || exporting || uploading" @click="createRemainingBoard">＋ 新建画板排剩余<span v-if="overflow">（{{ overflow }}）</span></button>
+        <button type="button" class="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="overviewOpen ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-700'" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回当前画板' : '▦ 画板总览' }}</button>
       </div>
+      <section v-if="overviewOpen" aria-label="画板总览" class="min-h-0 flex-1 overflow-y-auto rounded-2xl bg-slate-100 p-3 sm:p-4">
+        <h2 class="text-sm font-semibold text-slate-800">全部画板 · {{ boards.length }} 张</h2>
+        <p class="mb-4 mt-1 text-xs text-slate-500">点击任一画板返回编辑；总览保留当前排版，不会重新排列图片。</p>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          <button v-for="board in overviewBoards" :key="board.index" type="button" class="min-w-0 rounded-xl border-2 bg-white p-3 text-left transition-colors hover:border-violet-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500" :class="board.index === activeBoardIndex ? 'border-violet-500' : 'border-transparent'" :aria-label="`编辑画板 ${board.index + 1}`" @click="editOverviewBoard(board.index)">
+            <div class="flex h-56 items-center justify-center rounded-lg bg-slate-800 p-3">
+              <canvas :ref="(element) => setOverviewCanvas(board.index, element as HTMLCanvasElement | null)" class="studio-canvas bg-checker block h-auto max-h-full max-w-full shadow" :aria-label="`画板 ${board.index + 1} 排版预览`" />
+            </div>
+            <div class="mt-3 flex items-center justify-between gap-2 text-sm"><strong>画板 {{ board.index + 1 }}</strong><span v-if="board.index === activeBoardIndex" class="text-xs text-violet-600">当前画板</span></div>
+            <p class="mt-1 text-xs text-slate-500">{{ board.preset }} · {{ board.paper.widthMm }} × {{ board.paper.heightMm }} mm · 已排 {{ board.placements.length }} 个</p>
+          </button>
+        </div>
+      </section>
+      <div v-show="!overviewOpen" class="flex min-h-0 flex-1 flex-col gap-3">
       <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
         <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
         <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
@@ -759,6 +825,7 @@ function downloadOnly(): void {
           <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-10 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white" @click="copyOrDownload">{{ orderCopied ? '点击下载图片' : '复制下单文案 → 下载' }}</button><button type="button" class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700" @click="downloadOnly">仅下载图片</button></div>
         </div>
         <div v-if="manualCopy" class="space-y-1 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">浏览器未允许复制，请长按文案手动复制。<textarea :value="XIAOHONGSHU_ORDER_TEXT" readonly class="h-16 w-full rounded border border-amber-200 bg-white p-2 text-slate-700" /></div>
+      </div>
       </div>
     </main>
     <div v-if="exporting" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-5" role="status"><div class="rounded-2xl bg-white p-6 text-center shadow-xl"><span class="mx-auto block h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600"></span><p class="mt-4 font-bold">正在生成 {{ dpi }} DPI 图片</p><p v-if="exportProgress !== null" class="mt-1 text-sm text-slate-500">已处理 {{ exportProgress }}%</p><p class="mt-1 text-sm text-slate-500">请勿关闭页面</p></div></div>
