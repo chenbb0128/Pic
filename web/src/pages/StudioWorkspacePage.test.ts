@@ -11,6 +11,25 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('explicitly restores the detail view display after leaving overview', async () => {
+    for (const overview of [false, true, false]) {
+      const app = createSSRApp({
+        ...Workspace,
+        setup(props: any, context: any) {
+          const state = (Workspace as any).setup(props, context)
+          state.overviewOpen.value = overview
+          return state
+        },
+      })
+      app.component('RouterLink', { render: () => null })
+      const html = await renderToString(app)
+      const detail = html.match(/<div\b[^>]*class="flex min-h-0 flex-1 flex-col gap-3"[^>]*>/)?.[0]
+      expect(detail).toBeDefined()
+      expect(detail).toContain(`display:${overview ? 'none' : 'flex'}`)
+      expect(html).toContain('aria-label="排版实时预览"')
+    }
+  })
+
   function mountWorkspace() {
     const app = renderer.createApp({ ...Workspace, render: () => null })
     app.provide(ssrContextKey, {})

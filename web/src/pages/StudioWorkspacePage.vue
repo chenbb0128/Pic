@@ -785,7 +785,7 @@ function downloadOnly(): void {
           </button>
         </div>
       </section>
-      <div v-show="!overviewOpen" class="flex min-h-0 flex-1 flex-col gap-3">
+      <div :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-3">
       <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
         <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
         <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
