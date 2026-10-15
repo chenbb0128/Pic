@@ -34,6 +34,23 @@ interface DragState {
   groupId?: string
 }
 
+interface StudioBoard {
+  preset: PaperPreset
+  orientation: Orientation
+  customWidth: number
+  customHeight: number
+  dpi: number
+  mode: LayoutMode
+  grouping: SmartGrouping
+  gapXmm: number
+  gapYmm: number
+  autoGap: boolean
+  useContours: boolean
+  assets: StudioAsset[]
+  groups: LockedGroup[]
+  manualPlacements: Placement[]
+}
+
 const preset = ref<PaperPreset>('A4')
 const orientation = ref<Orientation>('landscape')
 const customWidth = ref(293)
@@ -67,6 +84,10 @@ const status = ref('选择图片并设置尺寸后，画布会实时显示排版
 const generated = ref<{ url: string; name: string; size: number } | null>(null)
 const orderCopied = ref(false)
 const manualCopy = ref(false)
+// The active board lives in the editor refs; inactive boards hold independent snapshots.
+const boards = shallowRef<(StudioBoard | null)[]>([null])
+const activeBoardIndex = ref(0)
+let switchingBoard = false
 const dpiChoices = [300, 500, 800, 1000]
 const paperOptions = [
   ...imageSizePresets.map((option) => {
@@ -84,24 +105,27 @@ const dpiError = computed(() => {
   return ''
 })
 const lockedPlacements = computed(() => flattenGroups(groups.value))
-const layout = computed(() => arrangeItems({
-  paper: paper.value,
-  gapXmm: gapXmm.value,
-  gapYmm: gapYmm.value,
-  autoGap: autoGap.value,
-  mode: mode.value,
-  grouping: grouping.value,
-  reserved: lockedPlacements.value,
-  items: assets.value.map((asset) => ({
-    id: asset.id,
-    ...rotatedBounds(asset.widthMm, asset.heightMm, asset.rotationDeg),
-    quantity: asset.quantity,
-    selected: asset.selected && !asset.lockedGroupId,
-    important: asset.important,
-    contour: mode.value === 'smart' && grouping.value === 'free' && useContours.value && asset.selected && !asset.lockedGroupId
-      ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
-  })),
-}))
+function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
+  return arrangeItems({
+    paper: paper.value,
+    gapXmm: gapXmm.value,
+    gapYmm: gapYmm.value,
+    autoGap: autoGap.value,
+    mode: mode.value,
+    grouping: grouping.value,
+    reserved,
+    items: source.map((asset) => ({
+      id: asset.id,
+      ...rotatedBounds(asset.widthMm, asset.heightMm, asset.rotationDeg),
+      quantity: asset.quantity,
+      selected: asset.selected && !asset.lockedGroupId,
+      important: asset.important,
+      contour: mode.value === 'smart' && grouping.value === 'free' && useContours.value && asset.selected && !asset.lockedGroupId
+        ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
+    })),
+  })
+}
+const layout = computed(() => arrangeAssets(assets.value, lockedPlacements.value))
 function overlaps(a: Placement, b: Placement): boolean {
   return a.xMm < b.xMm + b.widthMm + gapXmm.value && a.xMm + a.widthMm + gapXmm.value > b.xMm &&
     a.yMm < b.yMm + b.heightMm + gapYmm.value && a.yMm + a.heightMm + gapYmm.value > b.yMm
@@ -122,10 +146,90 @@ const placementCounts = computed(() => {
 const selectedPlacement = computed(() => selectedPlacementIndex.value === null ? null : placements.value[selectedPlacementIndex.value] ?? null)
 const selectedAsset = computed(() => assets.value.find((asset) => asset.id === selectedPlacement.value?.itemId))
 const selectedLocked = computed(() => selectedPlacementIndex.value !== null && selectedPlacementIndex.value < lockedPlacements.value.length)
-const overflow = computed(() => layout.value.overflow + layout.value.placements.length - normalAuto.value.length)
+const countMode = computed(() => mode.value === 'custom' || mode.value === 'smart')
+const remainingAssets = computed(() => countMode.value ? assets.value
+  .filter((asset) => asset.selected || asset.lockedGroupId)
+  .map((asset) => ({
+    ...asset,
+    quantity: Math.max(0, (Number.isFinite(asset.quantity) ? Math.min(500, Math.max(0, Math.floor(asset.quantity))) : 0) - (placementCounts.value.get(asset.id) ?? 0)),
+    selected: true,
+    lockedGroupId: undefined,
+  })).filter((asset) => asset.quantity > 0) : [])
+const overflow = computed(() => countMode.value
+  ? remainingAssets.value.reduce((sum, asset) => sum + asset.quantity, 0)
+  : layout.value.overflow + layout.value.placements.length - normalAuto.value.length)
 const previewWidth = 1200
 const previewHeight = computed(() => Math.round(previewWidth * paper.value.heightMm / paper.value.widthMm))
 const selectedCount = computed(() => assets.value.filter((asset) => asset.selected && !asset.lockedGroupId).length)
+
+function snapshotBoard(): StudioBoard {
+  return {
+    preset: preset.value, orientation: orientation.value,
+    customWidth: customWidth.value, customHeight: customHeight.value, dpi: dpi.value,
+    mode: mode.value, grouping: grouping.value, gapXmm: gapXmm.value, gapYmm: gapYmm.value,
+    autoGap: autoGap.value, useContours: useContours.value,
+    assets: assets.value.map((asset) => ({ ...asset })),
+    groups: groups.value.map((group) => ({ ...group, itemIds: [...group.itemIds], placements: group.placements.map((slot) => ({ ...slot })) })),
+    manualPlacements: (manualPlacements.value ?? normalAuto.value).map((slot) => ({ ...slot })),
+  }
+}
+
+function selectBoard(index: number): void {
+  if (index === activeBoardIndex.value || !boards.value[index] || exporting.value || uploading.value) return
+  const saved = boards.value[index]!
+  boards.value = boards.value.map((board, i) => i === activeBoardIndex.value ? snapshotBoard() : board)
+  switchingBoard = true
+  try {
+    activeBoardIndex.value = index
+    preset.value = saved.preset
+    orientation.value = saved.orientation
+    customWidth.value = saved.customWidth
+    customHeight.value = saved.customHeight
+    dpi.value = saved.dpi
+    mode.value = saved.mode
+    grouping.value = saved.grouping
+    gapXmm.value = saved.gapXmm
+    gapYmm.value = saved.gapYmm
+    autoGap.value = saved.autoGap
+    useContours.value = saved.useContours
+    assets.value = saved.assets.map((asset) => ({ ...asset }))
+    groups.value = saved.groups
+    manualPlacements.value = saved.manualPlacements.map((slot) => ({ ...slot }))
+  } finally { switchingBoard = false }
+  adjusting.value = false
+  selectedPlacementIndex.value = null
+  drag.value = null
+  clearGenerated()
+  status.value = `已切换到画板 ${index + 1}，导出 PNG 仅导出当前画板。`
+  void nextTick(renderPreview)
+}
+
+function createRemainingBoard(): void {
+  if (!countMode.value || exporting.value || uploading.value) return
+  const remaining = remainingAssets.value
+  if (!remaining.length) { status.value = '当前画板的目标数量已全部排入，没有剩余图片。'; return }
+  const nextLayout = arrangeAssets(remaining, [])
+  if (!nextLayout.placements.length) {
+    status.value = '剩余图片的尺寸超出当前纸张可用范围（四周留边 4mm），请减小尺寸或更换纸张；未创建空画板。'
+    return
+  }
+  const currentPlacements = (manualPlacements.value ?? normalAuto.value).map((slot) => ({ ...slot }))
+  const moved = new Map(remaining.map((asset) => [asset.id, asset.quantity]))
+  assets.value = assets.value.map((asset) => moved.has(asset.id)
+    ? { ...asset, quantity: Math.max(0, asset.quantity - moved.get(asset.id)!) } : asset)
+  manualPlacements.value = currentPlacements
+  const nextBoard: StudioBoard = { ...snapshotBoard(), assets: remaining, groups: [], manualPlacements: nextLayout.placements }
+  boards.value = [...boards.value, nextBoard]
+  selectBoard(boards.value.length - 1)
+  controlsOpen.value = false
+  status.value = `已新建画板 ${activeBoardIndex.value + 1}，转入 ${remaining.reduce((sum, asset) => sum + asset.quantity, 0)} 个剩余图案；原画板排版已保留。`
+}
+
+function releaseUnusedImage(url: string): void {
+  if (!url || assets.value.some((asset) => asset.url === url) || boards.value.some((board, index) =>
+    index !== activeBoardIndex.value && board?.assets.some((asset) => asset.url === url))) return
+  URL.revokeObjectURL(url)
+}
 
 function setOrientation(value: Orientation): void {
   if (orientation.value === value) return
@@ -195,7 +299,6 @@ function clearGenerated(): void {
 
 function removeAsset(id: string): void {
   const asset = assets.value.find((item) => item.id === id)
-  if (asset) URL.revokeObjectURL(asset.url)
   groups.value = groups.value.flatMap((group) => {
     if (!group.itemIds.includes(id)) return [group]
     const remainingIds = group.itemIds.filter((itemId) => itemId !== id)
@@ -204,6 +307,7 @@ function removeAsset(id: string): void {
     return updated ? [updated] : []
   })
   assets.value = assets.value.filter((item) => item.id !== id)
+  if (asset) releaseUnusedImage(asset.url)
 }
 
 async function addFiles(files: FileList | null): Promise<void> {
@@ -316,14 +420,17 @@ function renderPreview(): void {
   if (context) render(context, canvas.width, canvas.height, true)
 }
 
-watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
+watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () => {
+  if (!switchingBoard) { manualPlacements.value = null; selectedPlacementIndex.value = null }
+}, { flush: 'sync' })
 watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
 watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
 watch(adjusting, (active) => { if (!active) selectedPlacementIndex.value = null })
 onMounted(() => { void nextTick(renderPreview) })
 onBeforeUnmount(() => {
-  assets.value.forEach((asset) => URL.revokeObjectURL(asset.url))
+  const urls = new Set([...assets.value, ...boards.value.flatMap((board, index) => index !== activeBoardIndex.value ? board?.assets ?? [] : [])].map((asset) => asset.url))
+  urls.forEach((url) => { if (url) URL.revokeObjectURL(url) })
   clearGenerated()
 })
 
@@ -404,14 +511,15 @@ function cycleBackground(): void {
 }
 
 function clearAll(): void {
-  if (!window.confirm('确定清空全部图片和锁组吗？')) return
-  assets.value.forEach((asset) => URL.revokeObjectURL(asset.url))
+  if (!window.confirm(`确定清空${boards.value.length > 1 ? '当前画板的' : '全部'}图片和锁组吗？其他画板不受影响。`)) return
+  const removed = assets.value
   assets.value = []
+  removed.forEach((asset) => releaseUnusedImage(asset.url))
   groups.value = []
   manualPlacements.value = null
   selectedPlacementIndex.value = null
   clearGenerated()
-  status.value = '已清空，可以重新添加图片。'
+  status.value = '已清空当前画板，可以重新添加图片。'
 }
 
 async function generate(): Promise<void> {
@@ -445,7 +553,7 @@ async function generate(): Promise<void> {
       blob = await canvasPng(canvas, dpi.value)
     }
     const url = URL.createObjectURL(blob)
-    const name = `转印贴-${preset.value}-${dpi.value}DPI-${Date.now()}.png`
+    const name = `转印贴-${preset.value}-画板${activeBoardIndex.value + 1}-${dpi.value}DPI-${Date.now()}.png`
     generated.value = { url, name, size: blob.size }
     status.value = `已生成 ${size.width} × ${size.height}px · ${formatBytes(blob.size)}${overflow.value ? ` · ${overflow.value} 个未排入` : ''}`
   } catch (error) {
@@ -592,6 +700,12 @@ function downloadOnly(): void {
     </aside>
 
     <main class="flex min-w-0 flex-1 flex-col gap-3 lg:min-h-0 lg:p-5">
+      <div class="flex min-w-0 flex-wrap items-center gap-2">
+        <div class="flex min-w-0 max-w-full gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="画板切换">
+          <button v-for="(_, index) in boards" :key="index" type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="shrink-0 rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="activeBoardIndex === index ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-600'" @click="selectBoard(index)">画板 {{ index + 1 }}</button>
+        </div>
+        <button v-if="countMode" type="button" class="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-40" :disabled="!overflow || exporting || uploading" @click="createRemainingBoard">＋ 新建画板排剩余<span v-if="overflow">（{{ overflow }}）</span></button>
+      </div>
       <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
         <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
         <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
@@ -618,7 +732,7 @@ function downloadOnly(): void {
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
           <button type="button" class="studio-toolbar is-primary" @click="resetLayout">✦ 排版</button>
           <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="adjusting = !adjusting">✋ {{ adjusting ? '完成' : '调整' }}</button>
-          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError" @click="generate">{{ exporting ? '生成中…' : '♧ 导出 PNG' }}</button>
+          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '♧ 导出当前画板' : '♧ 导出 PNG' }}</button>
           <RouterLink class="studio-toolbar" to="/pricing">⭐ 升级</RouterLink>
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>

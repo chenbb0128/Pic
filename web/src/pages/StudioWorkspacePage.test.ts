@@ -9,6 +9,160 @@ const renderer = createRenderer<object, object>({
   parentNode: () => null, nextSibling: () => null,
 })
 
+describe('overflow artboards', () => {
+  function mountWorkspace() {
+    const app = renderer.createApp({ ...Workspace, render: () => null })
+    app.provide(ssrContextKey, {})
+    const vm = app.mount({})
+    const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
+    state.useContours = false
+    state.preset = 'custom'
+    state.customWidth = 108
+    state.customHeight = 108
+    state.gapXmm = 0
+    state.gapYmm = 0
+    const asset = (id: string, quantity: number, widthMm = 50) => ({
+      id, name: id, url: `blob:${id}`, image: {}, width: 100, height: 100,
+      widthMm, heightMm: widthMm, quantity, selected: true,
+      important: true, ratioLocked: true, rotationDeg: 0,
+    })
+    return { state, asset, cleanup: () => { state.assets = []; state.boards = []; app.unmount() } }
+  }
+
+  it.each(['custom', 'smart'])('moves only remaining quantities to new boards in %s mode', async (mode) => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = mode
+      state.grouping = 'rows'
+      state.assets = [asset('one', 9)]
+      await nextTick()
+      expect(state.placements).toHaveLength(4)
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.activeBoardIndex).toBe(1)
+      expect(state.assets[0].quantity).toBe(5)
+      expect(state.placements).toHaveLength(4)
+      expect(state.mode).toBe(mode)
+      expect(state.grouping).toBe('rows')
+      expect(state.assets[0].important).toBe(true)
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.assets[0].quantity).toBe(1)
+      expect(state.placements).toHaveLength(1)
+      state.createRemainingBoard()
+      expect(state.boards).toHaveLength(3)
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.assets[0].quantity).toBe(4)
+      expect(state.placements).toHaveLength(4)
+      state.createRemainingBoard()
+      expect(state.boards).toHaveLength(3)
+    } finally { cleanup() }
+  })
+
+  it('preserves manual positions and independent settings when switching boards', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = 'smart'
+      state.assets = [asset('one', 5)]
+      await nextTick()
+      state.manualPlacements = [{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 40, heightMm: 40 }]
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.assets[0].quantity).toBe(4)
+      state.setAssetSize('one', 'widthMm', 3)
+      state.dpi = 300
+      await nextTick()
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.placements).toEqual([{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 40, heightMm: 40 }])
+      expect(state.assets[0].widthMm).toBe(50)
+      expect(state.dpi).toBe(500)
+      state.selectBoard(1)
+      await nextTick()
+      expect(state.assets[0].widthMm).toBe(30)
+      expect(state.dpi).toBe(300)
+    } finally { cleanup() }
+  })
+
+  it('does not create an empty board for oversized images or non-count modes', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = 'smart'
+      state.assets = [asset('large', 3, 110)]
+      await nextTick()
+      state.createRemainingBoard()
+      expect(state.boards).toHaveLength(1)
+      expect(state.assets[0].quantity).toBe(3)
+      expect(state.status).toContain('尺寸')
+      state.mode = 'balanced'
+      state.assets = [asset('one', 5)]
+      await nextTick()
+      state.createRemainingBoard()
+      expect(state.boards).toHaveLength(1)
+    } finally { cleanup() }
+  })
+
+  it('counts locked copies once and transfers only their unlocked remainder', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = 'custom'
+      state.assets = [asset('one', 5)]
+      await nextTick()
+      state.lockSelected()
+      await nextTick()
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.assets[0].quantity).toBe(1)
+      expect(state.assets[0].lockedGroupId).toBeUndefined()
+      expect(state.groups).toHaveLength(0)
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.groups).toHaveLength(1)
+      expect(state.placements).toHaveLength(4)
+    } finally { cleanup() }
+  })
+
+  it('omits fulfilled and unchecked images while preserving per-image remainder', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = 'custom'
+      state.assets = [asset('first', 3), asset('second', 6), { ...asset('unchecked', 10), selected: false }]
+      await nextTick()
+      expect(state.placementCounts.get('first')).toBe(3)
+      expect(state.placementCounts.get('second')).toBe(1)
+      expect(state.overflow).toBe(5)
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.assets.map((item: any) => [item.id, item.quantity])).toEqual([['second', 5]])
+      expect(state.overflow).toBe(1)
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.assets.map((item: any) => [item.id, item.quantity])).toEqual([['first', 3], ['second', 1], ['unchecked', 10]])
+      expect(state.overflow).toBe(0)
+    } finally { cleanup() }
+  })
+
+  it('keeps shared image resources usable when removed from another board', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const url = URL.createObjectURL(new Blob(['image-data']))
+    try {
+      state.mode = 'custom'
+      state.assets = [{ ...asset('one', 5), url }]
+      await nextTick()
+      state.createRemainingBoard()
+      await nextTick()
+      state.removeAsset('one')
+      expect(await (await fetch(url)).text()).toBe('image-data')
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.placements).toHaveLength(4)
+      state.removeAsset('one')
+      await expect(fetch(url)).rejects.toThrow()
+    } finally { URL.revokeObjectURL(url); cleanup() }
+  })
+})
+
 describe('workspace editing preserves the selected layout mode', () => {
   it.each(['balanced', 'compact', 'custom', 'smart'])('keeps %s when editing image details and bulk settings', async (mode) => {
     const app = renderer.createApp({ ...Workspace, render: () => null })
