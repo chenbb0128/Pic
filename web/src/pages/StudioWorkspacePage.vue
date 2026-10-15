@@ -157,16 +157,18 @@ function setQuantity(id: string, value: number): void {
     return
   }
   updateAsset(id, { quantity: Math.min(500, Math.max(0, Math.floor(value))) })
-  mode.value = 'smart'
-  status.value = '已按当前排列方式智能排版，优先满足标记图案的数量。'
+  status.value = mode.value === 'custom' || mode.value === 'smart'
+    ? '已更新数量，并按当前模式重新排版。'
+    : '已保存数量，保持当前排版模式；切换到定制或智能填充时按数量生效。'
 }
 
 function toggleImportant(id: string): void {
   const asset = assets.value.find((item) => item.id === id)
   if (!asset || asset.lockedGroupId) return
   updateAsset(id, { important: !asset.important })
-  mode.value = 'smart'
-  status.value = asset.important ? '已取消优先，按当前优先级重新填充。' : '已设为优先：先尽量排满该图案的目标数量，再填充其他图案。'
+  status.value = mode.value === 'smart'
+    ? asset.important ? '已取消优先，按当前优先级重新填充。' : '已设为优先：先尽量排满该图案的目标数量，再填充其他图案。'
+    : `已${asset.important ? '取消' : '设置'}优先，保持当前排版模式；优先设置在智能填充时生效。`
 }
 
 function setRotation(id: string, value: number): void {
@@ -246,8 +248,7 @@ function applyBulk(): void {
   assets.value = assets.value.map((asset) => asset.selected && !asset.lockedGroupId
     ? { ...asset, ...fitSizeMm(asset.width, asset.height, longEdgeMm), quantity: Math.min(500, Math.floor(quantity)) }
     : asset)
-  mode.value = 'smart'
-  status.value = `已统一设置 ${count} 张素材，并按数量上限智能填充。`
+  status.value = `已统一设置 ${count} 张素材，并按当前模式重新排版。${mode.value === 'balanced' || mode.value === 'compact' ? '数量设置在定制或智能填充时生效。' : ''}`
 }
 
 function lockSelected(): void {
@@ -553,7 +554,7 @@ function downloadOnly(): void {
       <section class="min-h-[190px] border-b border-[#31415f] px-4 py-3">
         <h2 class="text-xs font-medium text-[#a9bbe1]">图片明细 <span class="text-[11px] text-[#8098c5]">（勾选后排版；尺寸单位 cm）</span></h2>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
-        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">点击 ☆ 优先可优先满足该图案数量；数量为上限，0 表示不排入，最多 500 份。</p>
+        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">修改明细保持当前模式；数量在定制、智能填充中生效（0 表示不排入，最多 500 份），☆ 优先仅在智能填充中生效。</p>
         <div v-if="bulkOpen" class="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-lg border border-[#40537a] p-2 text-[11px] text-[#a9bbe1]">
           <label>长边 cm<input v-model.number="bulkLongEdgeCm" type="number" min="0.1" max="42" step="0.1" class="studio-input mt-1 w-full" /></label>
           <label>数量<input v-model.number="bulkQuantity" type="number" min="0" max="500" class="studio-input mt-1 w-full" /></label>
@@ -567,7 +568,7 @@ function downloadOnly(): void {
           <input type="number" min="0.1" max="42" step="0.1" :value="(asset.widthMm / 10).toFixed(1)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input" :aria-label="`${asset.name} 宽度厘米`" @change="setAssetSize(asset.id, 'widthMm', Number(($event.target as HTMLInputElement).value))" />
           <button type="button" class="studio-asset-lock" :disabled="!!asset.lockedGroupId" :aria-label="asset.ratioLocked ? '解锁尺寸比例' : '锁定尺寸比例'" @click="updateAsset(asset.id, { ratioLocked: !asset.ratioLocked })">{{ asset.ratioLocked ? '🔒' : '🔓' }}</button>
           <input type="number" min="0.1" max="42" step="0.1" :value="(asset.heightMm / 10).toFixed(1)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input studio-size-accent" :aria-label="`${asset.name} 高度厘米`" @change="setAssetSize(asset.id, 'heightMm', Number(($event.target as HTMLInputElement).value))" />
-          <label class="flex shrink-0 items-center gap-1" title="排版数量上限，修改后切换到智能填充">
+          <label class="flex shrink-0 items-center gap-1" title="定制、智能填充的排版数量上限；修改后保留当前模式">
             <span>数量</span>
             <input type="number" min="0" max="500" step="1" inputmode="numeric" :value="asset.quantity" :disabled="!!asset.lockedGroupId" class="studio-input studio-quantity-input" :aria-label="`${asset.name} 数量`" @change="setQuantity(asset.id, ($event.target as HTMLInputElement).valueAsNumber)" />
           </label>
