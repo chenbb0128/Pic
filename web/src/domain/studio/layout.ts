@@ -6,6 +6,7 @@ import type { ContourMask } from './contourMask'
 export type PaperPreset = ImageSizePreset['value'] | 'custom'
 export type Orientation = 'landscape' | 'portrait'
 export type LayoutMode = 'balanced' | 'compact' | 'custom' | 'smart'
+export type SmartGrouping = 'free' | 'rows' | 'columns'
 
 export interface PaperSize { widthMm: number; heightMm: number }
 export interface LayoutItem {
@@ -31,6 +32,7 @@ export interface ArrangeOptions {
   gapYmm?: number
   autoGap?: boolean
   mode: LayoutMode
+  grouping?: SmartGrouping
   items: LayoutItem[]
   reserved?: Placement[]
 }
@@ -59,7 +61,7 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
   const { paper, mode } = options
   const gapXmm = options.autoGap ? 5 : Math.max(0, options.gapXmm ?? options.gapMm ?? 0)
   const gapYmm = options.autoGap ? 5 : Math.max(0, options.gapYmm ?? options.gapMm ?? 0)
-  if (mode === 'smart') return arrangeSmartItems(paper, options.items, gapXmm, gapYmm, options.reserved)
+  if (mode === 'smart') return arrangeSmartItems(paper, options.items, gapXmm, gapYmm, options.reserved, options.grouping)
   const requested = mode === 'custom' ? options.items.reduce((sum, item) => sum + (item.selected && Number.isFinite(item.quantity)
     ? Math.min(500, Math.max(0, Math.floor(item.quantity))) : 0), 0) : 0
   const right = paper.widthMm - PAPER_MARGIN_MM

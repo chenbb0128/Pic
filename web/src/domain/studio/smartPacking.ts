@@ -1,6 +1,7 @@
-import type { ArrangeResult, LayoutItem, PaperSize, Placement } from './layout'
+import type { ArrangeResult, LayoutItem, PaperSize, Placement, SmartGrouping } from './layout'
 import { PAPER_MARGIN_MM } from './paperBounds'
 import { improveContourPacking } from './contourPacking'
+import { arrangeGroupedItems } from './groupedPacking'
 
 interface Rect { x: number; y: number; width: number; height: number }
 
@@ -37,6 +38,7 @@ export function arrangeSmartItems(
   gapXmm: number,
   gapYmm: number,
   reserved: Placement[] = [],
+  grouping: SmartGrouping = 'free',
 ): ArrangeResult {
   const ordered = items.filter((item) => item.selected).map((item) => ({
     ...item,
@@ -46,6 +48,16 @@ export function arrangeSmartItems(
   let placements: Placement[] = []
   if (!Number.isFinite(paper.widthMm) || !Number.isFinite(paper.heightMm) || paper.widthMm <= PAPER_MARGIN_MM * 2 || paper.heightMm <= PAPER_MARGIN_MM * 2) {
     return { placements, overflow: requested }
+  }
+  if (grouping !== 'free') {
+    placements = arrangeGroupedItems(paper, ordered, gapXmm, gapYmm, reserved, grouping)
+    if (placements.length && !reserved.length) {
+      const left = Math.min(...placements.map((slot) => slot.xMm))
+      const right = Math.max(...placements.map((slot) => slot.xMm + slot.widthMm))
+      const shift = (paper.widthMm - (right - left)) / 2 - left
+      placements.forEach((slot) => { slot.xMm += shift })
+    }
+    return { placements, overflow: requested - placements.length }
   }
 
   // Reserve the paper margin; padding right/bottom accounts for inter-pattern gaps.

@@ -4,7 +4,7 @@ import { fitSizeMm, resizeAssetSize, rotatedBounds } from '../domain/studio/asse
 import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSize'
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
 import { imageSizePresets } from '../domain/studio/imageSizeConversion'
-import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement } from '../domain/studio/layout'
+import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement, type SmartGrouping } from '../domain/studio/layout'
 import { resizePlacement } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
@@ -40,6 +40,8 @@ const customWidth = ref(293)
 const customHeight = ref(210)
 const dpi = ref(500)
 const mode = ref<LayoutMode>('balanced')
+const grouping = ref<SmartGrouping>('free')
+const groupingOptions = [{ value: 'free', label: '尽量填满' }, { value: 'rows', label: '同类按行' }, { value: 'columns', label: '同类按列' }] as const
 const gapXmm = ref(5)
 const gapYmm = ref(2)
 const autoGap = ref(false)
@@ -88,6 +90,7 @@ const layout = computed(() => arrangeItems({
   gapYmm: gapYmm.value,
   autoGap: autoGap.value,
   mode: mode.value,
+  grouping: grouping.value,
   reserved: lockedPlacements.value,
   items: assets.value.map((asset) => ({
     id: asset.id,
@@ -95,7 +98,7 @@ const layout = computed(() => arrangeItems({
     quantity: asset.quantity,
     selected: asset.selected && !asset.lockedGroupId,
     important: asset.important,
-    contour: mode.value === 'smart' && useContours.value && asset.selected && !asset.lockedGroupId
+    contour: mode.value === 'smart' && grouping.value === 'free' && useContours.value && asset.selected && !asset.lockedGroupId
       ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
   })),
 }))
@@ -155,7 +158,7 @@ function setQuantity(id: string, value: number): void {
   }
   updateAsset(id, { quantity: Math.min(500, Math.max(0, Math.floor(value))) })
   mode.value = 'smart'
-  status.value = '已智能填充：优先满足标记图案的数量，剩余空间大图先排、小图补空。'
+  status.value = '已按当前排列方式智能排版，优先满足标记图案的数量。'
 }
 
 function toggleImportant(id: string): void {
@@ -312,7 +315,7 @@ function renderPreview(): void {
   if (context) render(context, canvas.width, canvas.height, true)
 }
 
-watch([paper, gapXmm, gapYmm, autoGap, mode, useContours, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
+watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
 watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
 watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
@@ -391,7 +394,7 @@ function resetLayout(): void {
   manualPlacements.value = null
   selectedPlacementIndex.value = null
   adjusting.value = false
-  status.value = mode.value === 'smart' ? '已按优先级重新智能填充；同级大图先排、小图补空，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
+  status.value = mode.value === 'smart' ? '已按当前排列方式重新智能排版；优先图案先排，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
 }
 
 function cycleBackground(): void {
@@ -510,10 +513,17 @@ function downloadOnly(): void {
         <div class="grid grid-cols-4 gap-1">
           <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '按数量逐行' }, { value: 'smart', label: '智能填充', hint: '优先图案先排' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
         </div>
-        <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">先尽量满足 ★ 优先图案的数量，再填充其他图案；同级大图先排、小图补空，保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
+        <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">先尽量满足 ★ 优先图案的数量，再按所选方式排列其他图案；同级大图先排，保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
         <template v-if="mode === 'smart'">
-          <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="useContours" type="checkbox" />利用透明空隙（尽量多排）</label>
-          <p class="mt-1 text-[11px] leading-5 text-[#a9bbe1]">{{ useContours ? '按图案轮廓保持间距，透明外框可以交错；不缩小、不自动旋转。无透明区域时按矩形排版。' : '按整张图片矩形边框保持间距。' }}数量仍为上限，放不下的会提示未排入。</p>
+          <h3 class="mb-1 mt-2 text-xs font-medium text-[#a9bbe1]">排列方式</h3>
+          <div class="grid grid-cols-3 gap-1" role="group" aria-label="排列方式">
+            <button v-for="option in groupingOptions" :key="option.value" type="button" class="studio-choice min-w-0 px-1 py-2 text-xs" :class="{ 'is-active': grouping === option.value }" :aria-pressed="grouping === option.value" @click="grouping = option.value">{{ option.label }}</button>
+          </div>
+          <template v-if="grouping === 'free'">
+            <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="useContours" type="checkbox" />利用透明空隙（尽量多排）</label>
+            <p class="mt-1 text-[11px] leading-5 text-[#a9bbe1]">{{ useContours ? '按图案轮廓保持间距，透明外框可以交错；不缩小、不自动旋转。无透明区域时按矩形排版。' : '按整张图片矩形边框保持间距。' }}数量仍为上限，放不下的会提示未排入。</p>
+          </template>
+          <p v-else class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">每张素材视为一类，同类连续{{ grouping === 'rows' ? '横排，换素材另起一行' : '竖排，换素材另起一列' }}；按图片外框整齐对齐，不穿插透明空隙，可能比尽量填满少排。锁组保留原位，自动排版会避让。</p>
         </template>
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
