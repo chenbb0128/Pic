@@ -1,4 +1,5 @@
 import type { ArrangeResult, LayoutItem, PaperSize, Placement } from './layout'
+import { PAPER_MARGIN_MM } from './paperBounds'
 
 interface Rect { x: number; y: number; width: number; height: number }
 
@@ -42,12 +43,16 @@ export function arrangeSmartItems(
   })).sort((a, b) => b.widthMm * b.heightMm - a.widthMm * a.heightMm)
   const requested = ordered.reduce((sum, item) => sum + item.quantity, 0)
   const placements: Placement[] = []
-  if (!Number.isFinite(paper.widthMm) || !Number.isFinite(paper.heightMm) || paper.widthMm <= 0 || paper.heightMm <= 0) {
+  if (!Number.isFinite(paper.widthMm) || !Number.isFinite(paper.heightMm) || paper.widthMm <= PAPER_MARGIN_MM * 2 || paper.heightMm <= PAPER_MARGIN_MM * 2) {
     return { placements, overflow: requested }
   }
 
-  // Padding only the right/bottom keeps the requested gaps and permits edge placements.
-  let freeRects: Rect[] = [{ x: 0, y: 0, width: paper.widthMm + gapXmm, height: paper.heightMm + gapYmm }]
+  // Reserve the paper margin; padding right/bottom accounts for inter-pattern gaps.
+  let freeRects: Rect[] = [{
+    x: PAPER_MARGIN_MM, y: PAPER_MARGIN_MM,
+    width: paper.widthMm - PAPER_MARGIN_MM * 2 + gapXmm,
+    height: paper.heightMm - PAPER_MARGIN_MM * 2 + gapYmm,
+  }]
   for (const slot of reserved) {
     freeRects = subtractRect(freeRects, {
       x: slot.xMm, y: slot.yMm, width: slot.widthMm + gapXmm, height: slot.heightMm + gapYmm,

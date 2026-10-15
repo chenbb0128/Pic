@@ -1,4 +1,5 @@
 import type { PaperSize, Placement } from './layout'
+import { PAPER_MARGIN_MM } from './paperBounds'
 
 export interface LockedGroup {
   id: string
@@ -33,18 +34,18 @@ export function flattenGroups(groups: LockedGroup[]): Placement[] {
 }
 
 export function mergeGroups(groups: LockedGroup[], paper: PaperSize, gapXmm: number, gapYmm: number): LockedGroup[] | null {
-  let xMm = 0
-  let yMm = 0
+  let xMm = PAPER_MARGIN_MM
+  let yMm = PAPER_MARGIN_MM
   let rowHeight = 0
   const merged: LockedGroup[] = []
   for (const group of groups) {
-    if (group.widthMm > paper.widthMm || group.heightMm > paper.heightMm) return null
-    if (xMm + group.widthMm > paper.widthMm) {
-      xMm = 0
+    if (group.widthMm > paper.widthMm - PAPER_MARGIN_MM * 2 || group.heightMm > paper.heightMm - PAPER_MARGIN_MM * 2) return null
+    if (xMm + group.widthMm > paper.widthMm - PAPER_MARGIN_MM) {
+      xMm = PAPER_MARGIN_MM
       yMm += rowHeight + gapYmm
       rowHeight = 0
     }
-    if (yMm + group.heightMm > paper.heightMm) return null
+    if (yMm + group.heightMm > paper.heightMm - PAPER_MARGIN_MM) return null
     merged.push({ ...group, xMm, yMm })
     xMm += group.widthMm + gapXmm
     rowHeight = Math.max(rowHeight, group.heightMm)

@@ -20,7 +20,7 @@ describe('resizePlacement', () => {
     const placements: Placement[] = [{ itemId: 'snake', xMm: 80, yMm: 30, widthMm: 20, heightMm: 10 }]
 
     expect(resizePlacement(placements, 0, 200, { widthMm: 100, heightMm: 50 })).toEqual([
-      { itemId: 'snake', xMm: 0, yMm: 0, widthMm: 100, heightMm: 50 },
+      { itemId: 'snake', xMm: 12, yMm: 4, widthMm: 84, heightMm: 42 },
     ])
   })
 

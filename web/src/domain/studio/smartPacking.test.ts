@@ -4,10 +4,10 @@ import { arrangeItems, type PaperSize, type Placement } from './layout'
 function expectValidLayout(placements: Placement[], paper: PaperSize, gapXmm: number, gapYmm: number): void {
   const tolerance = 1e-6
   for (const [index, slot] of placements.entries()) {
-    expect(slot.xMm).toBeGreaterThanOrEqual(-tolerance)
-    expect(slot.yMm).toBeGreaterThanOrEqual(-tolerance)
-    expect(slot.xMm + slot.widthMm).toBeLessThanOrEqual(paper.widthMm + tolerance)
-    expect(slot.yMm + slot.heightMm).toBeLessThanOrEqual(paper.heightMm + tolerance)
+    expect(slot.xMm).toBeGreaterThanOrEqual(4 - tolerance)
+    expect(slot.yMm).toBeGreaterThanOrEqual(4 - tolerance)
+    expect(slot.xMm + slot.widthMm).toBeLessThanOrEqual(paper.widthMm - 4 + tolerance)
+    expect(slot.yMm + slot.heightMm).toBeLessThanOrEqual(paper.heightMm - 4 + tolerance)
     for (const other of placements.slice(index + 1)) {
       expect(slot.xMm + slot.widthMm + gapXmm <= other.xMm + tolerance ||
         other.xMm + other.widthMm + gapXmm <= slot.xMm + tolerance ||
@@ -24,7 +24,7 @@ describe('smart quantity packing', () => {
       paper, gapXmm: 4, gapYmm: 4, mode: 'smart',
       items: [
         { id: 'small', widthMm: 12, heightMm: 5, quantity: 100, selected: true },
-        { id: 'large', widthMm: 65, heightMm: 46, quantity: 20, selected: true },
+        { id: 'large', widthMm: 60, heightMm: 45, quantity: 20, selected: true },
       ],
     })
     const large = result.placements.filter((slot) => slot.itemId === 'large')
@@ -33,7 +33,7 @@ describe('smart quantity packing', () => {
     expect(small.length).toBeGreaterThanOrEqual(40)
     expect(small.length).toBeLessThanOrEqual(100)
     expect(small.some((slot) => slot.yMm < 46)).toBe(true)
-    expect(large.every((slot) => slot.widthMm === 65 && slot.heightMm === 46)).toBe(true)
+    expect(large.every((slot) => slot.widthMm === 60 && slot.heightMm === 45)).toBe(true)
     expect(small.every((slot) => slot.widthMm === 12 && slot.heightMm === 5)).toBe(true)
     expect(result.overflow).toBe(120 - result.placements.length)
     expectValidLayout(result.placements, paper, 4, 4)
@@ -57,15 +57,15 @@ describe('smart quantity packing', () => {
 
   it('packs around locked placements while preserving their positions and spacing', () => {
     const paper = { widthMm: 100, heightMm: 50 }
-    const locked = { itemId: 'locked', xMm: 0, yMm: 0, widthMm: 60, heightMm: 50 }
+    const locked = { itemId: 'locked', xMm: 4, yMm: 4, widthMm: 55, heightMm: 42 }
     const result = arrangeItems({
       paper, gapXmm: 5, gapYmm: 5, mode: 'smart', reserved: [locked],
-      items: [{ id: 'small', widthMm: 30, heightMm: 20, quantity: 10, selected: true }],
+      items: [{ id: 'small', widthMm: 30, heightMm: 18, quantity: 10, selected: true }],
     })
     expect(result.placements).toHaveLength(2)
-    expect(result.placements.every((slot) => slot.xMm === 65)).toBe(true)
+    expect(result.placements.every((slot) => slot.xMm === 64)).toBe(true)
     expect(result.overflow).toBe(8)
-    expect(locked).toEqual({ itemId: 'locked', xMm: 0, yMm: 0, widthMm: 60, heightMm: 50 })
+    expect(locked).toEqual({ itemId: 'locked', xMm: 4, yMm: 4, widthMm: 55, heightMm: 42 })
     expectValidLayout([locked, ...result.placements], paper, 5, 5)
   })
 

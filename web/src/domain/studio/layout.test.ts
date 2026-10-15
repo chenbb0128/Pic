@@ -35,13 +35,13 @@ describe('orientedPaperSize', () => {
 describe('arrangeItems', () => {
   it('honors custom quantities without placing anything outside the sheet', () => {
     const result = arrangeItems({
-      paper: { widthMm: 50, heightMm: 25 },
+      paper: { widthMm: 58, heightMm: 33 },
       gapMm: 5,
       mode: 'custom',
       items: [{ id: 'flower', widthMm: 20, heightMm: 20, quantity: 3, selected: true }],
     })
 
-    expect(result.placements.map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[2.5, 0], [27.5, 0]])
+    expect(result.placements.map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[6.5, 4], [31.5, 4]])
     expect(result.overflow).toBe(1)
   })
 
@@ -77,13 +77,13 @@ describe('arrangeItems', () => {
 
   it('uses different horizontal and vertical gaps', () => {
     const result = arrangeItems({
-      paper: { widthMm: 25, heightMm: 25 },
+      paper: { widthMm: 33, heightMm: 33 },
       gapXmm: 5,
       gapYmm: 2,
       mode: 'custom',
       items: [{ id: 'a', widthMm: 10, heightMm: 10, quantity: 3, selected: true }],
     })
-    expect(result.placements.map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[0, 0], [15, 0], [7.5, 12]])
+    expect(result.placements.map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[4, 4], [19, 4], [11.5, 16]])
   })
 
   it('centers each row on the A4 sheet without changing sticker gaps', () => {
@@ -95,9 +95,9 @@ describe('arrangeItems', () => {
       items: [{ id: 'a', widthMm: 50, heightMm: 50, quantity: 12, selected: true }],
     })
     expect(result.placements.slice(0, 5).map(({ xMm, yMm }) => [xMm, yMm])).toEqual([
-      [13.5, 0], [68.5, 0], [123.5, 0], [178.5, 0], [233.5, 0],
+      [13.5, 4], [68.5, 4], [123.5, 4], [178.5, 4], [233.5, 4],
     ])
-    expect(result.placements.slice(-2).map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[96, 104], [151, 104]])
+    expect(result.placements.slice(-2).map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[96, 108], [151, 108]])
   })
 
   it('automatically spreads a row across the sheet', () => {
@@ -109,6 +109,25 @@ describe('arrangeItems', () => {
       mode: 'custom',
       items: [{ id: 'a', widthMm: 10, heightMm: 10, quantity: 2, selected: true }],
     })
-    expect(result.placements.map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[5, 20], [85, 20]])
+    expect(result.placements.map(({ xMm, yMm }) => [xMm, yMm])).toEqual([[4, 20], [86, 20]])
+  })
+
+  it.each(['balanced', 'compact', 'custom', 'smart'] as const)('keeps a 4mm margin on every edge in %s mode', (mode) => {
+    for (const autoGap of [false, true]) {
+      const result = arrangeItems({
+        paper: { widthMm: 40, heightMm: 30 }, gapMm: 0, autoGap, mode,
+        items: [{ id: 'exact-fit', widthMm: 32, heightMm: 22, quantity: 2, selected: true }],
+      })
+      expect(result.placements).toEqual([{ itemId: 'exact-fit', xMm: 4, yMm: 4, widthMm: 32, heightMm: 22 }])
+    }
+  })
+
+  it.each(['balanced', 'compact', 'custom', 'smart'] as const)('does not shrink oversized patterns to bypass the margin in %s mode', (mode) => {
+    const result = arrangeItems({
+      paper: { widthMm: 40, heightMm: 30 }, mode,
+      items: [{ id: 'too-wide', widthMm: 33, heightMm: 22, quantity: 2, selected: true }],
+    })
+    expect(result.placements).toEqual([])
+    expect(result.overflow).toBe(mode === 'custom' || mode === 'smart' ? 2 : 0)
   })
 })

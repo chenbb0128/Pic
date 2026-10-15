@@ -6,6 +6,7 @@ import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../doma
 import { imageSizePresets } from '../domain/studio/imageSizeConversion'
 import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type Placement } from '../domain/studio/layout'
 import { resizePlacement } from '../domain/studio/placementAdjustments'
+import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
 import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanvasPng, type LocalImage } from '../services/studioImage'
@@ -99,6 +100,11 @@ function overlaps(a: Placement, b: Placement): boolean {
 const normalAuto = computed(() => mode.value === 'smart' ? layout.value.placements : layout.value.placements.filter((placement) =>
   lockedPlacements.value.every((locked) => !overlaps(placement, locked))))
 const placements = computed(() => [...lockedPlacements.value, ...(manualPlacements.value ?? normalAuto.value)])
+const paperMarginError = computed(() => placements.value.some((slot) =>
+  slot.xMm < PAPER_MARGIN_MM - 1e-6 || slot.yMm < PAPER_MARGIN_MM - 1e-6 ||
+  slot.xMm + slot.widthMm > paper.value.widthMm - PAPER_MARGIN_MM + 1e-6 ||
+  slot.yMm + slot.heightMm > paper.value.heightMm - PAPER_MARGIN_MM + 1e-6)
+  ? '部分图案或锁组超出 4mm 留边，请调整位置、尺寸或更换纸张后导出。' : '')
 const placementCounts = computed(() => {
   const counts = new Map<string, number>()
   for (const slot of placements.value) counts.set(slot.itemId, (counts.get(slot.itemId) ?? 0) + 1)
@@ -345,8 +351,8 @@ function onPointerMove(event: PointerEvent): void {
   if (current.groupId) {
     groups.value = groups.value.map((group) => group.id === current.groupId ? {
       ...group,
-      xMm: Math.max(0, Math.min(paper.value.widthMm - group.widthMm, current.originXmm + deltaX)),
-      yMm: Math.max(0, Math.min(paper.value.heightMm - group.heightMm, current.originYmm + deltaY)),
+      xMm: clampPaperPosition(current.originXmm + deltaX, group.widthMm, paper.value.widthMm),
+      yMm: clampPaperPosition(current.originYmm + deltaY, group.heightMm, paper.value.heightMm),
     } : group)
   } else if (current.normalIndex !== undefined) {
     const updated = [...(manualPlacements.value ?? normalAuto.value)]
@@ -354,8 +360,8 @@ function onPointerMove(event: PointerEvent): void {
     if (!slot) return
     updated[current.normalIndex] = {
       ...slot,
-      xMm: Math.max(0, Math.min(paper.value.widthMm - slot.widthMm, current.originXmm + deltaX)),
-      yMm: Math.max(0, Math.min(paper.value.heightMm - slot.heightMm, current.originYmm + deltaY)),
+      xMm: clampPaperPosition(current.originXmm + deltaX, slot.widthMm, paper.value.widthMm),
+      yMm: clampPaperPosition(current.originYmm + deltaY, slot.heightMm, paper.value.heightMm),
     }
     manualPlacements.value = updated
   }
@@ -395,6 +401,7 @@ async function generate(): Promise<void> {
     status.value = '请先上传并选择至少一张素材。'
     return
   }
+  if (paperMarginError.value) { status.value = paperMarginError.value; return }
   const size = dpiInfo.value
   if (dpiError.value) { status.value = dpiError.value; return }
   exporting.value = true
@@ -493,6 +500,7 @@ function downloadOnly(): void {
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>
+        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；下方设置图案之间的间距。</p>
         <div class="studio-gap-grid">
           <label class="studio-gap-row"><span>↔</span><input v-model.number="gapXmm" type="range" min="0" max="30" step="0.5" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" /><input v-model.number="gapXmm" type="number" min="0" max="30" step="0.5" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" /><span>mm</span></label>
           <label class="studio-gap-row"><span>↕</span><input v-model.number="gapYmm" type="range" min="0" max="30" step="0.5" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" /><input v-model.number="gapYmm" type="number" min="0" max="30" step="0.5" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" /><span>mm</span></label>
@@ -580,13 +588,14 @@ function downloadOnly(): void {
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
           <button type="button" class="studio-toolbar is-primary" @click="resetLayout">✦ 排版</button>
           <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="adjusting = !adjusting">✋ {{ adjusting ? '完成' : '调整' }}</button>
-          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError" @click="generate">{{ exporting ? '生成中…' : '♧ 导出 PNG' }}</button>
+          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError" @click="generate">{{ exporting ? '生成中…' : '♧ 导出 PNG' }}</button>
           <RouterLink class="studio-toolbar" to="/pricing">⭐ 升级</RouterLink>
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
         </div>
         <p v-if="adjusting" class="text-xs text-indigo-700">点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动。</p>
         <p v-if="dpiError" class="text-xs text-amber-700">{{ dpiError }}</p>
+        <p v-if="paperMarginError" class="text-xs text-amber-700">{{ paperMarginError }}</p>
         <div v-if="generated" class="space-y-2 border-t border-slate-100 pt-2">
           <div class="flex flex-wrap items-center gap-2 text-xs"><span class="text-emerald-700">{{ generated.name }} · {{ formatBytes(generated.size) }}</span><a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a></div>
           <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-10 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white" @click="copyOrDownload">{{ orderCopied ? '点击下载图片' : '复制下单文案 → 下载' }}</button><button type="button" class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700" @click="downloadOnly">仅下载图片</button></div>

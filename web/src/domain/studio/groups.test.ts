@@ -19,7 +19,7 @@ describe('locked layout groups', () => {
     const second = lockGroup('g2', '第二组', ['b'], [{ itemId: 'b', xMm: 25, yMm: 5, widthMm: 10, heightMm: 10 }])!
     const merged = mergeGroups([first, second], { widthMm: 50, heightMm: 20 }, 5, 5)
     expect(merged && flattenGroups(merged).map(({ itemId, xMm, yMm }) => [itemId, xMm, yMm])).toEqual([
-      ['a', 0, 0], ['b', 15, 0],
+      ['a', 4, 4], ['b', 19, 4],
     ])
   })
 })

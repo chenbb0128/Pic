@@ -1,5 +1,6 @@
 import { imageSizePresets, type ImageSizePreset } from './imageSizeConversion'
 import { arrangeSmartItems } from './smartPacking'
+import { PAPER_MARGIN_MM } from './paperBounds'
 
 export type PaperPreset = ImageSizePreset['value'] | 'custom'
 export type Orientation = 'landscape' | 'portrait'
@@ -56,11 +57,15 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
   const gapXmm = options.autoGap ? 5 : Math.max(0, options.gapXmm ?? options.gapMm ?? 0)
   const gapYmm = options.autoGap ? 5 : Math.max(0, options.gapYmm ?? options.gapMm ?? 0)
   if (mode === 'smart') return arrangeSmartItems(paper, options.items, gapXmm, gapYmm, options.reserved)
+  const requested = mode === 'custom' ? options.items.reduce((sum, item) => sum + (item.selected && Number.isFinite(item.quantity)
+    ? Math.min(500, Math.max(0, Math.floor(item.quantity))) : 0), 0) : 0
+  const right = paper.widthMm - PAPER_MARGIN_MM
+  const bottom = paper.heightMm - PAPER_MARGIN_MM
   const items = options.items.filter((item) =>
     item.selected && item.widthMm > 0 && item.heightMm > 0 &&
-    item.widthMm <= paper.widthMm && item.heightMm <= paper.heightMm,
+    item.widthMm <= paper.widthMm - PAPER_MARGIN_MM * 2 && item.heightMm <= paper.heightMm - PAPER_MARGIN_MM * 2,
   )
-  if (!items.length || paper.widthMm <= 0 || paper.heightMm <= 0) return { placements: [], overflow: 0 }
+  if (!items.length || paper.widthMm <= 0 || paper.heightMm <= 0) return { placements: [], overflow: requested }
 
   const ordered = mode === 'compact'
     ? [...items].sort((a, b) => b.widthMm * b.heightMm - a.widthMm * a.heightMm)
@@ -112,17 +117,17 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
       placements.push({ itemId: item.id, xMm: balancedMarginX, yMm: marginY, widthMm: item.widthMm, heightMm: item.heightMm })
     }
   } else {
-    let xMm = 0
-    let yMm = 0
+    let xMm = PAPER_MARGIN_MM
+    let yMm = PAPER_MARGIN_MM
     let rowHeight = 0
     let failedInARow = 0
     for (const item of queue) {
-      if (xMm + item.widthMm > paper.widthMm + 0.001) {
-        xMm = 0
+      if (xMm + item.widthMm > right + 0.001) {
+        xMm = PAPER_MARGIN_MM
         yMm += rowHeight + gapYmm
         rowHeight = 0
       }
-      if (yMm + item.heightMm > paper.heightMm + 0.001) {
+      if (yMm + item.heightMm > bottom + 0.001) {
         if (mode === 'custom') overflow += 1
         failedInARow += 1
         if (mode !== 'custom' && failedInARow >= ordered.length) break
@@ -144,14 +149,14 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
     if (options.autoGap) {
       const rowList = [...rows.values()]
       const heights = rowList.map((row) => Math.max(...row.map((placement) => placement.heightMm)))
-      const remainingHeight = paper.heightMm - 10 - heights.reduce((sum, height) => sum + height, 0)
-      let nextY = 5
+      const remainingHeight = paper.heightMm - PAPER_MARGIN_MM * 2 - heights.reduce((sum, height) => sum + height, 0)
+      let nextY = PAPER_MARGIN_MM
       rowList.forEach((row, rowIndex) => {
         const rowY = rowList.length === 1
           ? (paper.heightMm - heights[0]) / 2
           : remainingHeight >= 0 ? nextY : row[0].yMm
-        const remainingWidth = paper.widthMm - 10 - row.reduce((sum, placement) => sum + placement.widthMm, 0)
-        let nextX = 5
+        const remainingWidth = paper.widthMm - PAPER_MARGIN_MM * 2 - row.reduce((sum, placement) => sum + placement.widthMm, 0)
+        let nextX = PAPER_MARGIN_MM
         row.forEach((placement, index) => {
           if (row.length === 1) placement.xMm = (paper.widthMm - placement.widthMm) / 2
           else if (remainingWidth >= 0) {
@@ -180,5 +185,5 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
       }
     }
   }
-  return { placements, overflow }
+  return { placements, overflow: mode === 'custom' ? requested - placements.length : overflow }
 }
