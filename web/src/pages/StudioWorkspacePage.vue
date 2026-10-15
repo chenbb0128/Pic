@@ -127,7 +127,15 @@ function setAssetSize(id: string, edge: 'widthMm' | 'heightMm', valueCm: number)
 }
 
 function setQuantity(id: string, value: number): void {
-  if (Number.isFinite(value)) updateAsset(id, { quantity: Math.min(500, Math.max(0, Math.floor(value))) })
+  const asset = assets.value.find((item) => item.id === id)
+  if (!asset || asset.lockedGroupId) return
+  if (!Number.isFinite(value)) {
+    status.value = '请输入 0～500 之间的数量。'
+    return
+  }
+  updateAsset(id, { quantity: Math.min(500, Math.max(0, Math.floor(value))) })
+  mode.value = 'custom'
+  status.value = '已按设置数量排版；放不下的图片会显示未排入提示。'
 }
 
 function setRotation(id: string, value: number): void {
@@ -207,7 +215,8 @@ function applyBulk(): void {
   assets.value = assets.value.map((asset) => asset.selected && !asset.lockedGroupId
     ? { ...asset, ...fitSizeMm(asset.width, asset.height, longEdgeMm), quantity: Math.min(500, Math.floor(quantity)) }
     : asset)
-  status.value = `已统一设置 ${count} 张素材。`
+  mode.value = 'custom'
+  status.value = `已统一设置 ${count} 张素材，并按设置数量排版。`
 }
 
 function lockSelected(): void {
@@ -499,6 +508,7 @@ function downloadOnly(): void {
       <section class="min-h-[190px] border-b border-[#31415f] px-4 py-3">
         <h2 class="text-xs font-medium text-[#a9bbe1]">图片明细 <span class="text-[11px] text-[#8098c5]">（勾选后排版；尺寸单位 cm）</span></h2>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
+        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">修改数量后按定制模式排版，0 表示不排入，最多 500 份。</p>
         <div v-if="bulkOpen" class="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-lg border border-[#40537a] p-2 text-[11px] text-[#a9bbe1]">
           <label>长边 cm<input v-model.number="bulkLongEdgeCm" type="number" min="0.1" max="42" step="0.1" class="studio-input mt-1 w-full" /></label>
           <label>数量<input v-model.number="bulkQuantity" type="number" min="0" max="500" class="studio-input mt-1 w-full" /></label>
@@ -511,7 +521,10 @@ function downloadOnly(): void {
           <input type="number" min="0.1" max="42" step="0.1" :value="(asset.widthMm / 10).toFixed(1)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input" :aria-label="`${asset.name} 宽度厘米`" @change="setAssetSize(asset.id, 'widthMm', Number(($event.target as HTMLInputElement).value))" />
           <button type="button" class="studio-asset-lock" :disabled="!!asset.lockedGroupId" :aria-label="asset.ratioLocked ? '解锁尺寸比例' : '锁定尺寸比例'" @click="updateAsset(asset.id, { ratioLocked: !asset.ratioLocked })">{{ asset.ratioLocked ? '🔒' : '🔓' }}</button>
           <input type="number" min="0.1" max="42" step="0.1" :value="(asset.heightMm / 10).toFixed(1)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input studio-size-accent" :aria-label="`${asset.name} 高度厘米`" @change="setAssetSize(asset.id, 'heightMm', Number(($event.target as HTMLInputElement).value))" />
-          <input v-if="mode === 'custom'" type="number" min="0" max="500" :value="asset.quantity" :disabled="!!asset.lockedGroupId" class="studio-input studio-quantity-input" :aria-label="`${asset.name} 数量`" @change="setQuantity(asset.id, Number(($event.target as HTMLInputElement).value))" />
+          <label class="flex shrink-0 items-center gap-1" title="排版数量，修改后切换到定制模式">
+            <span>数量</span>
+            <input type="number" min="0" max="500" step="1" inputmode="numeric" :value="asset.quantity" :disabled="!!asset.lockedGroupId" class="studio-input studio-quantity-input" :aria-label="`${asset.name} 数量`" @change="setQuantity(asset.id, ($event.target as HTMLInputElement).valueAsNumber)" />
+          </label>
           <label class="studio-rotation-field" :class="{ 'is-disabled': !!asset.lockedGroupId }">
             <input type="number" min="0" max="359" step="1" inputmode="numeric" :value="asset.rotationDeg" :disabled="!!asset.lockedGroupId" class="studio-rotation-input" :aria-label="`${asset.name} 旋转角度`" @change="setRotation(asset.id, Number(($event.target as HTMLInputElement).value))" />
             <span aria-hidden="true">°</span>
@@ -604,7 +617,7 @@ function downloadOnly(): void {
 .studio-auto-gap { display: flex; align-items: center; gap: 5px; color: #d4def3; font-size: 12px; white-space: nowrap; }
 .studio-action { border: 1px solid #52658c; border-radius: 5px; padding: 0 6px; color: #d6c8ff; white-space: nowrap; }
 .studio-action:disabled { opacity: .4; }
-.studio-asset-row { display: flex; min-height: 38px; align-items: center; gap: 4px; border: 1px solid #31415f; border-radius: 6px; background: #1b2a49; padding: 3px 6px; color: #a9bbe1; font-size: 11px; }
+.studio-asset-row { display: flex; flex-wrap: wrap; min-height: 38px; align-items: center; gap: 4px; border: 1px solid #31415f; border-radius: 6px; background: #1b2a49; padding: 3px 6px; color: #a9bbe1; font-size: 11px; }
 .studio-asset-row + .studio-asset-row { margin-top: 5px; }
 .studio-asset-row > input[type='checkbox'] { flex: 0 0 16px; }
 .studio-asset-thumb { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; background: rgb(255 255 255 / 10%); object-fit: contain; }
