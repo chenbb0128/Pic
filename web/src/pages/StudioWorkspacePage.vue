@@ -70,6 +70,11 @@ const paperOptions = [
 
 const paper = computed(() => orientedPaperSize(preset.value, orientation.value, customWidth.value, customHeight.value))
 const dpiInfo = computed(() => exportSize(paper.value, dpi.value))
+const dpiError = computed(() => {
+  if (!Number.isInteger(dpi.value) || dpi.value <= 0) return '请输入大于 0 的整数 DPI。'
+  if (!dpiInfo.value.allowed) return '当前纸张和 DPI 超过 1 亿像素导出上限，请降低 DPI。'
+  return ''
+})
 const lockedPlacements = computed(() => flattenGroups(groups.value))
 const layout = computed(() => arrangeItems({
   paper: paper.value,
@@ -272,6 +277,7 @@ function renderPreview(): void {
 
 watch([paper, gapXmm, gapYmm, autoGap, mode, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
 watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
+watch(dpi, clearGenerated)
 watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
 watch(adjusting, (active) => { if (!active) selectedPlacementIndex.value = null })
 onMounted(() => { void nextTick(renderPreview) })
@@ -373,7 +379,7 @@ async function generate(): Promise<void> {
     return
   }
   const size = dpiInfo.value
-  if (!size.allowed) { status.value = '当前纸张和 DPI 超过 1 亿像素导出上限，请降低 DPI。'; return }
+  if (dpiError.value) { status.value = dpiError.value; return }
   exporting.value = true
   status.value = '正在生成高清透明 PNG…'
   clearGenerated()
@@ -454,6 +460,12 @@ function downloadOnly(): void {
         <div class="grid grid-cols-4 gap-1">
           <button v-for="value in dpiChoices" :key="value" type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': dpi === value }" :disabled="!exportSize(paper, value).allowed" :title="exportSize(paper, value).allowed ? `${value} DPI` : '超出 1 亿像素导出上限'" @click="dpi = value">{{ value }}</button>
         </div>
+        <label class="mt-2 flex items-center gap-2 text-xs text-[#a9bbe1]">
+          <span class="shrink-0">自定义</span>
+          <input :value="Number.isFinite(dpi) ? dpi : ''" type="number" min="1" step="1" required inputmode="numeric" placeholder="输入 DPI" aria-label="自定义 DPI" :aria-invalid="!!dpiError" aria-describedby="dpi-feedback" class="studio-input w-full" @input="dpi = ($event.target as HTMLInputElement).valueAsNumber" />
+          <span>DPI</span>
+        </label>
+        <p id="dpi-feedback" class="mt-1 text-[11px]" :class="dpiError ? 'text-amber-300' : 'text-[#a9bbe1]'" aria-live="polite">{{ dpiError || `输出：${dpiInfo.width} × ${dpiInfo.height} px` }}</p>
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">管理模式</h2>
@@ -516,7 +528,7 @@ function downloadOnly(): void {
         <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
         <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
         <span v-if="overflow" class="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">{{ overflow }} 个未排入</span>
-        <span class="rounded-full bg-white px-3 py-1.5">{{ dpi }} DPI</span>
+        <span class="rounded-full bg-white px-3 py-1.5">{{ Number.isFinite(dpi) ? `${dpi} DPI` : '请填写 DPI' }}</span>
       </div>
       <div class="relative flex min-h-[45dvh] min-w-0 flex-1 items-center justify-center overflow-auto rounded-2xl bg-slate-800 p-3 sm:min-h-[480px] sm:p-6 lg:min-h-0">
         <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas block h-auto max-h-[calc(100dvh-260px)] max-w-full shadow-2xl lg:max-h-full" :class="[`bg-${background}`, { 'is-adjusting': adjusting }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" />
@@ -538,13 +550,13 @@ function downloadOnly(): void {
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
           <button type="button" class="studio-toolbar is-primary" @click="resetLayout">✦ 排版</button>
           <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="adjusting = !adjusting">✋ {{ adjusting ? '完成' : '调整' }}</button>
-          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !dpiInfo.allowed" @click="generate">{{ exporting ? '生成中…' : '♧ 导出 PNG' }}</button>
+          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError" @click="generate">{{ exporting ? '生成中…' : '♧ 导出 PNG' }}</button>
           <RouterLink class="studio-toolbar" to="/pricing">⭐ 升级</RouterLink>
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
         </div>
         <p v-if="adjusting" class="text-xs text-indigo-700">点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动。</p>
-        <p v-if="!dpiInfo.allowed" class="text-xs text-amber-700">当前尺寸与 DPI 超出浏览器安全范围，请选择较低 DPI。</p>
+        <p v-if="dpiError" class="text-xs text-amber-700">{{ dpiError }}</p>
         <div v-if="generated" class="space-y-2 border-t border-slate-100 pt-2">
           <div class="flex flex-wrap items-center gap-2 text-xs"><span class="text-emerald-700">{{ generated.name }} · {{ formatBytes(generated.size) }}</span><a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a></div>
           <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-10 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white" @click="copyOrDownload">{{ orderCopied ? '点击下载图片' : '复制下单文案 → 下载' }}</button><button type="button" class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700" @click="downloadOnly">仅下载图片</button></div>

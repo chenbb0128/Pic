@@ -9,6 +9,7 @@
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/recolor">改色</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/polka">波点</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/frame">框架对比</RouterLink>
+          <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/resize">尺寸转换</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/name">姓名排版</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/text">文字方格</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/classic">经典2/3CM</RouterLink>
@@ -23,6 +24,7 @@
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/recolor">线稿改色</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/polka">波点生成</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/frame">框架对比</RouterLink>
+            <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/resize">尺寸转换</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/name">姓名排版</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/text">文字方格</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/classic">经典2/3CM排版</RouterLink>
