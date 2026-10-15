@@ -74,7 +74,8 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
 
   const ordered = mode === 'compact'
     ? [...items].sort((a, b) => b.widthMm * b.heightMm - a.widthMm * a.heightMm)
-    : mode === 'balanced' ? [...items].sort((a, b) => a.widthMm - b.widthMm) : items
+    : mode === 'balanced' ? [...items].sort((a, b) => a.widthMm - b.widthMm)
+    : [...items].sort((a, b) => Number(!!b.important) - Number(!!a.important))
   const queue = mode === 'custom'
     ? ordered.flatMap((item) => Array.from({ length: Math.min(500, Math.max(0, Math.floor(item.quantity))) }, () => item))
     : mode === 'compact' ? Array.from({ length: 1000 }, (_, index) => ordered[index % ordered.length]) : []

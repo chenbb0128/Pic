@@ -1,5 +1,10 @@
 export interface AssetSizeMm { widthMm: number; heightMm: number }
 
+export function originalSizeMm(widthPx: number, heightPx: number, dpi: number): AssetSizeMm {
+  if (![widthPx, heightPx, dpi].every((value) => Number.isFinite(value) && value > 0)) throw new Error('图片尺寸或 DPI 无效。')
+  return { widthMm: widthPx / dpi * 25.4, heightMm: heightPx / dpi * 25.4 }
+}
+
 export function fitSizeMm(widthPx: number, heightPx: number, longEdgeMm: number): AssetSizeMm {
   if (widthPx <= 0 || heightPx <= 0 || longEdgeMm <= 0) throw new Error('图片尺寸无效。')
   const scale = longEdgeMm / Math.max(widthPx, heightPx)

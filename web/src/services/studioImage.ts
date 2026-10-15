@@ -1,5 +1,6 @@
 import { setPngDpi } from './pngExporter'
 import { encodePngFromStripes } from './tiledPng'
+import { readImageDpi } from './imageResolution'
 
 export interface LocalImage {
   id: string
@@ -8,6 +9,7 @@ export interface LocalImage {
   image: HTMLImageElement
   width: number
   height: number
+  sourceDpi?: number
 }
 
 export async function loadLocalImage(file: File): Promise<LocalImage> {
@@ -27,7 +29,8 @@ export async function loadLocalImage(file: File): Promise<LocalImage> {
     const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
       ? crypto.randomUUID()
       : `studio-${Date.now()}-${Math.random().toString(16).slice(2)}`
-    return { id, name: file.name, url, image, width: image.naturalWidth, height: image.naturalHeight }
+    const sourceDpi = await file.arrayBuffer().then(readImageDpi).catch(() => undefined)
+    return { id, name: file.name, url, image, width: image.naturalWidth, height: image.naturalHeight, sourceDpi }
   } catch (error) {
     URL.revokeObjectURL(url)
     throw error

@@ -33,6 +33,19 @@ describe('orientedPaperSize', () => {
 })
 
 describe('arrangeItems', () => {
+  it('places priority images first in custom mode, keeping upload order within each priority', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 58 }, gapMm: 0, mode: 'custom',
+      items: [
+        { id: 'normal', widthMm: 50, heightMm: 50, quantity: 2, selected: true },
+        { id: 'priority-first', widthMm: 50, heightMm: 50, quantity: 1, selected: true, important: true },
+        { id: 'priority-second', widthMm: 50, heightMm: 50, quantity: 1, selected: true, important: true },
+      ],
+    })
+    expect(result.placements.map((slot) => slot.itemId)).toEqual(['priority-first', 'priority-second'])
+    expect(result.overflow).toBe(2)
+  })
+
   it('honors custom quantities without placing anything outside the sheet', () => {
     const result = arrangeItems({
       paper: { widthMm: 58, heightMm: 33 },

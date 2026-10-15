@@ -1,8 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { fitSizeMm, resizeAssetSize, rotatedBounds } from './assetGeometry'
+import { fitSizeMm, originalSizeMm, resizeAssetSize, rotatedBounds } from './assetGeometry'
 
 describe('sticker asset geometry', () => {
-  it('starts at a five-centimeter long edge without stretching the image', () => {
+  it('converts original pixels to millimeters without fitting to a fixed edge', () => {
+    expect(originalSizeMm(1500, 750, 300)).toEqual({ widthMm: 127, heightMm: 63.5 })
+    expect(originalSizeMm(10000, 5000, 500)).toEqual({ widthMm: 508, heightMm: 254 })
+  })
+
+  it('fits a requested long edge without stretching the image', () => {
     expect(fitSizeMm(1000, 500, 50)).toEqual({ widthMm: 50, heightMm: 25 })
   })
 

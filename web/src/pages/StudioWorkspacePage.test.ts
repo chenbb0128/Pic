@@ -1,5 +1,5 @@
 import { createRenderer, nextTick, ssrContextKey } from 'vue'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Workspace from './StudioWorkspacePage.vue'
 
 // Exercise the actual page handlers without rendering a browser canvas.
@@ -28,6 +28,37 @@ describe('overflow artboards', () => {
     })
     return { state, asset, cleanup: () => { state.assets = []; state.boards = []; app.unmount() } }
   }
+
+  it('defaults to custom mode and imports original sizes without tying them to export DPI', async () => {
+    const { state, cleanup } = mountWorkspace()
+    class DecodedImage {
+      naturalWidth = 1500
+      naturalHeight = 750
+      onload?: () => void
+      set src(_value: string) { queueMicrotask(() => this.onload?.()) }
+      async decode() {}
+    }
+    vi.stubGlobal('Image', DecodedImage)
+    try {
+      expect(state.mode).toBe('custom')
+      state.dpi = 300
+      await state.addFiles([new File(['no metadata'], 'plain.png', { type: 'image/png' })])
+      expect(state.assets[0].widthMm).toBe(127)
+      expect(state.assets[0].heightMm).toBe(63.5)
+      state.dpi = 600
+      await nextTick()
+      expect(state.assets[0].widthMm).toBe(127)
+      // A PNG pHYs chunk with 11811 pixels/meter represents 300 DPI.
+      const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 46, 35, 0, 0, 46, 35, 1, 0, 0, 0, 0])
+      await state.addFiles([new File([png], 'source.png', { type: 'image/png' })])
+      expect(state.assets[1].widthMm).toBeCloseTo(127, 2)
+      expect(state.assets[1].heightMm).toBeCloseTo(63.5, 2)
+    } finally {
+      state.assets.forEach((item: any) => URL.revokeObjectURL(item.url))
+      cleanup()
+      vi.unstubAllGlobals()
+    }
+  })
 
   it.each(['custom', 'smart'])('moves only remaining quantities to new boards in %s mode', async (mode) => {
     const { state, asset, cleanup } = mountWorkspace()
