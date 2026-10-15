@@ -282,6 +282,24 @@ function createRemainingBoard(): void {
   status.value = `已新建画板 ${activeBoardIndex.value + 1}，转入 ${remaining.reduce((sum, asset) => sum + asset.quantity, 0)} 个剩余图案；原画板排版已保留。`
 }
 
+function removeBoard(index: number): void {
+  if (!Number.isInteger(index) || index <= 0 || index >= boards.value.length || exporting.value || uploading.value) return
+  if (!window.confirm(`确定删除画板 ${index + 1} 及其中的图片和排版吗？删除后无法恢复，图案数量不会转回其他画板。`)) return
+  const removedAssets = index === activeBoardIndex.value ? assets.value : boards.value[index]?.assets ?? []
+  const wasOverviewOpen = overviewOpen.value
+  // Switch before removing an active board so its neighbor is restored through
+  // the existing snapshot path, without rearranging any surviving placements.
+  if (index === activeBoardIndex.value) selectBoard(index - 1)
+  if (activeBoardIndex.value > index) activeBoardIndex.value -= 1
+  boards.value = boards.value.filter((_, boardIndex) => boardIndex !== index)
+  overviewCanvases.delete(boards.value.length)
+  overviewOpen.value = wasOverviewOpen
+  clearGenerated()
+  new Set(removedAssets.map(asset => asset.url)).forEach(releaseUnusedImage)
+  status.value = `已删除画板 ${index + 1}，总览已同步移除；其他画板的图片、数量和排版保持不变。`
+  void nextTick(renderPreview)
+}
+
 function releaseUnusedImage(url: string): void {
   if (!url || assets.value.some((asset) => asset.url === url) || boards.value.some((board, index) =>
     index !== activeBoardIndex.value && board?.assets.some((asset) => asset.url === url))) return
@@ -885,7 +903,10 @@ function downloadOnly(): void {
     <main class="flex min-w-0 flex-1 flex-col gap-3 lg:min-h-0 lg:p-5">
       <div class="flex min-w-0 flex-wrap items-center gap-2">
         <div class="flex min-w-0 max-w-full gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="画板切换">
-          <button v-for="(_, index) in boards" :key="index" type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="shrink-0 rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="activeBoardIndex === index ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-600'" @click="editOverviewBoard(index)">画板 {{ index + 1 }}</button>
+          <div v-for="(_, index) in boards" :key="index" class="flex shrink-0 items-center rounded-lg border" :class="activeBoardIndex === index ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-600'">
+            <button type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-40" @click="editOverviewBoard(index)">画板 {{ index + 1 }}</button>
+            <button v-if="index > 0" type="button" class="mr-1 flex h-7 w-7 items-center justify-center rounded text-lg hover:bg-black/10 disabled:opacity-40" :aria-label="`删除画板 ${index + 1}`" title="删除画板" :disabled="exporting || uploading" @click.stop="removeBoard(index)">×</button>
+          </div>
         </div>
         <button v-if="countMode" type="button" class="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-40" :disabled="!overflow || exporting || uploading" @click="createRemainingBoard">＋ 新建画板排剩余<span v-if="overflow">（{{ overflow }}）</span></button>
         <button type="button" class="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="overviewOpen ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-700'" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回当前画板' : '▦ 画板总览' }}</button>

@@ -12,6 +12,106 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('deletes an earlier inactive board without changing the active layout or shared images', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    vi.stubGlobal('window', { confirm: () => true })
+    try {
+      state.assets = [asset('shared', 9)]
+      state.createRemainingBoard()
+      state.createRemainingBoard()
+      state.manualPlacements = [{ itemId: 'shared', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }]
+      state.dpi = 300
+      await nextTick()
+      // DPI changes don't rearrange the active manual layout.
+      state.overviewOpen = true
+      const before = JSON.stringify(state.placements)
+      state.removeBoard(1)
+      await nextTick()
+      expect(state.boards).toHaveLength(2)
+      expect(state.activeBoardIndex).toBe(1)
+      expect(JSON.stringify(state.placements)).toBe(before)
+      expect(state.overviewOpen).toBe(true)
+      expect(state.overviewBoards.map((board: any) => [board.index, board.placements.length])).toEqual([[0, 4], [1, 1]])
+      expect(revoke).not.toHaveBeenCalledWith('blob:shared')
+      state.selectBoard(0)
+      state.selectBoard(1)
+      await nextTick()
+      expect(JSON.stringify(state.placements)).toBe(before)
+      expect(state.dpi).toBe(300)
+      expect(state.assets[0].quantity).toBe(1)
+    } finally { cleanup(); revoke.mockRestore(); vi.unstubAllGlobals() }
+  })
+
+  it('deletes the active board, restores its neighbor and releases only unshared images', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    vi.stubGlobal('window', { confirm: () => true })
+    try {
+      state.assets = [asset('shared', 9)]
+      state.createRemainingBoard()
+      state.lockSelected()
+      const neighbor = JSON.stringify(state.placements)
+      state.createRemainingBoard()
+      state.assets = [...state.assets, asset('only-deleted', 1, 10)]
+      await nextTick()
+      state.overviewOpen = true
+      state.removeBoard(2)
+      await nextTick()
+      expect(state.activeBoardIndex).toBe(1)
+      expect(state.boards).toHaveLength(2)
+      expect(state.overviewBoards).toHaveLength(2)
+      expect(JSON.stringify(state.placements)).toBe(neighbor)
+      expect(state.groups).toHaveLength(1)
+      expect(state.overviewOpen).toBe(true)
+      expect(revoke).toHaveBeenCalledWith('blob:only-deleted')
+      expect(revoke).not.toHaveBeenCalledWith('blob:shared')
+      state.removeBoard(1)
+      await nextTick()
+      expect(state.activeBoardIndex).toBe(0)
+      expect(state.overviewBoards).toHaveLength(1)
+      expect(state.assets[0].quantity).toBe(4)
+      expect(state.placements).toHaveLength(4)
+    } finally { cleanup(); revoke.mockRestore(); vi.unstubAllGlobals() }
+  })
+
+  it('keeps the initial board and leaves all boards unchanged on cancellation or while busy', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    vi.stubGlobal('window', { confirm: () => false })
+    try {
+      state.assets = [asset('one', 5)]
+      state.createRemainingBoard()
+      const before = JSON.stringify(state.overviewBoards)
+      state.removeBoard(1)
+      vi.stubGlobal('window', { confirm: () => true })
+      for (const index of [0, -1, 1.5, 99]) state.removeBoard(index)
+      state.exporting = true
+      state.removeBoard(1)
+      state.exporting = false
+      state.uploading = true
+      state.removeBoard(1)
+      state.uploading = false
+      expect(state.activeBoardIndex).toBe(1)
+      expect(JSON.stringify(state.overviewBoards)).toBe(before)
+    } finally { cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('renders close controls only for added board tabs', async () => {
+    const app = createSSRApp({
+      ...Workspace,
+      setup(props: any, context: any) {
+        const state = (Workspace as any).setup(props, context)
+        state.boards.value = [null, state.snapshotBoard(), state.snapshotBoard()]
+        return state
+      },
+    })
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    expect(html).toContain('aria-label="删除画板 2"')
+    expect(html).toContain('aria-label="删除画板 3"')
+    expect(html).not.toContain('aria-label="删除画板 1"')
+  })
+
   it('edits independent gaps and row breaks only in custom mode, preserving board settings', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
