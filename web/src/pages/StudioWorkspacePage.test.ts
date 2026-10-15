@@ -157,14 +157,14 @@ describe('overflow artboards', () => {
         state.assets = [{ ...asset('first', 4), important: false }, { ...asset('second', 1, 100), important: true }]
         await nextTick()
         expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
-        state.moveAsset('second', -1)
+        state.reorderAsset('second', 0)
         await nextTick()
         expect(state.assets.map((a: any) => a.id)).toEqual(['second', 'first'])
         expect(state.placements.map((p: any) => p.itemId)).toEqual(['second'])
-        state.moveAsset('second', -1)
-        state.moveAsset('missing', 1)
+        state.reorderAsset('second', -1)
+        state.reorderAsset('missing', 1)
         expect(state.assets.map((a: any) => a.id)).toEqual(['second', 'first'])
-        state.moveAsset('second', 1)
+        state.reorderAsset('second', 1)
         await nextTick()
         expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
         expect(state.mode).toBe(mode)
@@ -186,7 +186,92 @@ describe('overflow artboards', () => {
     } finally { cleanup() }
   })
 
-  it('renders image ordering and explicit delete controls instead of a priority toggle', async () => {
+  it.each(['mouse', 'touch'])('reorders on pointer release from the handle using %s without rearranging during drag', async (pointerType) => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const handle = { setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, focus() {} }
+    const event = (clientY: number, pointerId = 1) => ({ pointerId, pointerType, button: 0, isPrimary: true,
+      clientX: 350, clientY, currentTarget: handle, preventDefault() {} })
+    try {
+      state.assets = [asset('A', 4), asset('B', 1, 100), asset('C', 1, 100)]
+      for (const [index, id] of ['A', 'B', 'C'].entries()) {
+        state.setAssetRow(id, { getBoundingClientRect: () => ({ top: index * 100, bottom: (index + 1) * 100, left: 0, right: 400, height: 100 }) })
+      }
+      state.startAssetDrag('C', event(250))
+      state.moveAssetDrag(event(10))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B', 'C'])
+      expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('A'))
+      expect(state.assetDropIndicator).toEqual({ id: 'A', side: 'before' })
+      state.finishAssetDrag(event(10, 2))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B', 'C'])
+      state.finishAssetDrag(event(10))
+      await nextTick()
+      expect(state.assets.map((a: any) => a.id)).toEqual(['C', 'A', 'B'])
+      expect(state.placements.map((p: any) => p.itemId)).toEqual(['C'])
+      expect(state.assetDrag).toBeNull()
+      state.reorderAsset('C', 2)
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B', 'C'])
+      state.startAssetDrag('A', event(50))
+      state.moveAssetDrag(event(290))
+      expect(state.assetDropIndicator).toEqual({ id: 'C', side: 'after' })
+      state.finishAssetDrag(event(290))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['B', 'C', 'A'])
+    } finally { cleanup() }
+  })
+
+  it('cancels handle sorting on a tap, pointer cancellation, outside drop or board change', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const handle = { setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, focus() {} }
+    const event = (clientY: number, clientX = 350) => ({ pointerId: 1, pointerType: 'touch', button: 0, isPrimary: true,
+      clientX, clientY, currentTarget: handle, preventDefault() {} })
+    try {
+      state.assets = [asset('A', 1), asset('B', 1)]
+      state.setAssetRow('A', { getBoundingClientRect: () => ({ top: 0, bottom: 100, left: 0, right: 400, height: 100 }) })
+      state.setAssetRow('B', { getBoundingClientRect: () => ({ top: 100, bottom: 200, left: 0, right: 400, height: 100 }) })
+      state.startAssetDrag('A', event(50))
+      state.finishAssetDrag(event(52))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B'])
+      state.startAssetDrag('A', event(50))
+      state.moveAssetDrag(event(190))
+      state.cancelAssetDrag()
+      state.finishAssetDrag(event(190))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B'])
+      state.startAssetDrag('A', event(50))
+      state.finishAssetDrag(event(190, 600))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B'])
+      state.startAssetDrag('A', event(50))
+      state.assets = [asset('different-board', 1)]
+      expect(state.assetDrag).toBeNull()
+      state.finishAssetDrag(event(190))
+      expect(state.assets.map((a: any) => a.id)).toEqual(['different-board'])
+      state.exporting = true
+      state.startAssetDrag('different-board', event(50))
+      expect(state.assetDrag).toBeNull()
+    } finally { cleanup() }
+  })
+
+  it('supports keyboard ordering from the handle without moving locked placements', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('A', 1), { ...asset('B', 1), selected: false }, { ...asset('C', 1), selected: false }]
+      state.lockSelected()
+      const locked = JSON.stringify(state.placements)
+      const handle = { isConnected: true, focus: vi.fn() }
+      state.onAssetOrderKey('C', { key: 'Home', currentTarget: handle, preventDefault() {} })
+      await nextTick()
+      expect(state.assets.map((a: any) => a.id)).toEqual(['C', 'A', 'B'])
+      expect(handle.focus).toHaveBeenCalledWith({ preventScroll: true })
+      expect(JSON.stringify(state.placements)).toBe(locked)
+      state.onAssetOrderKey('C', { key: 'ArrowDown', preventDefault() {} })
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'C', 'B'])
+      state.onAssetOrderKey('C', { key: 'End', preventDefault() {} })
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B', 'C'])
+      state.uploading = true
+      state.onAssetOrderKey('C', { key: 'Home', preventDefault() {} })
+      expect(state.assets.map((a: any) => a.id)).toEqual(['A', 'B', 'C'])
+    } finally { cleanup() }
+  })
+
+  it('renders compact right-side drag and delete controls without numbers or arrow buttons', async () => {
     const app = createSSRApp({
       ...Workspace,
       setup(props: any, context: any) {
@@ -198,9 +283,12 @@ describe('overflow artboards', () => {
     })
     app.component('RouterLink', { render: () => null })
     const html = await renderToString(app)
-    expect(html).toContain('aria-label="上移 示例"')
-    expect(html).toContain('aria-label="下移 示例"')
-    expect(html).toMatch(/<button[^>]*aria-label="删除 示例"[^>]*>删除<\/button>/)
+    expect(html).toContain('aria-label="拖拽排序 示例"')
+    expect(html).not.toContain('aria-label="上移 示例"')
+    expect(html).not.toContain('aria-label="下移 示例"')
+    expect(html).not.toContain('排版优先级 1')
+    expect(html).toMatch(/class="studio-asset-actions"[\s\S]*aria-label="拖拽排序 示例"[\s\S]*aria-label="删除 示例"/)
+    expect(html).toMatch(/<button[^>]*aria-label="删除 示例"[^>]*><svg/)
     expect(html).not.toContain('aria-label="示例 优先排版"')
     expect(html).toContain('aria-label="示例 横向间距毫米"')
     expect(html).toContain('aria-label="示例 纵向间距毫米"')

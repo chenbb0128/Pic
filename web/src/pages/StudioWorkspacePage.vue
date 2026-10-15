@@ -36,6 +36,17 @@ interface DragState {
   groupId?: string
 }
 
+interface AssetDragState {
+  id: string
+  pointerId: number
+  startX: number
+  startY: number
+  clientX: number
+  clientY: number
+  active: boolean
+  targetIndex: number | null
+}
+
 interface StudioBoard {
   preset: PaperPreset
   orientation: Orientation
@@ -88,6 +99,11 @@ const batchExportLabel = ref('')
 const adjusting = ref(false)
 const background = ref<'checker' | 'white' | 'dark'>('checker')
 const drag = ref<DragState | null>(null)
+const assetDrag = ref<AssetDragState | null>(null)
+const assetRows = new Map<string, HTMLElement>()
+const sidebar = ref<HTMLElement | null>(null)
+let assetDragHandle: HTMLElement | null = null
+let assetScrollFrame: number | null = null
 const selectedPlacementIndex = ref<number | null>(null)
 const status = ref('选择图片并设置尺寸后，画布会实时显示排版。')
 const generated = ref<{ url: string; name: string; size: number } | null>(null)
@@ -372,15 +388,117 @@ function setQuantity(id: string, value: number): void {
     : '已保存数量，保持当前排版模式；切换到定制或智能填充时按数量生效。'
 }
 
-function moveAsset(id: string, direction: -1 | 1): void {
+function reorderAsset(id: string, target: number): void {
   if (exporting.value || uploading.value) return
   const index = assets.value.findIndex((asset) => asset.id === id)
-  const target = index + direction
-  if (index < 0 || target < 0 || target >= assets.value.length) return
+  if (index < 0 || !Number.isInteger(target) || target < 0 || target >= assets.value.length || index === target) return
   const reordered = [...assets.value]
-  ;[reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!]
+  const [moved] = reordered.splice(index, 1)
+  reordered.splice(target, 0, moved!)
   assets.value = reordered
   status.value = '已调整图片顺序；定制和智能填充按列表从上到下优先排版，锁组保留原位。'
+}
+
+const assetDropIndicator = computed(() => {
+  const current = assetDrag.value
+  if (!current?.active || current.targetIndex === null) return null
+  const others = assets.value.filter(asset => asset.id !== current.id)
+  const target = others[current.targetIndex]
+  const last = others[others.length - 1]
+  return target ? { id: target.id, side: 'before' } : last ? { id: last.id, side: 'after' } : null
+})
+
+function setAssetRow(id: string, element: HTMLElement | null): void {
+  if (element) assetRows.set(id, element)
+  else assetRows.delete(id)
+}
+
+function cancelAssetDrag(): void {
+  const current = assetDrag.value
+  const handle = assetDragHandle
+  assetDrag.value = null
+  assetDragHandle = null
+  if (assetScrollFrame !== null) { cancelAnimationFrame(assetScrollFrame); assetScrollFrame = null }
+  if (current && handle?.hasPointerCapture(current.pointerId)) handle.releasePointerCapture(current.pointerId)
+}
+
+function startAssetDrag(id: string, event: PointerEvent): void {
+  if (exporting.value || uploading.value || assets.value.length < 2 || assetDrag.value || event.button !== 0 || event.isPrimary === false || !assets.value.some(asset => asset.id === id)) return
+  event.preventDefault()
+  assetDragHandle = event.currentTarget as HTMLElement
+  assetDragHandle.focus({ preventScroll: true })
+  assetDragHandle.setPointerCapture(event.pointerId)
+  assetDrag.value = { id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY,
+    clientX: event.clientX, clientY: event.clientY, active: false, targetIndex: null }
+}
+
+function updateAssetDropIndex(): void {
+  const current = assetDrag.value
+  if (!current?.active) return
+  const rows = assets.value.flatMap(asset => {
+    const element = assetRows.get(asset.id)
+    return element ? [{ id: asset.id, rect: element.getBoundingClientRect() }] : []
+  })
+  const top = rows[0]?.rect.top
+  const bottom = rows[rows.length - 1]?.rect.bottom
+  const left = rows[0]?.rect.left
+  const right = rows[0]?.rect.right
+  if (top === undefined || bottom === undefined || left === undefined || right === undefined ||
+    current.clientY < top - 48 || current.clientY > bottom + 48 || current.clientX < left - 32 || current.clientX > right + 32) {
+    current.targetIndex = null
+    return
+  }
+  const others = rows.filter(row => row.id !== current.id)
+  const before = others.findIndex(row => current.clientY < row.rect.top + row.rect.height / 2)
+  current.targetIndex = before < 0 ? others.length : before
+}
+
+function scrollAssetDrag(): void {
+  assetScrollFrame = null
+  const current = assetDrag.value
+  const panel = sidebar.value
+  if (!current?.active || !panel) return
+  const bounds = panel.getBoundingClientRect()
+  if (current.clientX < bounds.left || current.clientX > bounds.right) return
+  const step = current.clientY < bounds.top + 48 ? -12 : current.clientY > bounds.bottom - 48 ? 12 : 0
+  if (!step) return
+  const previous = panel.scrollTop
+  panel.scrollTop += step
+  updateAssetDropIndex()
+  if (panel.scrollTop !== previous) assetScrollFrame = requestAnimationFrame(scrollAssetDrag)
+}
+
+function moveAssetDrag(event: PointerEvent): void {
+  const current = assetDrag.value
+  if (!current || current.pointerId !== event.pointerId) return
+  current.clientX = event.clientX
+  current.clientY = event.clientY
+  if (!current.active && Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < 5) return
+  current.active = true
+  event.preventDefault()
+  updateAssetDropIndex()
+  if (sidebar.value && assetScrollFrame === null) assetScrollFrame = requestAnimationFrame(scrollAssetDrag)
+}
+
+function finishAssetDrag(event: PointerEvent): void {
+  if (assetDrag.value?.pointerId !== event.pointerId) return
+  moveAssetDrag(event)
+  const current = assetDrag.value!
+  const target = current.active ? current.targetIndex : null
+  cancelAssetDrag()
+  if (target !== null) reorderAsset(current.id, target)
+}
+
+function onAssetOrderKey(id: string, event: KeyboardEvent): void {
+  if (event.key === 'Escape') { cancelAssetDrag(); return }
+  const index = assets.value.findIndex(asset => asset.id === id)
+  const target = event.key === 'ArrowUp' ? index - 1 : event.key === 'ArrowDown' ? index + 1
+    : event.key === 'Home' ? 0 : event.key === 'End' ? assets.value.length - 1 : null
+  if (target === null || assetDrag.value) return
+  event.preventDefault()
+  const handle = event.currentTarget as HTMLElement | null
+  reorderAsset(id, target)
+  void nextTick(() => { if (handle?.isConnected) handle.focus({ preventScroll: true }) })
 }
 
 function setRotation(id: string, value: number): void {
@@ -537,6 +655,7 @@ function renderPreview(): void {
 watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () => {
   if (!switchingBoard) { manualPlacements.value = null; selectedPlacementIndex.value = null }
 }, { flush: 'sync' })
+watch([assets, exporting, uploading, controlsOpen], cancelAssetDrag, { flush: 'sync' })
 watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
 watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
@@ -548,6 +667,8 @@ watch(() => overviewOpen.value ? overviewBoards.value : null, () => {
 })
 onMounted(() => { void nextTick(renderPreview) })
 onBeforeUnmount(() => {
+  cancelAssetDrag()
+  assetRows.clear()
   overviewCanvases.clear()
   const urls = new Set([...assets.value, ...boards.value.flatMap((board, index) => index !== activeBoardIndex.value ? board?.assets ?? [] : [])].map((asset) => asset.url))
   urls.forEach((url) => { if (url) URL.revokeObjectURL(url) })
@@ -779,7 +900,7 @@ function downloadOnly(): void {
       {{ controlsOpen ? '收起设置与素材' : '打开设置与素材' }} · {{ assets.length }} 张
     </button>
     <div v-if="controlsOpen" class="fixed inset-0 z-30 bg-slate-950/60 lg:hidden" @click="controlsOpen = false"></div>
-    <aside :class="controlsOpen ? 'fixed inset-x-0 bottom-0 top-0 z-40 block' : 'hidden lg:block'" class="w-full shrink-0 overflow-y-auto border-r border-[#31415f] bg-[#17233d] pb-[env(safe-area-inset-bottom)] text-white lg:static lg:max-h-full lg:w-[466px] lg:pb-0">
+    <aside ref="sidebar" :class="controlsOpen ? 'fixed inset-x-0 bottom-0 top-0 z-40 block' : 'hidden lg:block'" class="w-full shrink-0 overflow-y-auto border-r border-[#31415f] bg-[#17233d] pb-[env(safe-area-inset-bottom)] text-white lg:static lg:max-h-full lg:w-[466px] lg:pb-0">
       <button type="button" class="sticky top-0 z-10 flex min-h-11 w-full items-center justify-between bg-[#a78bfa] px-5 text-sm font-bold text-white lg:hidden" @click="controlsOpen = false"><span>排版设置</span><span>完成 ✓</span></button>
       <h1 class="border-b border-[#31415f] px-4 py-3 text-sm font-bold text-[#c796ff]">✦ 小星贴自动排版</h1>
       <section class="border-b border-[#31415f] px-4 py-3">
@@ -855,19 +976,17 @@ function downloadOnly(): void {
       <section class="min-h-[190px] border-b border-[#31415f] px-4 py-3">
         <h2 class="text-xs font-medium text-[#a9bbe1]">图片明细 <span class="text-[11px] text-[#8098c5]">（勾选后排版；尺寸单位 cm）</span></h2>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
-        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">定制、智能填充按列表从上到下优先排版，用 ↑ ↓ 调整顺序；数量 0 表示不排入，最多 500 份。导入按图片 DPI 换算原尺寸，无 DPI 时用导入时的画板 DPI；修改导出 DPI 不改变厘米尺寸，修改明细保持当前模式。</p>
+        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">定制、智能填充按列表从上到下优先排版；拖动右侧手柄调整顺序，松手后更新排版。数量 0 表示不排入，最多 500 份。导入按图片 DPI 换算原尺寸，无 DPI 时用导入时的画板 DPI；修改导出 DPI 不改变厘米尺寸，修改明细保持当前模式。</p>
         <div v-if="bulkOpen" class="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-lg border border-[#40537a] p-2 text-[11px] text-[#a9bbe1]">
           <label>长边 cm<input v-model.number="bulkLongEdgeCm" type="number" min="0.1" max="42" step="0.1" class="studio-input mt-1 w-full" /></label>
           <label>数量<input v-model.number="bulkQuantity" type="number" min="0" max="500" class="studio-input mt-1 w-full" /></label>
           <button type="button" class="studio-action h-8" :disabled="!selectedCount" @click="applyBulk">应用</button>
         </div>
-        <div v-for="(asset, index) in assets" :key="asset.id" class="studio-asset-row">
+        <div v-for="asset in assets" :key="asset.id" :ref="element => setAssetRow(asset.id, element as HTMLElement | null)" class="studio-asset-row" :class="{ 'is-dragging': assetDrag?.active && assetDrag.id === asset.id, 'is-drop-before': assetDropIndicator?.id === asset.id && assetDropIndicator.side === 'before', 'is-drop-after': assetDropIndicator?.id === asset.id && assetDropIndicator.side === 'after' }">
+          <div class="studio-asset-content">
           <input type="checkbox" :checked="asset.selected" :disabled="!!asset.lockedGroupId" :aria-label="`选择 ${asset.name}`" @change="updateAsset(asset.id, { selected: ($event.target as HTMLInputElement).checked })" />
-          <img :src="asset.url" :alt="asset.name" :title="`${asset.name} · ${asset.width}×${asset.height}px`" class="studio-asset-thumb" />
+          <img :src="asset.url" :alt="asset.name" :title="`${asset.name} · ${asset.width}×${asset.height}px`" :draggable="false" class="studio-asset-thumb" />
           <div class="studio-asset-meta" :title="asset.name"><span>{{ asset.width }}×{{ asset.height }}</span><small v-if="asset.lockedGroupId">已锁组</small></div>
-          <span class="shrink-0 text-[#c8bbff]" :title="`排版优先级 ${index + 1}`">#{{ index + 1 }}</span>
-          <button type="button" class="studio-order-button" :aria-label="`上移 ${asset.name}`" title="上移，提高排版优先级" :disabled="index === 0 || exporting || uploading" @click="moveAsset(asset.id, -1)">↑</button>
-          <button type="button" class="studio-order-button" :aria-label="`下移 ${asset.name}`" title="下移，降低排版优先级" :disabled="index === assets.length - 1 || exporting || uploading" @click="moveAsset(asset.id, 1)">↓</button>
           <input type="number" min="0.01" step="0.01" :value="(asset.widthMm / 10).toFixed(2)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input" :aria-label="`${asset.name} 宽度厘米`" @change="setAssetSize(asset.id, 'widthMm', Number(($event.target as HTMLInputElement).value))" />
           <button type="button" class="studio-asset-lock" :disabled="!!asset.lockedGroupId" :aria-label="asset.ratioLocked ? '解锁尺寸比例' : '锁定尺寸比例'" @click="updateAsset(asset.id, { ratioLocked: !asset.ratioLocked })">{{ asset.ratioLocked ? '🔒' : '🔓' }}</button>
           <input type="number" min="0.01" step="0.01" :value="(asset.heightMm / 10).toFixed(2)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input studio-size-accent" :aria-label="`${asset.name} 高度厘米`" @change="setAssetSize(asset.id, 'heightMm', Number(($event.target as HTMLInputElement).value))" />
@@ -879,7 +998,6 @@ function downloadOnly(): void {
             <input type="number" min="0" max="359" step="1" inputmode="numeric" :value="asset.rotationDeg" :disabled="!!asset.lockedGroupId" class="studio-rotation-input" :aria-label="`${asset.name} 旋转角度`" @change="setRotation(asset.id, Number(($event.target as HTMLInputElement).value))" />
             <span aria-hidden="true">°</span>
           </label>
-          <button type="button" class="studio-remove-button" :aria-label="`删除 ${asset.name}`" :disabled="exporting || uploading" title="从当前画板删除图片" @click="removeAsset(asset.id)">删除</button>
           <div class="flex basis-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#31415f] pt-1" :class="{ 'opacity-50': mode !== 'custom' }">
             <label class="flex items-center gap-1">横距<input type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapXmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 横向间距毫米`" @change="setAssetGap(asset.id, 'x', $event)" /><span>mm</span></label>
             <label class="flex items-center gap-1">纵距<input type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapYmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 纵向间距毫米`" @change="setAssetGap(asset.id, 'y', $event)" /><span>mm</span></label>
@@ -893,6 +1011,13 @@ function downloadOnly(): void {
               <span v-if="(mode === 'smart' || mode === 'custom') && asset.quantity > (placementCounts.get(asset.id) ?? 0)" class="text-amber-300">{{ asset.quantity - (placementCounts.get(asset.id) ?? 0) }} 个未排入</span>
             </template>
             <span v-else class="text-[#8098c5]">未参与排版</span>
+          </div>
+          </div>
+          <div class="studio-asset-actions">
+            <button type="button" class="studio-drag-handle" :aria-label="`拖拽排序 ${asset.name}`" title="按住拖动排序；键盘上下键调整顺序" aria-keyshortcuts="ArrowUp ArrowDown Home End" :disabled="assets.length < 2 || exporting || uploading" @pointerdown="startAssetDrag(asset.id, $event)" @pointermove="moveAssetDrag" @pointerup="finishAssetDrag" @pointercancel="cancelAssetDrag" @lostpointercapture="cancelAssetDrag" @keydown="onAssetOrderKey(asset.id, $event)" @contextmenu.prevent>
+              <svg width="16" height="20" viewBox="0 0 16 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="4" r="1.5" /><circle cx="11" cy="4" r="1.5" /><circle cx="5" cy="10" r="1.5" /><circle cx="11" cy="10" r="1.5" /><circle cx="5" cy="16" r="1.5" /><circle cx="11" cy="16" r="1.5" /></svg>
+            </button>
+            <button type="button" class="studio-remove-button" :aria-label="`删除 ${asset.name}`" :disabled="exporting || uploading" title="从当前画板删除图片" @click="removeAsset(asset.id)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" /></svg></button>
           </div>
         </div>
         <p v-if="!assets.length" class="flex min-h-[100px] items-center justify-center text-center text-xs text-[#8fa5cf]">还没有添加图片</p>
@@ -1012,16 +1137,22 @@ function downloadOnly(): void {
 .studio-auto-gap { display: flex; align-items: center; gap: 5px; color: #d4def3; font-size: 12px; white-space: nowrap; }
 .studio-action { border: 1px solid #52658c; border-radius: 5px; padding: 0 6px; color: #d6c8ff; white-space: nowrap; }
 .studio-action:disabled { opacity: .4; }
-.studio-asset-row { display: flex; flex-wrap: wrap; min-height: 38px; align-items: center; gap: 4px; border: 1px solid #31415f; border-radius: 6px; background: #1b2a49; padding: 3px 6px; color: #a9bbe1; font-size: 11px; }
+.studio-asset-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 30px; min-height: 38px; gap: 6px; border: 1px solid #31415f; border-radius: 6px; background: #1b2a49; padding: 5px 6px; color: #a9bbe1; font-size: 11px; }
 .studio-asset-row + .studio-asset-row { margin-top: 5px; }
-.studio-asset-row > input[type='checkbox'] { flex: 0 0 16px; }
+.studio-asset-content { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px; }
+.studio-asset-content > input[type='checkbox'] { flex: 0 0 16px; }
+.studio-asset-actions { display: flex; flex-direction: column; align-items: center; align-self: start; gap: 4px; }
+.studio-asset-row.is-dragging { opacity: .5; }
+.studio-asset-row.is-drop-before::before, .studio-asset-row.is-drop-after::after { position: absolute; z-index: 1; right: 0; left: 0; height: 3px; border-radius: 2px; background: #c4b5fd; content: ''; pointer-events: none; }
+.studio-asset-row.is-drop-before::before { top: -4px; }
+.studio-asset-row.is-drop-after::after { bottom: -4px; }
 .studio-asset-thumb { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; background: rgb(255 255 255 / 10%); object-fit: contain; }
 .studio-asset-meta { display: flex; min-width: 48px; flex: 0 1 56px; flex-direction: column; overflow: hidden; font-size: 10px; line-height: 1.15; white-space: nowrap; }
 .studio-asset-meta span { color: #a9bbe1; }
 .studio-asset-meta small { margin-top: 2px; color: #8fa5cf; font-size: 9px; }
 .studio-size-input { width: 56px; height: 30px; flex: 0 0 56px; padding: 0 3px; text-align: center; }
 .studio-size-accent { border-color: #40537a; color: #f7c931; }
-.studio-asset-lock, .studio-remove-button { display: inline-flex; height: 30px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid #40537a; border-radius: 5px; color: #d6c8ff; }
+.studio-asset-lock, .studio-remove-button, .studio-drag-handle { display: inline-flex; height: 30px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid #40537a; border-radius: 5px; color: #d6c8ff; }
 .studio-asset-lock { width: 26px; font-size: 13px; }
 .studio-quantity-input { width: 42px; height: 30px; flex: 0 0 42px; padding: 0 2px; text-align: center; }
 .studio-rotation-field { display: flex; height: 30px; width: 56px; flex: 0 0 56px; align-items: center; border: 1px solid #a78bfa; border-radius: 5px; background: #a78bfa; color: #fff; }
@@ -1030,9 +1161,12 @@ function downloadOnly(): void {
 .studio-rotation-input::-webkit-inner-spin-button, .studio-rotation-input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .studio-rotation-field span { padding-right: 5px; font-size: 11px; font-weight: 700; }
 .studio-rotation-field.is-disabled { opacity: .45; }
-.studio-remove-button { min-width: 40px; padding: 0 6px; border-color: #85445d; color: #fda4af; font-size: 11px; }
-.studio-order-button { height: 30px; width: 24px; flex: 0 0 24px; border: 1px solid #40537a; border-radius: 5px; color: #d6c8ff; }
-.studio-order-button:disabled, .studio-remove-button:disabled { opacity: .4; }
+.studio-remove-button { width: 30px; padding: 0; border-color: transparent; color: #fda4af; }
+.studio-remove-button:hover { background: rgb(244 63 94 / 12%); }
+.studio-drag-handle { width: 30px; touch-action: none; user-select: none; -webkit-touch-callout: none; cursor: grab; }
+.studio-drag-handle:active { cursor: grabbing; }
+.studio-drag-handle:focus-visible, .studio-remove-button:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 1px; }
+.studio-drag-handle:disabled, .studio-remove-button:disabled { opacity: .4; }
 .studio-asset-lock:disabled { opacity: .45; }
 .studio-toolbar { display: flex; min-height: 38px; align-items: center; justify-content: center; border: 1px solid #d7dcf0; border-radius: 8px; padding: 4px; color: #334155; font-size: 12px; font-weight: 600; text-align: center; }
 .studio-toolbar.is-primary { border-color: #a78bfa; background: #a78bfa; color: #fff; }
@@ -1047,6 +1181,7 @@ function downloadOnly(): void {
   .studio-gap-row { gap: 3px; font-size: 11px; }
   .studio-gap-value { width: 42px; flex-basis: 42px; }
   .studio-asset-row { gap: 3px; padding-inline: 4px; }
+  .studio-asset-content { gap: 3px; }
   .studio-asset-meta { display: none; }
   .studio-size-input { width: 48px; flex-basis: 48px; }
   .studio-asset-lock { width: 23px; }
