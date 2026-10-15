@@ -82,6 +82,7 @@ const bulkQuantity = ref(1)
 const uploading = ref(false)
 const exporting = ref(false)
 const exportProgress = ref<number | null>(null)
+const batchExportLabel = ref('')
 const adjusting = ref(false)
 const background = ref<'checker' | 'white' | 'dark'>('checker')
 const drag = ref<DragState | null>(null)
@@ -188,6 +189,7 @@ const overviewBoards = computed(() => boards.value.flatMap((saved, index) => {
   return [{
     index,
     preset: board.preset,
+    dpi: board.dpi,
     paper: orientedPaperSize(board.preset, board.orientation, board.customWidth, board.customHeight),
     assets: board.assets,
     placements: [...flattenGroups(board.groups), ...board.manualPlacements],
@@ -588,6 +590,7 @@ function clearAll(): void {
 }
 
 async function generate(): Promise<void> {
+  if (exporting.value || uploading.value) return
   if (!placements.value.length) {
     status.value = '请先上传并选择至少一张素材。'
     return
@@ -626,6 +629,73 @@ async function generate(): Promise<void> {
   } finally {
     if (canvas) { canvas.width = 0; canvas.height = 0 }
     exportProgress.value = null
+    exporting.value = false
+  }
+}
+
+async function exportAllBoards(): Promise<void> {
+  if (exporting.value || uploading.value) return
+  const scenes = overviewBoards.value.filter((board) => board.placements.length > 0)
+  if (!scenes.length) { status.value = '没有可导出的图案，请先添加图片并排版。'; return }
+  for (const scene of scenes) {
+    if (!Number.isInteger(scene.dpi) || scene.dpi <= 0 || !exportSize(scene.paper, scene.dpi).allowed) {
+      status.value = `画板 ${scene.index + 1} 的 DPI 无效或超过 1 亿像素上限，请调整后再导出。`
+      return
+    }
+    if (scene.placements.some((slot) => slot.xMm < PAPER_MARGIN_MM - 1e-6 || slot.yMm < PAPER_MARGIN_MM - 1e-6 ||
+      slot.xMm + slot.widthMm > scene.paper.widthMm - PAPER_MARGIN_MM + 1e-6 ||
+      slot.yMm + slot.heightMm > scene.paper.heightMm - PAPER_MARGIN_MM + 1e-6)) {
+      status.value = `画板 ${scene.index + 1} 的图案超出 4mm 留边，请调整后再导出。`
+      return
+    }
+  }
+  const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+  exporting.value = true
+  let completed = 0
+  try {
+    for (const scene of scenes) {
+      batchExportLabel.value = `正在导出画板 ${scene.index + 1}（${completed + 1}/${scenes.length}）· ${scene.dpi} DPI`
+      status.value = batchExportLabel.value
+      exportProgress.value = null
+      await nextTick()
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+      const size = exportSize(scene.paper, scene.dpi)
+      let canvas: HTMLCanvasElement | null = null
+      let blob: Blob
+      try {
+        if (size.width * size.height > DIRECT_CANVAS_MAX_PIXELS) {
+          exportProgress.value = 0
+          blob = await tiledCanvasPng(size.width, size.height, scene.dpi,
+            (context, width, height) => render(context, width, height, false, scene),
+            (done, total) => { exportProgress.value = Math.round(done / total * 100) })
+        } else {
+          canvas = document.createElement('canvas')
+          canvas.width = size.width
+          canvas.height = size.height
+          const context = canvas.getContext('2d', { alpha: true })
+          if (!context) throw new Error('浏览器无法创建画布。')
+          render(context, size.width, size.height, false, scene)
+          blob = await canvasPng(canvas, scene.dpi)
+        }
+      } finally {
+        if (canvas) { canvas.width = 0; canvas.height = 0 }
+      }
+      const url = URL.createObjectURL(blob)
+      try {
+        const format = scene.preset === 'custom' ? '自定义' : scene.preset
+        downloadBlob(url, `${date}_${format}_${scene.paper.widthMm}x${scene.paper.heightMm}mm_画板${scene.index + 1}.png`)
+      } finally {
+        // Leave enough time for the browser to consume each download, then release its memory.
+        setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      }
+      completed += 1
+    }
+    status.value = `已发起 ${completed} 张 PNG 下载（空画板已跳过）。如未收到全部图片，请允许浏览器下载多个文件。`
+  } catch (error) {
+    status.value = `已发起 ${completed}/${scenes.length} 张下载，导出中断：${error instanceof Error ? error.message : '请降低 DPI 后重试。'}`
+  } finally {
+    exportProgress.value = null
+    batchExportLabel.value = ''
     exporting.value = false
   }
 }
@@ -773,8 +843,13 @@ function downloadOnly(): void {
         <button type="button" class="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="overviewOpen ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-700'" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回当前画板' : '▦ 画板总览' }}</button>
       </div>
       <section v-if="overviewOpen" aria-label="画板总览" class="min-h-0 flex-1 overflow-y-auto rounded-2xl bg-slate-100 p-3 sm:p-4">
-        <h2 class="text-sm font-semibold text-slate-800">全部画板 · {{ boards.length }} 张</h2>
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <h2 class="text-sm font-semibold text-slate-800">全部画板 · {{ boards.length }} 张</h2>
+          <button type="button" class="min-h-10 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40" :disabled="exporting || uploading || !overviewBoards.some(board => board.placements.length)" @click="exportAllBoards">{{ exporting ? '正在导出…' : '一键导出全部 PNG' }}</button>
+        </div>
         <p class="mb-4 mt-1 text-xs text-slate-500">点击任一画板返回编辑；总览保留当前排版，不会重新排列图片。</p>
+        <p class="mb-3 text-xs text-slate-600" role="status">{{ status }}</p>
+        <p class="mb-4 text-xs text-slate-500">按各画板 DPI 导出透明 PNG，空画板自动跳过；若浏览器提示，请允许下载多个文件。</p>
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           <button v-for="board in overviewBoards" :key="board.index" type="button" class="min-w-0 rounded-xl border-2 bg-white p-3 text-left transition-colors hover:border-violet-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500" :class="board.index === activeBoardIndex ? 'border-violet-500' : 'border-transparent'" :aria-label="`编辑画板 ${board.index + 1}`" @click="editOverviewBoard(board.index)">
             <div class="flex h-56 items-center justify-center rounded-lg bg-slate-800 p-3">
@@ -828,7 +903,7 @@ function downloadOnly(): void {
       </div>
       </div>
     </main>
-    <div v-if="exporting" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-5" role="status"><div class="rounded-2xl bg-white p-6 text-center shadow-xl"><span class="mx-auto block h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600"></span><p class="mt-4 font-bold">正在生成 {{ dpi }} DPI 图片</p><p v-if="exportProgress !== null" class="mt-1 text-sm text-slate-500">已处理 {{ exportProgress }}%</p><p class="mt-1 text-sm text-slate-500">请勿关闭页面</p></div></div>
+    <div v-if="exporting" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-5" role="status"><div class="rounded-2xl bg-white p-6 text-center shadow-xl"><span class="mx-auto block h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600"></span><p class="mt-4 font-bold">{{ batchExportLabel || `正在生成 ${dpi} DPI 图片` }}</p><p v-if="exportProgress !== null" class="mt-1 text-sm text-slate-500">已处理 {{ exportProgress }}%</p><p class="mt-1 text-sm text-slate-500">请勿关闭页面</p></div></div>
   </div>
 </template>
 

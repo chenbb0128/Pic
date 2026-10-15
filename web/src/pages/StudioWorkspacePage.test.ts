@@ -2,6 +2,7 @@ import { createRenderer, createSSRApp, nextTick, ssrContextKey } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import Workspace from './StudioWorkspacePage.vue'
+import * as studioImage from '../services/studioImage'
 
 // Exercise the actual page handlers without rendering a browser canvas.
 const renderer = createRenderer<object, object>({
@@ -11,6 +12,94 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('exports all populated boards with their own size, DPI and dated filenames without switching the editor', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const downloads: string[] = []
+    const encoded: { width: number; height: number; dpi: number }[] = []
+    const canvases: { width: number; height: number }[] = []
+    const png = vi.spyOn(studioImage, 'canvasPng').mockImplementation(async (canvas, dpi) => {
+      encoded.push({ width: canvas.width, height: canvas.height, dpi })
+      return new Blob(['png'], { type: 'image/png' })
+    })
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    vi.stubGlobal('document', {
+      body: { append() {} },
+      createElement(tag: string) {
+        if (tag === 'a') return { href: '', download: '', click() { downloads.push(this.download) }, remove() {} }
+        const canvas = { width: 0, height: 0, getContext: () => ({ clearRect() {}, save() {}, restore() {}, rotate() {}, translate() {}, drawImage() {} }) }
+        canvases.push(canvas)
+        return canvas
+      },
+    })
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-15T17:20:00Z'))
+    try {
+      state.assets = [{ ...asset('one', 5), ratioLocked: false }]
+      state.dpi = 254
+      await nextTick()
+      state.createRemainingBoard()
+      await nextTick()
+      state.customWidth = 60
+      state.customHeight = 100
+      state.orientation = 'portrait'
+      state.dpi = 127
+      state.manualPlacements = [{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }]
+      await nextTick()
+      const before = JSON.stringify(state.manualPlacements)
+      state.generated = { url: 'blob:previous', name: 'previous.png', size: 3 }
+      state.overviewOpen = true
+      await state.exportAllBoards()
+      expect(downloads).toEqual(['2026-10-16_自定义_108x108mm_画板1.png', '2026-10-16_自定义_60x100mm_画板2.png'])
+      expect(encoded).toEqual([{ width: 1080, height: 1080, dpi: 254 }, { width: 300, height: 500, dpi: 127 }])
+      expect(canvases.every(canvas => canvas.width === 0 && canvas.height === 0)).toBe(true)
+      expect(state.activeBoardIndex).toBe(1)
+      expect(JSON.stringify(state.manualPlacements)).toBe(before)
+      expect(state.generated.url).toBe('blob:previous')
+      expect(state.overviewOpen).toBe(true)
+      expect(state.exporting).toBe(false)
+      png.mockRejectedValueOnce(new Error('PNG 编码失败'))
+      await state.exportAllBoards()
+      expect(state.status).toContain('导出中断：PNG 编码失败')
+      expect(state.exporting).toBe(false)
+      expect(state.batchExportLabel).toBe('')
+      expect(canvases.every(canvas => canvas.width === 0 && canvas.height === 0)).toBe(true)
+      state.assets = []
+      state.manualPlacements = []
+      await nextTick()
+      await state.exportAllBoards()
+      expect(downloads).toHaveLength(3)
+      expect(downloads[2]).toBe('2026-10-16_自定义_108x108mm_画板1.png')
+    } finally { png.mockRestore(); cleanup(); vi.unstubAllGlobals(); vi.useRealTimers() }
+  })
+
+  it('validates saved boards before exporting and skips empty boards', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 5)]
+      state.dpi = 0
+      await nextTick()
+      state.createRemainingBoard()
+      await nextTick()
+      state.dpi = 300
+      await state.exportAllBoards()
+      expect(state.status).toContain('画板 1')
+      expect(state.status).toContain('DPI')
+      expect(state.exporting).toBe(false)
+      state.boards = state.boards.map((board: any) => board ? { ...board, dpi: 300,
+        manualPlacements: [{ itemId: 'one', xMm: 0, yMm: 4, widthMm: 50, heightMm: 50 }] } : board)
+      await state.exportAllBoards()
+      expect(state.status).toContain('画板 1')
+      expect(state.status).toContain('4mm 留边')
+      state.boards = [null]
+      state.activeBoardIndex = 0
+      state.assets = []
+      state.groups = []
+      state.manualPlacements = []
+      await state.exportAllBoards()
+      expect(state.status).toContain('没有可导出的图案')
+    } finally { cleanup() }
+  })
+
   it('explicitly restores the detail view display after leaving overview', async () => {
     for (const overview of [false, true, false]) {
       const app = createSSRApp({
@@ -173,6 +262,7 @@ describe('overflow artboards', () => {
       expect(html).toContain(`aria-label="画板 ${index} 排版预览"`)
       expect(html).toContain(`aria-label="编辑画板 ${index}"`)
     }
+    expect(html).toContain('一键导出全部 PNG')
   })
 
   it('defaults to custom mode and imports original sizes without tying them to export DPI', async () => {
