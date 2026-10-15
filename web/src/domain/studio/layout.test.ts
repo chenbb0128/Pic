@@ -33,6 +33,54 @@ describe('orientedPaperSize', () => {
 })
 
 describe('arrangeItems', () => {
+  it.each([false, true])('stacks balanced copies while keeping equal counts (autoGap=%s)', (autoGap) => {
+    const result = arrangeItems({
+      paper: { widthMm: 130, heightMm: 60 }, mode: 'balanced', gapMm: 5, autoGap,
+      items: [
+        { id: 'small', widthMm: 10, heightMm: 10, quantity: 1, selected: true },
+        { id: 'large', widthMm: 50, heightMm: 50, quantity: 1, selected: true },
+      ],
+    })
+    const small = result.placements.filter(p => p.itemId === 'small')
+    expect(small).toHaveLength(2)
+    expect(result.placements.filter(p => p.itemId === 'large')).toHaveLength(2)
+    expect(small[0].xMm).toBe(small[1].xMm)
+    expect(small[1].yMm - small[0].yMm).toBe(15)
+    expect(result.overflow).toBe(0)
+  })
+
+  it.each([false, true])('fills compact side columns before starting another band (autoGap=%s)', (autoGap) => {
+    for (const heightMm of [58, 118]) {
+      const options = {
+        paper: { widthMm: 108, heightMm }, mode: 'compact' as const, gapMm: 4, autoGap,
+        items: [
+          { id: 'small', widthMm: 10, heightMm: 10, quantity: 1, selected: true },
+          { id: 'large', widthMm: 50, heightMm: 50, quantity: 1, selected: true },
+        ],
+      }
+      const result = arrangeItems(options)
+      const bands = heightMm === 58 ? 1 : 2
+      expect(result.placements.filter(p => p.itemId === 'large')).toHaveLength(bands)
+      expect(result.placements.filter(p => p.itemId === 'small')).toHaveLength(bands * 9)
+      expect(result.placements[0].itemId).toBe('large')
+      // Independent spacing and forced rows belong to custom mode only.
+      expect(arrangeItems({ ...options, items: options.items.map(item => ({ ...item, gapXmm: 80, gapYmm: 80, startNewRow: true })) })).toEqual(result)
+      const gap = autoGap ? 5 : 4
+      for (const [i, p] of result.placements.entries()) {
+        const original = options.items.find(item => item.id === p.itemId)!
+        expect([p.widthMm, p.heightMm]).toEqual([original.widthMm, original.heightMm])
+        expect(p.xMm).toBeGreaterThanOrEqual(4 - 0.001)
+        expect(p.yMm).toBeGreaterThanOrEqual(4 - 0.001)
+        expect(p.xMm + p.widthMm).toBeLessThanOrEqual(104 + 0.001)
+        expect(p.yMm + p.heightMm).toBeLessThanOrEqual(heightMm - 4 + 0.001)
+        for (const q of result.placements.slice(i + 1)) {
+          expect(p.xMm + p.widthMm + gap <= q.xMm + 0.001 || q.xMm + q.widthMm + gap <= p.xMm + 0.001 ||
+            p.yMm + p.heightMm + gap <= q.yMm + 0.001 || q.yMm + q.heightMm + gap <= p.yMm + 0.001).toBe(true)
+        }
+      }
+    }
+  })
+
   it.each([false, true])('uses independent custom gaps instead of automatic spreading (autoGap=%s)', (autoGap) => {
     const result = arrangeItems({
       paper: { widthMm: 48, heightMm: 48 }, mode: 'custom', gapXmm: 20, gapYmm: 20, autoGap,

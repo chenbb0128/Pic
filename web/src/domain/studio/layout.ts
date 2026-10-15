@@ -2,6 +2,7 @@ import { imageSizePresets, type ImageSizePreset } from './imageSizeConversion'
 import { arrangeSmartItems } from './smartPacking'
 import { PAPER_MARGIN_MM } from './paperBounds'
 import type { ContourMask } from './contourMask'
+import { packStackedBands } from './bandPacking'
 
 export type PaperPreset = ImageSizePreset['value'] | 'custom'
 export type Orientation = 'landscape' | 'portrait'
@@ -87,7 +88,7 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
     : [...items].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || Number(!!b.important) - Number(!!a.important))
   const queue = mode === 'custom'
     ? ordered.flatMap((item) => Array.from({ length: Math.min(500, Math.max(0, Math.floor(item.quantity))) }, () => item))
-    : mode === 'compact' ? Array.from({ length: 1000 }, (_, index) => ordered[index % ordered.length]) : []
+    : []
 
   const placements: Placement[] = []
   let overflow = 0
@@ -188,38 +189,24 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
     const usableArea = (right - balancedMarginX) * (bottom - marginY)
     const itemArea = ordered.reduce((sum, item) => sum + item.widthMm * item.heightMm, 0)
     const maxQuantity = Math.min(Math.floor(1000 / ordered.length), Math.floor(usableArea / itemArea))
+    const heightOrdered = [...ordered].sort((a, b) => b.heightMm - a.heightMm || b.widthMm - a.widthMm)
     for (let quantity = maxQuantity; quantity >= 1; quantity -= 1) {
       const packed = pack(quantity)
       if (packed) {
         placements.push(...packed)
         break
       }
+      const stacked = packStackedBands(heightOrdered, paper, gapXmm, gapYmm,
+        balancedMarginX, marginY, true, !!options.autoGap, quantity)
+      if (stacked) return { placements: stacked, overflow: 0 }
     }
     if (!placements.length) {
       const item = ordered[0]
       placements.push({ itemId: item.id, xMm: balancedMarginX, yMm: marginY, widthMm: item.widthMm, heightMm: item.heightMm })
     }
   } else {
-    let xMm = PAPER_MARGIN_MM
-    let yMm = PAPER_MARGIN_MM
-    let rowHeight = 0
-    let failedInARow = 0
-    for (const item of queue) {
-      if (xMm + item.widthMm > right + 0.001) {
-        xMm = PAPER_MARGIN_MM
-        yMm += rowHeight + gapYmm
-        rowHeight = 0
-      }
-      if (yMm + item.heightMm > bottom + 0.001) {
-        failedInARow += 1
-        if (failedInARow >= ordered.length) break
-        continue
-      }
-      placements.push({ itemId: item.id, xMm, yMm, widthMm: item.widthMm, heightMm: item.heightMm })
-      xMm += item.widthMm + gapXmm
-      rowHeight = Math.max(rowHeight, item.heightMm)
-      failedInARow = 0
-    }
+    return { placements: packStackedBands(ordered, paper, gapXmm, gapYmm,
+      PAPER_MARGIN_MM, PAPER_MARGIN_MM, false, !!options.autoGap)!, overflow: 0 }
   }
   if (placements.length) {
     const rows = new Map<number, Placement[]>()
