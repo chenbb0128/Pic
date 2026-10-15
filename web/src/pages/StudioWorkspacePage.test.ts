@@ -12,6 +12,42 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('edits independent gaps and row breaks only in custom mode, preserving board settings', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 5)]
+      const input = { valueAsNumber: 2.6, value: '2.6' }
+      state.setAssetGap('one', 'x', { target: input })
+      expect(input.value).toBe('3')
+      expect(state.assets[0].gapXmm).toBe(3)
+      state.setAssetGap('one', 'y', { target: { valueAsNumber: 0, value: '0' } })
+      state.setAssetNewRow('one', true)
+      await nextTick()
+      expect(state.assets[0].startNewRow).toBe(true)
+      expect(state.placements).toHaveLength(2)
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.assets[0]).toMatchObject({ gapXmm: 3, gapYmm: 0, startNewRow: true, quantity: 3 })
+      state.mode = 'smart'
+      await nextTick()
+      expect(state.placements).toHaveLength(3)
+      state.setAssetGap('one', 'x', { target: { valueAsNumber: 12, value: '12' } })
+      expect(state.assets[0].gapXmm).toBe(3)
+      state.mode = 'custom'
+      state.setAssetGap('one', 'x', { target: { valueAsNumber: NaN, value: '' } })
+      await nextTick()
+      expect(state.assets[0].gapXmm).toBeUndefined()
+      expect(state.placements).toHaveLength(3)
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.assets[0]).toMatchObject({ gapXmm: 3, gapYmm: 0, startNewRow: true })
+      state.lockSelected()
+      state.setAssetGap('one', 'x', { target: { valueAsNumber: 9, value: '9' } })
+      state.setAssetNewRow('one', false)
+      expect(state.assets[0]).toMatchObject({ gapXmm: 3, startNewRow: true })
+    } finally { cleanup() }
+  })
+
   it.each([['custom', 'free'], ['smart', 'free'], ['smart', 'rows'], ['smart', 'columns']])(
     'uses list order and updates priority when moving images in %s/%s', async (mode, grouping) => {
       const { state, asset, cleanup } = mountWorkspace()
@@ -66,6 +102,9 @@ describe('overflow artboards', () => {
     expect(html).toContain('aria-label="下移 示例"')
     expect(html).toMatch(/<button[^>]*aria-label="删除 示例"[^>]*>删除<\/button>/)
     expect(html).not.toContain('aria-label="示例 优先排版"')
+    expect(html).toContain('aria-label="示例 横向间距毫米"')
+    expect(html).toContain('aria-label="示例 纵向间距毫米"')
+    expect(html).toContain('aria-label="示例 另起一行"')
   })
 
   it('exports all populated boards with their own size, DPI and dated filenames without switching the editor', async () => {

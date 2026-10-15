@@ -33,6 +33,110 @@ describe('orientedPaperSize', () => {
 })
 
 describe('arrangeItems', () => {
+  it.each([false, true])('uses independent custom gaps instead of automatic spreading (autoGap=%s)', (autoGap) => {
+    const result = arrangeItems({
+      paper: { widthMm: 48, heightMm: 48 }, mode: 'custom', gapXmm: 20, gapYmm: 20, autoGap,
+      items: [{ id: 'A', widthMm: 10, heightMm: 10, quantity: 6, selected: true, gapXmm: 7, gapYmm: 3 }],
+    })
+    expect(result.overflow).toBe(0)
+    expect(result.placements.map(p => [p.xMm, p.yMm])).toEqual([
+      [10.5, 4], [27.5, 4], [10.5, 17], [27.5, 17], [10.5, 30], [27.5, 30],
+    ])
+  })
+
+  it('uses the larger adjacent custom gap and treats zero as an override', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 18 }, mode: 'custom', gapMm: 20,
+      items: [
+        { id: 'A', widthMm: 10, heightMm: 10, quantity: 1, selected: true, gapXmm: 12 },
+        { id: 'B', widthMm: 10, heightMm: 10, quantity: 1, selected: true, gapXmm: 2 },
+        { id: 'C', widthMm: 10, heightMm: 10, quantity: 2, selected: true, gapXmm: 0 },
+      ],
+    })
+    expect(result.overflow).toBe(0)
+    const [a, b, c, d] = result.placements
+    expect(b.xMm - a.xMm - 10).toBe(12)
+    expect(c.xMm - b.xMm - 10).toBe(2)
+    expect(d.xMm - c.xMm - 10).toBe(0)
+  })
+
+  it('uses a small pattern\'s own vertical gap when stacking beside a tall pattern', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 58 }, mode: 'custom', gapMm: 0,
+      items: [
+        { id: 'A', widthMm: 40, heightMm: 40, quantity: 1, selected: true },
+        { id: 'B', widthMm: 10, heightMm: 10, quantity: 3, selected: true, gapXmm: 3, gapYmm: 4 },
+      ],
+    })
+    const small = result.placements.filter(p => p.itemId === 'B')
+    expect(result.overflow).toBe(0)
+    expect(small.map(p => p.yMm)).toEqual([4, 18, 32])
+    expect(new Set(small.map(p => p.xMm)).size).toBe(1)
+    expect(small[0].xMm - result.placements[0].xMm - 40).toBe(3)
+  })
+
+  it.each(['x', 'y'] as const)('keeps automatic spacing on the axis without an independent %s override', (axis) => {
+    const result = arrangeItems({
+      paper: { widthMm: 58, heightMm: 58 }, mode: 'custom', autoGap: true,
+      items: [{ id: 'A', widthMm: 10, heightMm: 10, quantity: 4, selected: true,
+        ...(axis === 'x' ? { gapXmm: 25 } : { gapYmm: 25 }) }],
+    })
+    expect(result.placements.map(p => [p.xMm, p.yMm])).toEqual(axis === 'x'
+      ? [[6.5, 4], [41.5, 4], [6.5, 44], [41.5, 44]]
+      : [[4, 4], [24, 4], [44, 4], [24, 39]])
+  })
+
+  it('starts a custom material on a new row once, keeping its copies together', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 68 }, mode: 'custom', gapXmm: 2, gapYmm: 3,
+      items: [
+        { id: 'A', widthMm: 40, heightMm: 40, quantity: 1, selected: true },
+        { id: 'B', widthMm: 10, heightMm: 10, quantity: 3, selected: true, startNewRow: true, gapYmm: 7 },
+        { id: 'C', widthMm: 10, heightMm: 10, quantity: 1, selected: true },
+      ],
+    })
+    expect(result.overflow).toBe(0)
+    expect(result.placements.map(p => p.yMm)).toEqual([4, 51, 51, 51, 51])
+  })
+
+  it('does not backfill above a forced row when the first material in it cannot fit', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 68 }, mode: 'custom', gapMm: 4,
+      items: [
+        { id: 'A', widthMm: 60, heightMm: 40, quantity: 1, selected: true },
+        { id: 'B', widthMm: 40, heightMm: 30, quantity: 1, selected: true, startNewRow: true },
+        { id: 'C', widthMm: 10, heightMm: 10, quantity: 2, selected: true },
+      ],
+    })
+    expect(result.placements.map(p => [p.itemId, p.yMm])).toEqual([['A', 4], ['C', 48], ['C', 48]])
+    expect(result.overflow).toBe(1)
+  })
+
+  it('keeps vertical gaps when a later material increases the current row gap', () => {
+    const result = arrangeItems({
+      paper: { widthMm: 108, heightMm: 88 }, mode: 'custom', gapMm: 0,
+      items: [
+        { id: 'A', widthMm: 100, heightMm: 20, quantity: 1, selected: true },
+        { id: 'B', widthMm: 30, heightMm: 20, quantity: 1, selected: true },
+        { id: 'C', widthMm: 10, heightMm: 10, quantity: 2, selected: true, gapYmm: 12 },
+      ],
+    })
+    expect(result.overflow).toBe(0)
+    expect(result.placements.map(p => p.yMm)).toEqual([4, 36, 36, 36])
+  })
+
+  it('ignores per-material custom rules in smart mode', () => {
+    const options = {
+      paper: { widthMm: 108, heightMm: 68 }, mode: 'smart' as const, gapMm: 2,
+      items: [
+        { id: 'A', widthMm: 40, heightMm: 40, quantity: 1, selected: true, priority: 2 },
+        { id: 'B', widthMm: 10, heightMm: 10, quantity: 3, selected: true, priority: 1 },
+      ],
+    }
+    expect(arrangeItems({ ...options, items: options.items.map(item => ({ ...item, gapXmm: 30, gapYmm: 30, startNewRow: true })) }))
+      .toEqual(arrangeItems(options))
+  })
+
   it.each([false, true])('stacks small patterns beside a tall one without overlap (autoGap=%s)', (autoGap) => {
     const result = arrangeItems({
       paper: { widthMm: 108, heightMm: 58 }, mode: 'custom', gapXmm: 4, gapYmm: 4, autoGap,

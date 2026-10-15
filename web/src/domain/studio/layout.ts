@@ -18,6 +18,9 @@ export interface LayoutItem {
   important?: boolean
   priority?: number
   contour?: ContourMask
+  gapXmm?: number
+  gapYmm?: number
+  startNewRow?: boolean
 }
 export interface Placement {
   itemId: string
@@ -38,6 +41,11 @@ export interface ArrangeOptions {
   reserved?: Placement[]
 }
 export interface ArrangeResult { placements: Placement[]; overflow: number }
+
+export function customItemGap(item: Pick<LayoutItem, 'gapXmm' | 'gapYmm'> | undefined, axis: 'x' | 'y', fallback: number): number {
+  const value = axis === 'x' ? item?.gapXmm : item?.gapYmm
+  return value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback
+}
 
 export function paperSize(preset: PaperPreset, orientation: Orientation): PaperSize {
   if (preset === 'custom') throw new Error('自定义纸张需要输入宽度和高度。')
@@ -69,7 +77,7 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
   const bottom = paper.heightMm - PAPER_MARGIN_MM
   const items = options.items.filter((item) =>
     item.selected && item.widthMm > 0 && item.heightMm > 0 &&
-    item.widthMm <= paper.widthMm - PAPER_MARGIN_MM * 2 && item.heightMm <= paper.heightMm - PAPER_MARGIN_MM * 2,
+    (mode === 'custom' || (item.widthMm <= paper.widthMm - PAPER_MARGIN_MM * 2 && item.heightMm <= paper.heightMm - PAPER_MARGIN_MM * 2)),
   )
   if (!items.length || paper.widthMm <= 0 || paper.heightMm <= 0) return { placements: [], overflow: requested }
 
@@ -87,46 +95,65 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
   if (mode === 'custom') {
     // Keep a row's tall patterns and its stacked small columns as one band.
     // Center/spread columns together, not each distinct y coordinate independently.
-    interface Column { xMm: number; widthMm: number; slots: Placement[] }
-    interface Band { yMm: number; heightMm: number; columns: Column[] }
+    interface Column { xMm: number; widthMm: number; gapXmm: number; slots: Placement[] }
+    interface Band { yMm: number; heightMm: number; gapYmm: number; columns: Column[] }
     const bands: Band[] = []
+    const autoX = options.autoGap && !items.some(item => item.quantity > 0 && item.gapXmm !== undefined && Number.isFinite(item.gapXmm))
+    const autoY = options.autoGap && !items.some(item => item.quantity > 0 && item.gapYmm !== undefined && Number.isFinite(item.gapYmm))
+    let previousItemId: string | undefined
+    let pendingNewRow = false
     for (const item of queue) {
+      if (item.id !== previousItemId && item.startNewRow) pendingNewRow = true
+      previousItemId = item.id
+      if (!Number.isFinite(item.widthMm) || !Number.isFinite(item.heightMm) || item.widthMm > right - PAPER_MARGIN_MM || item.heightMm > bottom - PAPER_MARGIN_MM) continue
+      const itemGapX = customItemGap(item, 'x', gapXmm)
+      const itemGapY = customItemGap(item, 'y', gapYmm)
       let band = bands[bands.length - 1]
+      const previousBand = bands[bands.length - 2]
       const column = band?.columns[band.columns.length - 1]
       const last = column?.slots[column.slots.length - 1]
-      const stackY = last ? last.yMm + last.heightMm + gapYmm : 0
-      if (band && column && last?.itemId === item.id && stackY + item.heightMm <= band.yMm + band.heightMm + 0.001) {
-        const slot = { itemId: item.id, xMm: column.xMm, yMm: stackY, widthMm: item.widthMm, heightMm: item.heightMm }
-        column.slots.push(slot)
-        placements.push(slot)
-        continue
-      }
-      let xMm = column ? column.xMm + column.widthMm + gapXmm : PAPER_MARGIN_MM
-      let yMm = band?.yMm ?? PAPER_MARGIN_MM
-      const newBand = !band || xMm + item.widthMm > right + 0.001
-      if (newBand && band) { xMm = PAPER_MARGIN_MM; yMm += band.heightMm + gapYmm }
-      // Don't advance the cursor on failure: a later, smaller pattern may still fit.
-      if (yMm + item.heightMm > bottom + 0.001) continue
+      const bandY = previousBand
+        ? Math.max(band!.yMm, previousBand.yMm + previousBand.heightMm + Math.max(previousBand.gapYmm, band!.gapYmm, itemGapY))
+        : band?.yMm ?? PAPER_MARGIN_MM
+      const shiftY = band ? bandY - band.yMm : 0
+      const stackY = last ? last.yMm + shiftY + last.heightMm + itemGapY : 0
+      const canStack = !pendingNewRow && band && column && last?.itemId === item.id && stackY + item.heightMm <= bandY + band.heightMm + 0.001
+      let xMm = canStack ? column.xMm : column ? column.xMm + column.widthMm + Math.max(column.gapXmm, itemGapX) : PAPER_MARGIN_MM
+      let yMm = canStack ? stackY : bandY
+      const newBand = !band || pendingNewRow || xMm + item.widthMm > right + 0.001
+      if (newBand && band) { xMm = PAPER_MARGIN_MM; yMm = band.yMm + band.heightMm + Math.max(band.gapYmm, itemGapY) }
+      // Only commit a row/shift after a successful placement. Explicit row breaks
+      // remain pending on failure so later small patterns cannot backfill above them.
+      const bandBottom = newBand ? yMm + item.heightMm : bandY + Math.max(band!.heightMm, item.heightMm)
+      if (bandBottom > bottom + 0.001) continue
       if (newBand) {
-        band = { yMm, heightMm: 0, columns: [] }
+        band = { yMm, heightMm: 0, gapYmm: itemGapY, columns: [] }
         bands.push(band)
+      } else if (shiftY) {
+        band!.columns.forEach(col => col.slots.forEach(slot => { slot.yMm += shiftY }))
+        band!.yMm = bandY
       }
       band!.heightMm = Math.max(band!.heightMm, item.heightMm)
+      band!.gapYmm = Math.max(band!.gapYmm, itemGapY)
       const slot = { itemId: item.id, xMm, yMm, widthMm: item.widthMm, heightMm: item.heightMm }
-      band!.columns.push({ xMm, widthMm: item.widthMm, slots: [slot] })
+      if (canStack && !newBand) column.slots.push(slot)
+      else band!.columns.push({ xMm, widthMm: item.widthMm, gapXmm: itemGapX, slots: [slot] })
       placements.push(slot)
+      pendingNewRow = false
     }
     const remainingHeight = paper.heightMm - PAPER_MARGIN_MM * 2 - bands.reduce((sum, band) => sum + band.heightMm, 0)
     let nextY = PAPER_MARGIN_MM
     for (const band of bands) {
-      const bandY = options.autoGap ? bands.length === 1 ? (paper.heightMm - band.heightMm) / 2 : nextY : band.yMm
+      const bandY = autoY ? bands.length === 1 ? (paper.heightMm - band.heightMm) / 2 : nextY : band.yMm
       const usedWidth = band.columns.reduce((sum, column) => sum + column.widthMm, 0)
-      const bandWidth = usedWidth + gapXmm * (band.columns.length - 1)
-      const columnGap = options.autoGap && band.columns.length > 1
+      const lastColumn = band.columns[band.columns.length - 1]!
+      const bandWidth = lastColumn.xMm + lastColumn.widthMm - PAPER_MARGIN_MM
+      const columnGap = autoX && band.columns.length > 1
         ? (paper.widthMm - PAPER_MARGIN_MM * 2 - usedWidth) / (band.columns.length - 1) : gapXmm
-      let nextX = options.autoGap && band.columns.length > 1 ? PAPER_MARGIN_MM : (paper.widthMm - bandWidth) / 2
+      const centerShift = (paper.widthMm - bandWidth) / 2 - PAPER_MARGIN_MM
+      let nextX = band.columns.length > 1 ? PAPER_MARGIN_MM : (paper.widthMm - bandWidth) / 2
       for (const column of band.columns) {
-        for (const slot of column.slots) { slot.xMm += nextX - column.xMm; slot.yMm += bandY - band.yMm }
+        for (const slot of column.slots) { slot.xMm += autoX ? nextX - column.xMm : centerShift; slot.yMm += bandY - band.yMm }
         nextX += column.widthMm + columnGap
       }
       nextY += band.heightMm + (bands.length > 1 ? remainingHeight / (bands.length - 1) : 0)

@@ -4,7 +4,7 @@ import { fitSizeMm, originalSizeMm, resizeAssetSize, rotatedBounds } from '../do
 import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSize'
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
 import { imageSizePresets } from '../domain/studio/imageSizeConversion'
-import { arrangeItems, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
+import { arrangeItems, customItemGap, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
 import { resizePlacement } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
@@ -21,6 +21,9 @@ interface StudioAsset extends LocalImage {
   ratioLocked: boolean
   rotationDeg: number
   lockedGroupId?: string
+  gapXmm?: number
+  gapYmm?: number
+  startNewRow?: boolean
 }
 
 interface DragState {
@@ -128,6 +131,9 @@ function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
       quantity: asset.quantity,
       selected: asset.selected && !asset.lockedGroupId,
       priority: source.length - index,
+      gapXmm: asset.gapXmm,
+      gapYmm: asset.gapYmm,
+      startNewRow: asset.startNewRow,
       contour: mode.value === 'smart' && grouping.value === 'free' && useContours.value && asset.selected && !asset.lockedGroupId
         ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
     })),
@@ -135,8 +141,14 @@ function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
 }
 const layout = computed(() => arrangeAssets(assets.value, lockedPlacements.value))
 function overlaps(a: Placement, b: Placement): boolean {
-  return a.xMm < b.xMm + b.widthMm + gapXmm.value && a.xMm + a.widthMm + gapXmm.value > b.xMm &&
-    a.yMm < b.yMm + b.heightMm + gapYmm.value && a.yMm + a.heightMm + gapYmm.value > b.yMm
+  const first = assets.value.find(asset => asset.id === a.itemId)
+  const second = assets.value.find(asset => asset.id === b.itemId)
+  const gapX = mode.value === 'custom'
+    ? Math.max(customItemGap(first, 'x', autoGap.value ? 5 : gapXmm.value), customItemGap(second, 'x', autoGap.value ? 5 : gapXmm.value)) : gapXmm.value
+  const gapY = mode.value === 'custom'
+    ? Math.max(customItemGap(first, 'y', autoGap.value ? 5 : gapYmm.value), customItemGap(second, 'y', autoGap.value ? 5 : gapYmm.value)) : gapYmm.value
+  return a.xMm < b.xMm + b.widthMm + gapX && a.xMm + a.widthMm + gapX > b.xMm &&
+    a.yMm < b.yMm + b.heightMm + gapY && a.yMm + a.heightMm + gapY > b.yMm
 }
 const normalAuto = computed(() => mode.value === 'smart' ? layout.value.placements : layout.value.placements.filter((placement) =>
   lockedPlacements.value.every((locked) => !overlaps(placement, locked))))
@@ -298,6 +310,25 @@ function onGapChange(axis: 'x' | 'y', event: Event): void {
 
 function updateAsset(id: string, change: Partial<StudioAsset>): void {
   assets.value = assets.value.map((asset) => asset.id === id ? { ...asset, ...change } : asset)
+}
+
+function setAssetGap(id: string, axis: 'x' | 'y', event: Event): void {
+  const asset = assets.value.find(item => item.id === id)
+  if (!asset || asset.lockedGroupId || mode.value !== 'custom' || exporting.value || uploading.value) return
+  const input = event.target as HTMLInputElement
+  const key = axis === 'x' ? 'gapXmm' : 'gapYmm'
+  const value = input.value.trim() === '' ? undefined : input.valueAsNumber
+  const normalized = value === undefined ? undefined : Number.isFinite(value) ? Math.min(30, Math.max(0, Math.round(value))) : asset[key]
+  input.value = normalized === undefined ? '' : String(normalized)
+  updateAsset(id, { [key]: normalized })
+  status.value = '已按定制模式更新间距；留空跟随全局，支持 0～30 的整数毫米，相邻图案取较大值。'
+}
+
+function setAssetNewRow(id: string, value: boolean): void {
+  const asset = assets.value.find(item => item.id === id)
+  if (!asset || asset.lockedGroupId || mode.value !== 'custom' || exporting.value || uploading.value) return
+  updateAsset(id, { startNewRow: value })
+  status.value = value ? '该图案从新的一行开始，后续副本正常连续排列。' : '已取消另起一行，按定制模式连续排列。'
 }
 
 function setAssetSize(id: string, edge: 'widthMm' | 'heightMm', valueCm: number): void {
@@ -831,6 +862,12 @@ function downloadOnly(): void {
             <span aria-hidden="true">°</span>
           </label>
           <button type="button" class="studio-remove-button" :aria-label="`删除 ${asset.name}`" :disabled="exporting || uploading" title="从当前画板删除图片" @click="removeAsset(asset.id)">删除</button>
+          <div class="flex basis-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#31415f] pt-1" :class="{ 'opacity-50': mode !== 'custom' }">
+            <label class="flex items-center gap-1">横距<input type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapXmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 横向间距毫米`" @change="setAssetGap(asset.id, 'x', $event)" /><span>mm</span></label>
+            <label class="flex items-center gap-1">纵距<input type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapYmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 纵向间距毫米`" @change="setAssetGap(asset.id, 'y', $event)" /><span>mm</span></label>
+            <label class="flex items-center gap-1"><input type="checkbox" :checked="!!asset.startNewRow" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" :aria-label="`${asset.name} 另起一行`" @change="setAssetNewRow(asset.id, ($event.target as HTMLInputElement).checked)" />另起一行</label>
+            <span class="text-[10px] text-[#8098c5]">仅定制模式 · 留空跟随全局<template v-if="mode === 'custom' && autoGap && (asset.gapXmm !== undefined || asset.gapYmm !== undefined)"> · 独立间距的方向不自动拉伸</template></span>
+          </div>
           <div class="flex basis-full items-center justify-between gap-2 text-[11px] leading-5" aria-live="polite">
             <span v-if="asset.lockedGroupId" class="text-[#c8bbff]">已锁组 · 已排 {{ placementCounts.get(asset.id) ?? 0 }} 个</span>
             <template v-else-if="asset.selected">
