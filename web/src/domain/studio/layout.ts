@@ -1,8 +1,9 @@
 import { imageSizePresets, type ImageSizePreset } from './imageSizeConversion'
+import { arrangeSmartItems } from './smartPacking'
 
 export type PaperPreset = ImageSizePreset['value'] | 'custom'
 export type Orientation = 'landscape' | 'portrait'
-export type LayoutMode = 'balanced' | 'compact' | 'custom'
+export type LayoutMode = 'balanced' | 'compact' | 'custom' | 'smart'
 
 export interface PaperSize { widthMm: number; heightMm: number }
 export interface LayoutItem {
@@ -27,6 +28,7 @@ export interface ArrangeOptions {
   autoGap?: boolean
   mode: LayoutMode
   items: LayoutItem[]
+  reserved?: Placement[]
 }
 export interface ArrangeResult { placements: Placement[]; overflow: number }
 
@@ -53,6 +55,7 @@ export function arrangeItems(options: ArrangeOptions): ArrangeResult {
   const { paper, mode } = options
   const gapXmm = options.autoGap ? 5 : Math.max(0, options.gapXmm ?? options.gapMm ?? 0)
   const gapYmm = options.autoGap ? 5 : Math.max(0, options.gapYmm ?? options.gapMm ?? 0)
+  if (mode === 'smart') return arrangeSmartItems(paper, options.items, gapXmm, gapYmm, options.reserved)
   const items = options.items.filter((item) =>
     item.selected && item.widthMm > 0 && item.heightMm > 0 &&
     item.widthMm <= paper.widthMm && item.heightMm <= paper.heightMm,
