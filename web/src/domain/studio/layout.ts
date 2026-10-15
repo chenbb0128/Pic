@@ -1,6 +1,7 @@
 import { imageSizePresets, type ImageSizePreset } from './imageSizeConversion'
 import { arrangeSmartItems } from './smartPacking'
 import { PAPER_MARGIN_MM } from './paperBounds'
+import type { ContourMask } from './contourMask'
 
 export type PaperPreset = ImageSizePreset['value'] | 'custom'
 export type Orientation = 'landscape' | 'portrait'
@@ -14,6 +15,7 @@ export interface LayoutItem {
   quantity: number
   selected: boolean
   important?: boolean
+  contour?: ContourMask
 }
 export interface Placement {
   itemId: string

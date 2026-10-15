@@ -11,6 +11,7 @@ import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
 import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanvasPng, type LocalImage } from '../services/studioImage'
 import { formatBytes } from '../services/pngExporter'
+import { imageContour } from '../services/imageContour'
 
 interface StudioAsset extends LocalImage {
   widthMm: number
@@ -42,6 +43,7 @@ const mode = ref<LayoutMode>('balanced')
 const gapXmm = ref(5)
 const gapYmm = ref(2)
 const autoGap = ref(false)
+const useContours = ref(true)
 const assets = shallowRef<StudioAsset[]>([])
 const groups = shallowRef<LockedGroup[]>([])
 const manualPlacements = shallowRef<Placement[] | null>(null)
@@ -93,6 +95,8 @@ const layout = computed(() => arrangeItems({
     quantity: asset.quantity,
     selected: asset.selected && !asset.lockedGroupId,
     important: asset.important,
+    contour: mode.value === 'smart' && useContours.value && asset.selected && !asset.lockedGroupId
+      ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
   })),
 }))
 function overlaps(a: Placement, b: Placement): boolean {
@@ -308,7 +312,7 @@ function renderPreview(): void {
   if (context) render(context, canvas.width, canvas.height, true)
 }
 
-watch([paper, gapXmm, gapYmm, autoGap, mode, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
+watch([paper, gapXmm, gapYmm, autoGap, mode, useContours, assets], () => { manualPlacements.value = null; selectedPlacementIndex.value = null })
 watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
 watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
@@ -507,6 +511,10 @@ function downloadOnly(): void {
           <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '按数量逐行' }, { value: 'smart', label: '智能填充', hint: '优先图案先排' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
         </div>
         <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">先尽量满足 ★ 优先图案的数量，再填充其他图案；同级大图先排、小图补空，保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
+        <template v-if="mode === 'smart'">
+          <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="useContours" type="checkbox" />利用透明空隙（尽量多排）</label>
+          <p class="mt-1 text-[11px] leading-5 text-[#a9bbe1]">{{ useContours ? '按图案轮廓保持间距，透明外框可以交错；不缩小、不自动旋转。无透明区域时按矩形排版。' : '按整张图片矩形边框保持间距。' }}数量仍为上限，放不下的会提示未排入。</p>
+        </template>
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>

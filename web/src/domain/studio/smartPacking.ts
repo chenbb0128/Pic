@@ -1,5 +1,6 @@
 import type { ArrangeResult, LayoutItem, PaperSize, Placement } from './layout'
 import { PAPER_MARGIN_MM } from './paperBounds'
+import { improveContourPacking } from './contourPacking'
 
 interface Rect { x: number; y: number; width: number; height: number }
 
@@ -42,7 +43,7 @@ export function arrangeSmartItems(
     quantity: Number.isFinite(item.quantity) ? Math.min(500, Math.max(0, Math.floor(item.quantity))) : 0,
   })).sort((a, b) => Number(!!b.important) - Number(!!a.important) || b.widthMm * b.heightMm - a.widthMm * a.heightMm)
   const requested = ordered.reduce((sum, item) => sum + item.quantity, 0)
-  const placements: Placement[] = []
+  let placements: Placement[] = []
   if (!Number.isFinite(paper.widthMm) || !Number.isFinite(paper.heightMm) || paper.widthMm <= PAPER_MARGIN_MM * 2 || paper.heightMm <= PAPER_MARGIN_MM * 2) {
     return { placements, overflow: requested }
   }
@@ -85,6 +86,7 @@ export function arrangeSmartItems(
     }
   }
 
+  placements = improveContourPacking(paper, ordered, gapXmm, gapYmm, reserved, placements)
   if (placements.length && !reserved.length) {
     const left = Math.min(...placements.map((slot) => slot.xMm))
     const right = Math.max(...placements.map((slot) => slot.xMm + slot.widthMm))
