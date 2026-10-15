@@ -98,7 +98,7 @@ export function improveContourPacking(paper: PaperSize, ordered: LayoutItem[], g
   let best = baseline
   const count = (slots: Placement[], id: string) => slots.filter((slot) => slot.itemId === id).length
   const better = (candidate: Placement[]) => {
-    for (const item of items.filter((entry) => entry.important)) {
+    for (const item of items.filter((entry) => entry.priority !== undefined || entry.important)) {
       const difference = count(candidate, item.id) - count(best, item.id)
       if (difference) return difference > 0
     }

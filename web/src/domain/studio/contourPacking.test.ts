@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { arrangeItems, type LayoutItem, type Placement } from './layout'
+import { improveContourPacking } from './contourPacking'
 
 // A 20mm square with a transparent 10mm upper-right corner.
 const corner = {
@@ -12,6 +13,19 @@ function pack(items: LayoutItem[], gapMm = 2, reserved: Placement[] = []) {
 }
 
 describe('transparent contour packing', () => {
+  it('preserves list priority even when lower-ranked patterns yield a larger total', () => {
+    const items: LayoutItem[] = [
+      { id: 'first', widthMm: 14, heightMm: 20, quantity: 1, selected: true, priority: 2,
+        contour: { width: 28, rows: Array(40).fill([0, 28]) } },
+      { id: 'second', widthMm: 6, heightMm: 6, quantity: 9, selected: true, priority: 1 },
+    ]
+    const baseline = Array.from({ length: 9 }, (_, i) => ({ itemId: 'second', xMm: 4 + (i % 3) * 6,
+      yMm: 4 + Math.floor(i / 3) * 6, widthMm: 6, heightMm: 6 }))
+    const result = improveContourPacking({ widthMm: 28, heightMm: 28 }, items, 0, 0, [], baseline)
+    expect(result.filter(p => p.itemId === 'first')).toHaveLength(1)
+    expect(result.filter(p => p.itemId === 'second')).toHaveLength(3)
+  })
+
   it('fills A4 corner gaps while preserving at least the original 16 important patterns', () => {
     const ellipse = {
       width: 130,

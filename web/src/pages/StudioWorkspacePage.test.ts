@@ -12,6 +12,62 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it.each([['custom', 'free'], ['smart', 'free'], ['smart', 'rows'], ['smart', 'columns']])(
+    'uses list order and updates priority when moving images in %s/%s', async (mode, grouping) => {
+      const { state, asset, cleanup } = mountWorkspace()
+      try {
+        state.mode = mode
+        state.grouping = grouping
+        state.assets = [{ ...asset('first', 4), important: false }, { ...asset('second', 1, 100), important: true }]
+        await nextTick()
+        expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
+        state.moveAsset('second', -1)
+        await nextTick()
+        expect(state.assets.map((a: any) => a.id)).toEqual(['second', 'first'])
+        expect(state.placements.map((p: any) => p.itemId)).toEqual(['second'])
+        state.moveAsset('second', -1)
+        state.moveAsset('missing', 1)
+        expect(state.assets.map((a: any) => a.id)).toEqual(['second', 'first'])
+        state.moveAsset('second', 1)
+        await nextTick()
+        expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
+        expect(state.mode).toBe(mode)
+      } finally { cleanup() }
+    },
+  )
+
+  it('deletes a locked image and removes its placements without deleting its group neighbors', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('first', 1), asset('second', 1)]
+      await nextTick()
+      state.lockSelected()
+      state.removeAsset('first')
+      await nextTick()
+      expect(state.assets.map((a: any) => a.id)).toEqual(['second'])
+      expect(state.placements.map((p: any) => p.itemId)).toEqual(['second'])
+      expect(state.groups).toHaveLength(1)
+    } finally { cleanup() }
+  })
+
+  it('renders image ordering and explicit delete controls instead of a priority toggle', async () => {
+    const app = createSSRApp({
+      ...Workspace,
+      setup(props: any, context: any) {
+        const state = (Workspace as any).setup(props, context)
+        state.assets.value = [{ id: 'one', name: '示例', url: 'blob:one', width: 100, height: 100,
+          widthMm: 20, heightMm: 20, quantity: 1, selected: true, rotationDeg: 0, ratioLocked: true }]
+        return state
+      },
+    })
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    expect(html).toContain('aria-label="上移 示例"')
+    expect(html).toContain('aria-label="下移 示例"')
+    expect(html).toMatch(/<button[^>]*aria-label="删除 示例"[^>]*>删除<\/button>/)
+    expect(html).not.toContain('aria-label="示例 优先排版"')
+  })
+
   it('exports all populated boards with their own size, DPI and dated filenames without switching the editor', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     const downloads: string[] = []
@@ -317,7 +373,7 @@ describe('overflow artboards', () => {
       expect(state.placements).toHaveLength(4)
       expect(state.mode).toBe(mode)
       expect(state.grouping).toBe('rows')
-      expect(state.assets[0].important).toBe(true)
+      expect(state.assets[0].id).toBe('one')
       state.createRemainingBoard()
       await nextTick()
       expect(state.assets[0].quantity).toBe(1)
@@ -454,9 +510,6 @@ describe('workspace editing preserves the selected layout mode', () => {
       state.setQuantity('one', 3)
       expect(state.mode).toBe(mode)
       expect(state.assets[0].quantity).toBe(3)
-      state.toggleImportant('one')
-      expect(state.mode).toBe(mode)
-      expect(state.assets[0].important).toBe(true)
       state.bulkLongEdgeCm = 4
       state.bulkQuantity = 2
       state.applyBulk()

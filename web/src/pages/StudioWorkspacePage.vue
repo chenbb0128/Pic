@@ -18,7 +18,6 @@ interface StudioAsset extends LocalImage {
   heightMm: number
   quantity: number
   selected: boolean
-  important: boolean
   ratioLocked: boolean
   rotationDeg: number
   lockedGroupId?: string
@@ -123,12 +122,12 @@ function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
     mode: mode.value,
     grouping: grouping.value,
     reserved,
-    items: source.map((asset) => ({
+    items: source.map((asset, index) => ({
       id: asset.id,
       ...rotatedBounds(asset.widthMm, asset.heightMm, asset.rotationDeg),
       quantity: asset.quantity,
       selected: asset.selected && !asset.lockedGroupId,
-      important: asset.important,
+      priority: source.length - index,
       contour: mode.value === 'smart' && grouping.value === 'free' && useContours.value && asset.selected && !asset.lockedGroupId
         ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
     })),
@@ -324,13 +323,15 @@ function setQuantity(id: string, value: number): void {
     : '已保存数量，保持当前排版模式；切换到定制或智能填充时按数量生效。'
 }
 
-function toggleImportant(id: string): void {
-  const asset = assets.value.find((item) => item.id === id)
-  if (!asset || asset.lockedGroupId) return
-  updateAsset(id, { important: !asset.important })
-  status.value = countMode.value
-    ? asset.important ? '已取消优先，按当前模式重新排版。' : '已设为优先：先排该图案的目标数量，再排列其他图案。'
-    : `已${asset.important ? '取消' : '设置'}优先，保持当前排版模式；优先设置在定制或智能填充时生效。`
+function moveAsset(id: string, direction: -1 | 1): void {
+  if (exporting.value || uploading.value) return
+  const index = assets.value.findIndex((asset) => asset.id === id)
+  const target = index + direction
+  if (index < 0 || target < 0 || target >= assets.value.length) return
+  const reordered = [...assets.value]
+  ;[reordered[index], reordered[target]] = [reordered[target]!, reordered[index]!]
+  assets.value = reordered
+  status.value = '已调整图片顺序；定制和智能填充按列表从上到下优先排版，锁组保留原位。'
 }
 
 function setRotation(id: string, value: number): void {
@@ -356,7 +357,9 @@ function clearGenerated(): void {
 }
 
 function removeAsset(id: string): void {
+  if (exporting.value || uploading.value) return
   const asset = assets.value.find((item) => item.id === id)
+  if (!asset) return
   groups.value = groups.value.flatMap((group) => {
     if (!group.itemIds.includes(id)) return [group]
     const remainingIds = group.itemIds.filter((itemId) => itemId !== id)
@@ -366,6 +369,7 @@ function removeAsset(id: string): void {
   })
   assets.value = assets.value.filter((item) => item.id !== id)
   if (asset) releaseUnusedImage(asset.url)
+  status.value = `已从当前画板删除 ${asset.name}，其他画板不受影响。`
 }
 
 async function addFiles(files: FileList | null): Promise<void> {
@@ -379,7 +383,7 @@ async function addFiles(files: FileList | null): Promise<void> {
     if (!['image/png', 'image/webp', 'image/jpeg'].includes(file.type)) { skipped += 1; continue }
     try {
       const image = await loadLocalImage(file)
-      added.push({ ...image, ...originalSizeMm(image.width, image.height, image.sourceDpi ?? importDpi), quantity: 1, selected: true, important: false, ratioLocked: true, rotationDeg: 0 })
+      added.push({ ...image, ...originalSizeMm(image.width, image.height, image.sourceDpi ?? importDpi), quantity: 1, selected: true, ratioLocked: true, rotationDeg: 0 })
     } catch (error) {
       errors.push(error instanceof Error ? error.message : `${file.name} 读取失败。`)
     }
@@ -569,7 +573,7 @@ function resetLayout(): void {
   manualPlacements.value = null
   selectedPlacementIndex.value = null
   adjusting.value = false
-  status.value = mode.value === 'smart' ? '已按当前排列方式重新智能排版；优先图案先排，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
+  status.value = mode.value === 'smart' ? '已按当前排列方式重新智能排版；列表靠前的图片优先，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
 }
 
 function cycleBackground(): void {
@@ -759,10 +763,10 @@ function downloadOnly(): void {
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">管理模式</h2>
         <div class="grid grid-cols-4 gap-1">
-          <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '优先图按数量逐行' }, { value: 'smart', label: '智能填充', hint: '优先图案先排' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
+          <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '列表顺序逐行' }, { value: 'smart', label: '智能填充', hint: '列表靠前先排' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
         </div>
-        <p v-if="mode === 'custom'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">★ 优先图案先按数量逐行排；大图旁的小图可按列纵向叠放，利用同一行的高度。尺寸、数量和留边不变，行内整体居中。</p>
-        <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">先尽量满足 ★ 优先图案的数量，再按所选方式排列其他图案；同级大图先排，保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
+        <p v-if="mode === 'custom'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">按图片列表从上到下优先满足数量并逐行排版；大图旁的小图可按列纵向叠放。尺寸、数量和留边不变，行内整体居中。</p>
+        <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">按图片列表从上到下优先满足数量，再按所选方式填充剩余空间；保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
         <template v-if="mode === 'smart'">
           <h3 class="mb-1 mt-2 text-xs font-medium text-[#a9bbe1]">排列方式</h3>
           <div class="grid grid-cols-3 gap-1" role="group" aria-label="排列方式">
@@ -802,17 +806,19 @@ function downloadOnly(): void {
       <section class="min-h-[190px] border-b border-[#31415f] px-4 py-3">
         <h2 class="text-xs font-medium text-[#a9bbe1]">图片明细 <span class="text-[11px] text-[#8098c5]">（勾选后排版；尺寸单位 cm）</span></h2>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
-        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">导入按图片 DPI 换算原尺寸，无 DPI 时用导入时的画板 DPI；修改导出 DPI 不改变厘米尺寸。数量与 ☆ 优先在定制、智能填充中生效（0 表示不排入，最多 500 份），修改明细保持当前模式。</p>
+        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">定制、智能填充按列表从上到下优先排版，用 ↑ ↓ 调整顺序；数量 0 表示不排入，最多 500 份。导入按图片 DPI 换算原尺寸，无 DPI 时用导入时的画板 DPI；修改导出 DPI 不改变厘米尺寸，修改明细保持当前模式。</p>
         <div v-if="bulkOpen" class="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-lg border border-[#40537a] p-2 text-[11px] text-[#a9bbe1]">
           <label>长边 cm<input v-model.number="bulkLongEdgeCm" type="number" min="0.1" max="42" step="0.1" class="studio-input mt-1 w-full" /></label>
           <label>数量<input v-model.number="bulkQuantity" type="number" min="0" max="500" class="studio-input mt-1 w-full" /></label>
           <button type="button" class="studio-action h-8" :disabled="!selectedCount" @click="applyBulk">应用</button>
         </div>
-        <div v-for="asset in assets" :key="asset.id" class="studio-asset-row">
+        <div v-for="(asset, index) in assets" :key="asset.id" class="studio-asset-row">
           <input type="checkbox" :checked="asset.selected" :disabled="!!asset.lockedGroupId" :aria-label="`选择 ${asset.name}`" @change="updateAsset(asset.id, { selected: ($event.target as HTMLInputElement).checked })" />
           <img :src="asset.url" :alt="asset.name" :title="`${asset.name} · ${asset.width}×${asset.height}px`" class="studio-asset-thumb" />
           <div class="studio-asset-meta" :title="asset.name"><span>{{ asset.width }}×{{ asset.height }}</span><small v-if="asset.lockedGroupId">已锁组</small></div>
-          <button type="button" class="h-[30px] shrink-0 rounded border px-1.5 text-[11px] disabled:opacity-40" :class="asset.important ? 'border-amber-300 bg-amber-300 text-slate-950' : 'border-[#40537a] text-[#a9bbe1]'" :aria-label="`${asset.name} 优先排版`" :aria-pressed="asset.important" :disabled="!!asset.lockedGroupId" :title="asset.important ? '已设为优先，点击取消' : '先尽量满足该图案的目标数量'" @click="toggleImportant(asset.id)">{{ asset.important ? '★ 优先' : '☆ 优先' }}</button>
+          <span class="shrink-0 text-[#c8bbff]" :title="`排版优先级 ${index + 1}`">#{{ index + 1 }}</span>
+          <button type="button" class="studio-order-button" :aria-label="`上移 ${asset.name}`" title="上移，提高排版优先级" :disabled="index === 0 || exporting || uploading" @click="moveAsset(asset.id, -1)">↑</button>
+          <button type="button" class="studio-order-button" :aria-label="`下移 ${asset.name}`" title="下移，降低排版优先级" :disabled="index === assets.length - 1 || exporting || uploading" @click="moveAsset(asset.id, 1)">↓</button>
           <input type="number" min="0.01" step="0.01" :value="(asset.widthMm / 10).toFixed(2)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input" :aria-label="`${asset.name} 宽度厘米`" @change="setAssetSize(asset.id, 'widthMm', Number(($event.target as HTMLInputElement).value))" />
           <button type="button" class="studio-asset-lock" :disabled="!!asset.lockedGroupId" :aria-label="asset.ratioLocked ? '解锁尺寸比例' : '锁定尺寸比例'" @click="updateAsset(asset.id, { ratioLocked: !asset.ratioLocked })">{{ asset.ratioLocked ? '🔒' : '🔓' }}</button>
           <input type="number" min="0.01" step="0.01" :value="(asset.heightMm / 10).toFixed(2)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input studio-size-accent" :aria-label="`${asset.name} 高度厘米`" @change="setAssetSize(asset.id, 'heightMm', Number(($event.target as HTMLInputElement).value))" />
@@ -824,7 +830,7 @@ function downloadOnly(): void {
             <input type="number" min="0" max="359" step="1" inputmode="numeric" :value="asset.rotationDeg" :disabled="!!asset.lockedGroupId" class="studio-rotation-input" :aria-label="`${asset.name} 旋转角度`" @change="setRotation(asset.id, Number(($event.target as HTMLInputElement).value))" />
             <span aria-hidden="true">°</span>
           </label>
-          <button type="button" class="studio-remove-button" :aria-label="`移除 ${asset.name}`" @click="removeAsset(asset.id)">X</button>
+          <button type="button" class="studio-remove-button" :aria-label="`删除 ${asset.name}`" :disabled="exporting || uploading" title="从当前画板删除图片" @click="removeAsset(asset.id)">删除</button>
           <div class="flex basis-full items-center justify-between gap-2 text-[11px] leading-5" aria-live="polite">
             <span v-if="asset.lockedGroupId" class="text-[#c8bbff]">已锁组 · 已排 {{ placementCounts.get(asset.id) ?? 0 }} 个</span>
             <template v-else-if="asset.selected">
@@ -966,7 +972,9 @@ function downloadOnly(): void {
 .studio-rotation-input::-webkit-inner-spin-button, .studio-rotation-input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .studio-rotation-field span { padding-right: 5px; font-size: 11px; font-weight: 700; }
 .studio-rotation-field.is-disabled { opacity: .45; }
-.studio-remove-button { width: 20px; border-color: transparent; color: #7f91b7; font-size: 11px; }
+.studio-remove-button { min-width: 40px; padding: 0 6px; border-color: #85445d; color: #fda4af; font-size: 11px; }
+.studio-order-button { height: 30px; width: 24px; flex: 0 0 24px; border: 1px solid #40537a; border-radius: 5px; color: #d6c8ff; }
+.studio-order-button:disabled, .studio-remove-button:disabled { opacity: .4; }
 .studio-asset-lock:disabled { opacity: .45; }
 .studio-toolbar { display: flex; min-height: 38px; align-items: center; justify-content: center; border: 1px solid #d7dcf0; border-radius: 8px; padding: 4px; color: #334155; font-size: 12px; font-weight: 600; text-align: center; }
 .studio-toolbar.is-primary { border-color: #a78bfa; background: #a78bfa; color: #fff; }
