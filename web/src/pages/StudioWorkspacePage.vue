@@ -63,7 +63,7 @@ const preset = ref<PaperPreset>('A4')
 const orientation = ref<Orientation>('landscape')
 const customWidth = ref(293)
 const customHeight = ref(210)
-const dpi = ref(500)
+const dpi = ref(300)
 const mode = ref<LayoutMode>('custom')
 const grouping = ref<SmartGrouping>('free')
 const groupingOptions = [{ value: 'free', label: '尽量填满' }, { value: 'rows', label: '同类按行' }, { value: 'columns', label: '同类按列' }] as const
@@ -426,7 +426,7 @@ async function addFiles(files: FileList | null): Promise<void> {
   uploading.value = true
   const errors: string[] = []
   const added: StudioAsset[] = []
-  const importDpi = Number.isFinite(dpi.value) && dpi.value > 0 ? dpi.value : 500
+  const importDpi = Number.isFinite(dpi.value) && dpi.value > 0 ? dpi.value : 300
   let skipped = 0
   for (const file of Array.from(files)) {
     if (!['image/png', 'image/webp', 'image/jpeg'].includes(file.type)) { skipped += 1; continue }

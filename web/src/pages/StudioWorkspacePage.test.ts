@@ -466,7 +466,7 @@ describe('overflow artboards', () => {
     expect(html).toContain('一键导出全部 PNG')
   })
 
-  it('defaults to custom mode and imports original sizes without tying them to export DPI', async () => {
+  it('defaults to 300 DPI and imports original sizes without tying them to export DPI', async () => {
     const { state, cleanup } = mountWorkspace()
     class DecodedImage {
       naturalWidth = 1500
@@ -478,7 +478,6 @@ describe('overflow artboards', () => {
     vi.stubGlobal('Image', DecodedImage)
     try {
       expect(state.mode).toBe('custom')
-      state.dpi = 300
       await state.addFiles([new File(['no metadata'], 'plain.png', { type: 'image/png' })])
       expect(state.assets[0].widthMm).toBe(127)
       expect(state.assets[0].heightMm).toBe(63.5)
@@ -490,6 +489,10 @@ describe('overflow artboards', () => {
       await state.addFiles([new File([png], 'source.png', { type: 'image/png' })])
       expect(state.assets[1].widthMm).toBeCloseTo(127, 2)
       expect(state.assets[1].heightMm).toBeCloseTo(63.5, 2)
+      state.dpi = NaN
+      await state.addFiles([new File(['no metadata'], 'fallback.png', { type: 'image/png' })])
+      expect(state.assets[2].widthMm).toBe(127)
+      expect(state.assets[2].heightMm).toBe(63.5)
     } finally {
       state.assets.forEach((item: any) => URL.revokeObjectURL(item.url))
       cleanup()
@@ -532,6 +535,7 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.mode = 'smart'
+      state.dpi = 500
       state.assets = [asset('one', 5)]
       await nextTick()
       state.manualPlacements = [{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 40, heightMm: 40 }]
