@@ -1,4 +1,5 @@
-import { createRenderer, nextTick, ssrContextKey } from 'vue'
+import { createRenderer, createSSRApp, nextTick, ssrContextKey } from 'vue'
+import { renderToString } from 'vue/server-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import Workspace from './StudioWorkspacePage.vue'
 
@@ -28,6 +29,46 @@ describe('overflow artboards', () => {
     })
     return { state, asset, cleanup: () => { state.assets = []; state.boards = []; app.unmount() } }
   }
+
+  it('normalizes gap input to whole millimeters before rearranging', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 2, 40)]
+      const input = { valueAsNumber: 2.6, value: '2.6' }
+      state.onGapChange('x', { target: input })
+      await nextTick()
+      expect(state.gapXmm).toBe(3)
+      expect(input.value).toBe('3')
+      expect(state.placements[1].xMm - state.placements[0].xMm).toBe(43)
+      for (const [axis, value, expected] of [['y', -4, 0], ['x', 40.8, 30], ['y', 4.2, 4]] as const) {
+        state.onGapChange(axis, { target: { valueAsNumber: value, value: String(value) } })
+        expect(axis === 'x' ? state.gapXmm : state.gapYmm).toBe(expected)
+      }
+      state.onGapChange('y', { target: { valueAsNumber: NaN, value: '' } })
+      expect(state.gapYmm).toBe(4)
+      expect(state.mode).toBe('custom')
+    } finally { cleanup() }
+  })
+
+  it('renders the selected-image controls outside the canvas container', async () => {
+    const app = createSSRApp({
+      ...Workspace,
+      setup(props: any, context: any) {
+        const state = (Workspace as any).setup(props, context)
+        state.useContours.value = false
+        state.assets.value = [{ id: 'one', name: '图片', url: 'blob:one', width: 100, height: 100,
+          widthMm: 50, heightMm: 50, quantity: 1, selected: true, rotationDeg: 0, ratioLocked: true }]
+        state.adjusting.value = true
+        state.selectedPlacementIndex.value = 0
+        return state
+      },
+    })
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    const between = html.match(/<\/canvas>([\s\S]*?)<section\b[^>]*aria-label="选中图片调整"/)
+    expect(between).not.toBeNull()
+    expect(between![1].replace(/<!--[\s\S]*?-->/g, '').trim()).toBe('</div>')
+  })
 
   it('defaults to custom mode and imports original sizes without tying them to export DPI', async () => {
     const { state, cleanup } = mountWorkspace()

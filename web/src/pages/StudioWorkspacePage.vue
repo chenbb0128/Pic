@@ -239,6 +239,18 @@ function setOrientation(value: Orientation): void {
   customHeight.value = width
 }
 
+function onGapChange(axis: 'x' | 'y', event: Event): void {
+  const input = event.target as HTMLInputElement
+  const gap = axis === 'x' ? gapXmm : gapYmm
+  const value = input.valueAsNumber
+  if (Number.isFinite(value)) gap.value = Math.min(30, Math.max(0, Math.round(value)))
+  // Restore the displayed input too when normalization leaves the ref unchanged.
+  input.value = String(gap.value)
+  status.value = !Number.isFinite(value) || value !== gap.value
+    ? `间距仅支持 0～30 的整数毫米，当前为 ${gap.value}mm。`
+    : '已更新间距，并按当前模式重新排版。'
+}
+
 function updateAsset(id: string, change: Partial<StudioAsset>): void {
   assets.value = assets.value.map((asset) => asset.id === id ? { ...asset, ...change } : asset)
 }
@@ -639,10 +651,10 @@ function downloadOnly(): void {
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>
-        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；下方设置图案之间的间距。</p>
+        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案间距为 0～30 整数毫米，输入小数会四舍五入。</p>
         <div class="studio-gap-grid">
-          <label class="studio-gap-row"><span>↔</span><input v-model.number="gapXmm" type="range" min="0" max="30" step="0.5" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" /><input v-model.number="gapXmm" type="number" min="0" max="30" step="0.5" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" /><span>mm</span></label>
-          <label class="studio-gap-row"><span>↕</span><input v-model.number="gapYmm" type="range" min="0" max="30" step="0.5" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" /><input v-model.number="gapYmm" type="number" min="0" max="30" step="0.5" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" /><span>mm</span></label>
+          <label class="studio-gap-row"><span>↔</span><input :value="gapXmm" type="range" min="0" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" @input="onGapChange('x', $event)" /><input :value="gapXmm" type="number" min="0" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" @change="onGapChange('x', $event)" /><span>mm</span></label>
+          <label class="studio-gap-row"><span>↕</span><input :value="gapYmm" type="range" min="0" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" @input="onGapChange('y', $event)" /><input :value="gapYmm" type="number" min="0" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" @change="onGapChange('y', $event)" /><span>mm</span></label>
           <label class="studio-auto-gap"><input v-model="autoGap" type="checkbox" />自动</label>
         </div>
       </section>
@@ -716,19 +728,19 @@ function downloadOnly(): void {
       </div>
       <div class="relative flex min-h-[45dvh] min-w-0 flex-1 items-center justify-center overflow-auto rounded-2xl bg-slate-800 p-3 sm:min-h-[480px] sm:p-6 lg:min-h-0">
         <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas block h-auto max-h-[calc(100dvh-260px)] max-w-full shadow-2xl lg:max-h-full" :class="[`bg-${background}`, { 'is-adjusting': adjusting }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" />
-        <div v-if="adjusting && selectedPlacement" class="absolute bottom-4 left-1/2 z-10 w-[min(92%,22rem)] -translate-x-1/2 rounded-xl border border-amber-400 bg-slate-900 p-3 text-white shadow-2xl">
-          <div class="flex items-center justify-between gap-2 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-2 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
-          <p v-if="selectedLocked" class="mt-2 text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
-          <div v-else class="mt-2 flex items-center justify-center gap-2 text-xs">
-            <span class="shrink-0">宽度</span>
-            <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="缩小选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
-            <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900" :value="(selectedPlacement.widthMm / 10).toFixed(1)" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
-            <span class="shrink-0">cm</span>
-            <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="放大选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
-          </div>
-          <p class="mt-2 text-center text-[11px] text-slate-400">拖动画布上的图片调整位置</p>
-        </div>
       </div>
+      <section v-if="adjusting && selectedPlacement" aria-label="选中图片调整" class="shrink-0 rounded-xl border border-amber-400 bg-slate-900 p-3 text-white">
+        <div class="flex items-center justify-between gap-2 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-2 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
+        <p v-if="selectedLocked" class="mt-2 text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
+        <div v-else class="mt-2 flex items-center justify-center gap-2 text-xs">
+          <span class="shrink-0">宽度</span>
+          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="缩小选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
+          <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900" :value="(selectedPlacement.widthMm / 10).toFixed(1)" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
+          <span class="shrink-0">cm</span>
+          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="放大选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
+        </div>
+        <p class="mt-2 text-center text-[11px] text-slate-400">拖动画布上的图片调整位置</p>
+      </section>
       <div class="sticky bottom-2 z-10 space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg lg:static">
         <p class="text-xs text-slate-600" aria-live="polite">{{ status }}</p>
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
