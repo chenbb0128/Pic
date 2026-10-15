@@ -13,6 +13,7 @@ export interface LayoutItem {
   heightMm: number
   quantity: number
   selected: boolean
+  important?: boolean
 }
 export interface Placement {
   itemId: string

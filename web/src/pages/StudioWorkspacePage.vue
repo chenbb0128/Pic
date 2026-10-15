@@ -17,6 +17,7 @@ interface StudioAsset extends LocalImage {
   heightMm: number
   quantity: number
   selected: boolean
+  important: boolean
   ratioLocked: boolean
   rotationDeg: number
   lockedGroupId?: string
@@ -91,6 +92,7 @@ const layout = computed(() => arrangeItems({
     ...rotatedBounds(asset.widthMm, asset.heightMm, asset.rotationDeg),
     quantity: asset.quantity,
     selected: asset.selected && !asset.lockedGroupId,
+    important: asset.important,
   })),
 }))
 function overlaps(a: Placement, b: Placement): boolean {
@@ -149,7 +151,15 @@ function setQuantity(id: string, value: number): void {
   }
   updateAsset(id, { quantity: Math.min(500, Math.max(0, Math.floor(value))) })
   mode.value = 'smart'
-  status.value = '已智能填充：大图优先，小图补空；数量为上限。'
+  status.value = '已智能填充：优先满足标记图案的数量，剩余空间大图先排、小图补空。'
+}
+
+function toggleImportant(id: string): void {
+  const asset = assets.value.find((item) => item.id === id)
+  if (!asset || asset.lockedGroupId) return
+  updateAsset(id, { important: !asset.important })
+  mode.value = 'smart'
+  status.value = asset.important ? '已取消优先，按当前优先级重新填充。' : '已设为优先：先尽量排满该图案的目标数量，再填充其他图案。'
 }
 
 function setRotation(id: string, value: number): void {
@@ -197,7 +207,7 @@ async function addFiles(files: FileList | null): Promise<void> {
     if (!['image/png', 'image/webp', 'image/jpeg'].includes(file.type)) { skipped += 1; continue }
     try {
       const image = await loadLocalImage(file)
-      added.push({ ...image, ...fitSizeMm(image.width, image.height, 50), quantity: 1, selected: true, ratioLocked: true, rotationDeg: 0 })
+      added.push({ ...image, ...fitSizeMm(image.width, image.height, 50), quantity: 1, selected: true, important: false, ratioLocked: true, rotationDeg: 0 })
     } catch (error) {
       errors.push(error instanceof Error ? error.message : `${file.name} 读取失败。`)
     }
@@ -377,7 +387,7 @@ function resetLayout(): void {
   manualPlacements.value = null
   selectedPlacementIndex.value = null
   adjusting.value = false
-  status.value = mode.value === 'smart' ? '已重新智能填充：大图优先，小图补空；锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
+  status.value = mode.value === 'smart' ? '已按优先级重新智能填充；同级大图先排、小图补空，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
 }
 
 function cycleBackground(): void {
@@ -494,9 +504,9 @@ function downloadOnly(): void {
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">管理模式</h2>
         <div class="grid grid-cols-4 gap-1">
-          <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '按数量逐行' }, { value: 'smart', label: '智能填充', hint: '大图先排·小图补空' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
+          <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '按数量逐行' }, { value: 'smart', label: '智能填充', hint: '优先图案先排' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
         </div>
-        <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">按数量上限尽量排入，优先大图，再用小图填空；保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
+        <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">先尽量满足 ★ 优先图案的数量，再填充其他图案；同级大图先排、小图补空，保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>
@@ -525,7 +535,7 @@ function downloadOnly(): void {
       <section class="min-h-[190px] border-b border-[#31415f] px-4 py-3">
         <h2 class="text-xs font-medium text-[#a9bbe1]">图片明细 <span class="text-[11px] text-[#8098c5]">（勾选后排版；尺寸单位 cm）</span></h2>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
-        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">修改数量后智能填充，数量为上限；0 表示不排入，最多 500 份。</p>
+        <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">点击 ☆ 优先可优先满足该图案数量；数量为上限，0 表示不排入，最多 500 份。</p>
         <div v-if="bulkOpen" class="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-lg border border-[#40537a] p-2 text-[11px] text-[#a9bbe1]">
           <label>长边 cm<input v-model.number="bulkLongEdgeCm" type="number" min="0.1" max="42" step="0.1" class="studio-input mt-1 w-full" /></label>
           <label>数量<input v-model.number="bulkQuantity" type="number" min="0" max="500" class="studio-input mt-1 w-full" /></label>
@@ -535,6 +545,7 @@ function downloadOnly(): void {
           <input type="checkbox" :checked="asset.selected" :disabled="!!asset.lockedGroupId" :aria-label="`选择 ${asset.name}`" @change="updateAsset(asset.id, { selected: ($event.target as HTMLInputElement).checked })" />
           <img :src="asset.url" :alt="asset.name" :title="`${asset.name} · ${asset.width}×${asset.height}px`" class="studio-asset-thumb" />
           <div class="studio-asset-meta" :title="asset.name"><span>{{ asset.width }}×{{ asset.height }}</span><small v-if="asset.lockedGroupId">已锁组</small></div>
+          <button type="button" class="h-[30px] shrink-0 rounded border px-1.5 text-[11px] disabled:opacity-40" :class="asset.important ? 'border-amber-300 bg-amber-300 text-slate-950' : 'border-[#40537a] text-[#a9bbe1]'" :aria-label="`${asset.name} 优先排版`" :aria-pressed="asset.important" :disabled="!!asset.lockedGroupId" :title="asset.important ? '已设为优先，点击取消' : '先尽量满足该图案的目标数量'" @click="toggleImportant(asset.id)">{{ asset.important ? '★ 优先' : '☆ 优先' }}</button>
           <input type="number" min="0.1" max="42" step="0.1" :value="(asset.widthMm / 10).toFixed(1)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input" :aria-label="`${asset.name} 宽度厘米`" @change="setAssetSize(asset.id, 'widthMm', Number(($event.target as HTMLInputElement).value))" />
           <button type="button" class="studio-asset-lock" :disabled="!!asset.lockedGroupId" :aria-label="asset.ratioLocked ? '解锁尺寸比例' : '锁定尺寸比例'" @click="updateAsset(asset.id, { ratioLocked: !asset.ratioLocked })">{{ asset.ratioLocked ? '🔒' : '🔓' }}</button>
           <input type="number" min="0.1" max="42" step="0.1" :value="(asset.heightMm / 10).toFixed(1)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input studio-size-accent" :aria-label="`${asset.name} 高度厘米`" @change="setAssetSize(asset.id, 'heightMm', Number(($event.target as HTMLInputElement).value))" />

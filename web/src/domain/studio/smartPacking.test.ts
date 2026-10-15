@@ -18,6 +18,51 @@ function expectValidLayout(placements: Placement[], paper: PaperSize, gapXmm: nu
 }
 
 describe('smart quantity packing', () => {
+  it('satisfies important small patterns before ordinary large patterns', () => {
+    const paper = { widthMm: 100, heightMm: 60 }
+    const result = arrangeItems({
+      paper, gapMm: 4, mode: 'smart',
+      items: [
+        { id: 'large', widthMm: 60, heightMm: 40, quantity: 1, selected: true },
+        { id: 'important', widthMm: 20, heightMm: 20, quantity: 4, selected: true, important: true },
+      ],
+    })
+    expect(result.placements.map((slot) => slot.itemId)).toEqual(Array(4).fill('important'))
+    expect(result.overflow).toBe(1)
+    expectValidLayout(result.placements, paper, 4, 4)
+  })
+
+  it('orders important patterns by area and fills remaining space without exceeding quantities', () => {
+    const paper = { widthMm: 100, heightMm: 100 }
+    const result = arrangeItems({
+      paper, gapMm: 4, mode: 'smart',
+      items: [
+        { id: 'ordinary', widthMm: 50, heightMm: 40, quantity: 1, selected: true },
+        { id: 'important-small', widthMm: 20, heightMm: 20, quantity: 2, selected: true, important: true },
+        { id: 'important-large', widthMm: 40, heightMm: 30, quantity: 1, selected: true, important: true },
+      ],
+    })
+    expect(result.placements.map((slot) => slot.itemId)).toEqual([
+      'important-large', 'important-small', 'important-small', 'ordinary',
+    ])
+    expect(result.overflow).toBe(0)
+    expectValidLayout(result.placements, paper, 4, 4)
+  })
+
+  it('continues filling with ordinary patterns when an important pattern cannot fit', () => {
+    const paper = { widthMm: 100, heightMm: 60 }
+    const result = arrangeItems({
+      paper, gapMm: 4, mode: 'smart',
+      items: [
+        { id: 'oversized', widthMm: 95, heightMm: 10, quantity: 2, selected: true, important: true },
+        { id: 'ordinary', widthMm: 20, heightMm: 20, quantity: 4, selected: true },
+      ],
+    })
+    expect(result.placements.map((slot) => slot.itemId)).toEqual(Array(4).fill('ordinary'))
+    expect(result.overflow).toBe(2)
+    expectValidLayout(result.placements, paper, 4, 4)
+  })
+
   it('prioritizes 20 large patterns and fills side gaps from the 100 small patterns regardless of upload order', () => {
     const paper = { widthMm: 293, heightMm: 210 }
     const result = arrangeItems({

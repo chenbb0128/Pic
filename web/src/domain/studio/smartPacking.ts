@@ -40,7 +40,7 @@ export function arrangeSmartItems(
   const ordered = items.filter((item) => item.selected).map((item) => ({
     ...item,
     quantity: Number.isFinite(item.quantity) ? Math.min(500, Math.max(0, Math.floor(item.quantity))) : 0,
-  })).sort((a, b) => b.widthMm * b.heightMm - a.widthMm * a.heightMm)
+  })).sort((a, b) => Number(!!b.important) - Number(!!a.important) || b.widthMm * b.heightMm - a.widthMm * a.heightMm)
   const requested = ordered.reduce((sum, item) => sum + item.quantity, 0)
   const placements: Placement[] = []
   if (!Number.isFinite(paper.widthMm) || !Number.isFinite(paper.heightMm) || paper.widthMm <= PAPER_MARGIN_MM * 2 || paper.heightMm <= PAPER_MARGIN_MM * 2) {
