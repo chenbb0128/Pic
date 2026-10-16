@@ -12,12 +12,127 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('only arranges on click and keeps committed geometry when adding images or editing settings', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('first', 2, 20)]
+      await nextTick()
+      expect(state.placements).toEqual([])
+      expect(state.layoutPending).toBe(true)
+      state.resetLayout()
+      const before = JSON.parse(JSON.stringify(state.placements))
+      state.assets = [...state.assets, asset('new', 1, 10)]
+      state.setAssetSize('first', 'widthMm', 3)
+      state.setQuantity('first', 3)
+      state.gapXmm = 4
+      state.mode = 'neat'
+      await nextTick()
+      expect(state.placements).toEqual(before)
+      expect(state.overviewBoards[0].placements).toEqual(before)
+      expect(state.overviewBoards[0].assets[0].widthMm).toBe(20)
+      expect(state.layoutPending).toBe(true)
+      state.resetLayout()
+      expect(state.layoutPending).toBe(false)
+      expect(state.placementCounts.get('first')).toBe(3)
+      expect(state.placementCounts.get('new')).toBe(1)
+      expect(state.placements.find((p: any) => p.itemId === 'first').widthMm).toBe(30)
+    } finally { cleanup() }
+  })
+
+  it('removes only deleted copies and preserves manual positions through lock and unlock', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('first', 1, 20), asset('second', 1, 20)]
+      state.resetLayout()
+      state.manualPlacements = [
+        { itemId: 'first', xMm: 12, yMm: 17, widthMm: 20, heightMm: 20 },
+        { itemId: 'second', xMm: 55, yMm: 36, widthMm: 20, heightMm: 20 },
+      ]
+      const before = JSON.parse(JSON.stringify(state.placements))
+      state.lockSelected()
+      expect(state.placements).toEqual(before)
+      state.unlockGroup(state.groups[0].id)
+      expect(state.placements).toEqual(before)
+      state.removeAsset('first')
+      await nextTick()
+      expect(state.placements).toEqual([before[1]])
+    } finally { cleanup() }
+  })
+
+  it('does not lock newly added pending images that have no placed copies yet', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = 'neat'
+      state.assets = [asset('placed', 1, 20)]
+      state.resetLayout()
+      state.assets = [...state.assets, asset('pending', 1, 10)]
+      state.lockSelected()
+      expect(state.assets.find((item: any) => item.id === 'pending').lockedGroupId).toBeUndefined()
+      expect(state.assets.find((item: any) => item.id === 'pending').selected).toBe(true)
+      state.resetLayout()
+      expect(state.placementCounts.get('pending')).toBe(1)
+    } finally { cleanup() }
+  })
+
+  it('renders committed dimensions and angle without selection guides when exporting pending edits', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [{ ...asset('one', 1, 20), ratioLocked: false }]
+      state.resetLayout()
+      state.setAssetSize('one', 'heightMm', 4)
+      state.setRotation('one', 90)
+      state.adjusting = true
+      state.selectedPlacementIndices = [0]
+      state.boxSelection = { pointerId: 1, startXmm: 0, startYmm: 0, xMm: 100, yMm: 100 }
+      const context = { clearRect() {}, save() {}, restore() {}, rotate: vi.fn(), translate() {}, drawImage: vi.fn() }
+      state.render(context, 108, 108, false)
+      expect(context.rotate).toHaveBeenCalledExactlyOnceWith(0)
+      expect(context.drawImage).toHaveBeenCalledExactlyOnceWith(state.assets[0].image, -10, -10, 20, 20)
+      expect(state.layoutPending).toBe(true)
+    } finally { cleanup() }
+  })
+
+  it.each(['mouse', 'touch'])('box-selects instances and spaces them without rearranging other images using %s', async pointerType => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
+      setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
+    const event = (x: number, y: number, type = 'pointermove') => ({ clientX: x, clientY: y, pointerId: 1,
+      pointerType, button: 0, isPrimary: true, type, preventDefault() {} })
+    try {
+      state.assets = [asset('one', 4, 10)]
+      state.resetLayout()
+      state.manualPlacements = [
+        { itemId: 'one', xMm: 10, yMm: 10, widthMm: 10, heightMm: 10 },
+        { itemId: 'one', xMm: 35, yMm: 20, widthMm: 20, heightMm: 20 },
+        { itemId: 'one', xMm: 80, yMm: 15, widthMm: 10, heightMm: 10 },
+        { itemId: 'one', xMm: 10, yMm: 70, widthMm: 10, heightMm: 10 },
+      ]
+      state.preview = canvas
+      state.adjusting = true
+      state.adjustTool = 'select'
+      state.onPointerDown(event(5, 5, 'pointerdown'))
+      state.onPointerMove(event(95, 50))
+      state.onPointerEnd(event(95, 50, 'pointerup'))
+      expect(state.selectedPlacementIndices).toEqual([0, 1, 2])
+      state.distributeSelected('x')
+      expect(state.placements.map((p: any) => [p.xMm, p.yMm])).toEqual([[10, 20], [40, 15], [80, 20], [10, 70]])
+      expect(state.layoutPending).toBe(false)
+      state.onPointerDown(event(5, 5, 'pointerdown'))
+      state.onPointerEnd(event(95, 100, 'pointercancel'))
+      expect(state.boxSelection).toBeNull()
+      state.adjusting = false
+      await nextTick()
+      expect(state.selectedPlacementIndices).toEqual([])
+    } finally { state.preview = null; cleanup() }
+  })
+
   it('deletes an earlier inactive board without changing the active layout or shared images', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     const revoke = vi.spyOn(URL, 'revokeObjectURL')
     vi.stubGlobal('window', { confirm: () => true })
     try {
       state.assets = [asset('shared', 9)]
+      state.resetLayout()
       state.createRemainingBoard()
       state.createRemainingBoard()
       state.manualPlacements = [{ itemId: 'shared', xMm: 7, yMm: 8, widthMm: 30, heightMm: 30 }]
@@ -49,6 +164,7 @@ describe('overflow artboards', () => {
     vi.stubGlobal('window', { confirm: () => true })
     try {
       state.assets = [asset('shared', 9)]
+      state.resetLayout()
       state.createRemainingBoard()
       state.lockSelected()
       const neighbor = JSON.stringify(state.placements)
@@ -80,6 +196,7 @@ describe('overflow artboards', () => {
     vi.stubGlobal('window', { confirm: () => false })
     try {
       state.assets = [asset('one', 5)]
+      state.resetLayout()
       state.createRemainingBoard()
       const before = JSON.stringify(state.overviewBoards)
       state.removeBoard(1)
@@ -122,6 +239,7 @@ describe('overflow artboards', () => {
       expect(state.assets[0].gapXmm).toBe(3)
       state.setAssetGap('one', 'y', { target: { valueAsNumber: 0, value: '0' } })
       state.setAssetNewRow('one', true)
+      state.resetLayout()
       await nextTick()
       expect(state.assets[0].startNewRow).toBe(true)
       expect(state.placements).toHaveLength(2)
@@ -129,12 +247,14 @@ describe('overflow artboards', () => {
       await nextTick()
       expect(state.assets[0]).toMatchObject({ gapXmm: 3, gapYmm: 0, startNewRow: true, quantity: 3 })
       state.mode = 'smart'
+      state.resetLayout()
       await nextTick()
       expect(state.placements).toHaveLength(3)
       state.setAssetGap('one', 'x', { target: { valueAsNumber: 12, value: '12' } })
       expect(state.assets[0].gapXmm).toBe(3)
       state.mode = 'custom'
       state.setAssetGap('one', 'x', { target: { valueAsNumber: NaN, value: '' } })
+      state.resetLayout()
       await nextTick()
       expect(state.assets[0].gapXmm).toBeUndefined()
       expect(state.placements).toHaveLength(3)
@@ -155,16 +275,20 @@ describe('overflow artboards', () => {
         state.mode = mode
         state.grouping = grouping
         state.assets = [{ ...asset('first', 4), important: false }, { ...asset('second', 1, 100), important: true }]
+        state.resetLayout()
         await nextTick()
         expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
         state.reorderAsset('second', 0)
         await nextTick()
         expect(state.assets.map((a: any) => a.id)).toEqual(['second', 'first'])
+        expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
+        state.resetLayout()
         expect(state.placements.map((p: any) => p.itemId)).toEqual(['second'])
         state.reorderAsset('second', -1)
         state.reorderAsset('missing', 1)
         expect(state.assets.map((a: any) => a.id)).toEqual(['second', 'first'])
         state.reorderAsset('second', 1)
+        state.resetLayout()
         await nextTick()
         expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('first'))
         expect(state.mode).toBe(mode)
@@ -176,6 +300,7 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [asset('first', 1), asset('second', 1)]
+      state.resetLayout()
       await nextTick()
       state.lockSelected()
       state.removeAsset('first')
@@ -193,6 +318,7 @@ describe('overflow artboards', () => {
       clientX: 350, clientY, currentTarget: handle, preventDefault() {} })
     try {
       state.assets = [asset('A', 4), asset('B', 1, 100), asset('C', 1, 100)]
+      state.resetLayout()
       for (const [index, id] of ['A', 'B', 'C'].entries()) {
         state.setAssetRow(id, { getBoundingClientRect: () => ({ top: index * 100, bottom: (index + 1) * 100, left: 0, right: 400, height: 100 }) })
       }
@@ -206,6 +332,8 @@ describe('overflow artboards', () => {
       state.finishAssetDrag(event(10))
       await nextTick()
       expect(state.assets.map((a: any) => a.id)).toEqual(['C', 'A', 'B'])
+      expect(state.placements.map((p: any) => p.itemId)).toEqual(Array(4).fill('A'))
+      state.resetLayout()
       expect(state.placements.map((p: any) => p.itemId)).toEqual(['C'])
       expect(state.assetDrag).toBeNull()
       state.reorderAsset('C', 2)
@@ -253,6 +381,7 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [asset('A', 1), { ...asset('B', 1), selected: false }, { ...asset('C', 1), selected: false }]
+      state.resetLayout()
       state.lockSelected()
       const locked = JSON.stringify(state.placements)
       const handle = { isConnected: true, focus: vi.fn() }
@@ -318,6 +447,7 @@ describe('overflow artboards', () => {
     vi.setSystemTime(new Date('2026-10-15T17:20:00Z'))
     try {
       state.assets = [{ ...asset('one', 5), ratioLocked: false }]
+      state.resetLayout()
       state.dpi = 254
       await nextTick()
       state.createRemainingBoard()
@@ -365,6 +495,7 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [asset('one', 5)]
+      state.resetLayout()
       state.dpi = 0
       await nextTick()
       state.createRemainingBoard()
@@ -431,6 +562,7 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [asset('one', 5)]
+      state.resetLayout()
       await nextTick()
       state.lockSelected()
       state.createRemainingBoard()
@@ -466,6 +598,7 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [{ ...asset('one', 5), ratioLocked: false }]
+      state.resetLayout()
       await nextTick()
       state.createRemainingBoard()
       await nextTick()
@@ -493,6 +626,8 @@ describe('overflow artboards', () => {
       state.assets = [asset('one', 2, 40)]
       const input = { valueAsNumber: 2.6, value: '2.6' }
       state.onGapChange('x', { target: input })
+      expect(state.placements).toEqual([])
+      state.resetLayout()
       await nextTick()
       expect(state.gapXmm).toBe(3)
       expect(input.value).toBe('3')
@@ -515,6 +650,7 @@ describe('overflow artboards', () => {
         state.useContours.value = false
         state.assets.value = [{ id: 'one', name: '图片', url: 'blob:one', width: 100, height: 100,
           widthMm: 50, heightMm: 50, quantity: 1, selected: true, rotationDeg: 0, ratioLocked: true }]
+        state.resetLayout()
         state.adjusting.value = true
         state.selectedPlacementIndex.value = 0
         return state
@@ -540,6 +676,7 @@ describe('overflow artboards', () => {
         state.gapYmm.value = 0
         state.assets.value = [{ id: 'one', name: '图片', url: 'blob:one', width: 100, height: 100,
           widthMm: 50, heightMm: 50, quantity: 5, selected: true, rotationDeg: 0, ratioLocked: true }]
+        state.resetLayout()
         state.createRemainingBoard()
         state.overviewOpen.value = true
         return state
@@ -594,6 +731,7 @@ describe('overflow artboards', () => {
       state.mode = mode
       state.grouping = 'rows'
       state.assets = [asset('one', 9)]
+      state.resetLayout()
       await nextTick()
       expect(state.placements).toHaveLength(4)
       state.createRemainingBoard()
@@ -668,6 +806,7 @@ describe('overflow artboards', () => {
     try {
       state.mode = mode
       state.assets = [asset('one', 5)]
+      state.resetLayout()
       await nextTick()
       state.lockSelected()
       await nextTick()
@@ -688,6 +827,7 @@ describe('overflow artboards', () => {
     try {
       state.mode = 'custom'
       state.assets = [asset('first', 3), asset('second', 6), { ...asset('unchecked', 10), selected: false }]
+      state.resetLayout()
       await nextTick()
       expect(state.placementCounts.get('first')).toBe(3)
       expect(state.placementCounts.get('second')).toBe(1)
@@ -709,6 +849,7 @@ describe('overflow artboards', () => {
     try {
       state.mode = 'custom'
       state.assets = [{ ...asset('one', 5), url }]
+      state.resetLayout()
       await nextTick()
       state.createRemainingBoard()
       await nextTick()
@@ -748,6 +889,8 @@ describe('workspace editing preserves the selected layout mode', () => {
       expect(state.assets[0].widthMm).toBe(40)
       expect(state.assets[0].quantity).toBe(2)
       await nextTick()
+      expect(state.placements).toEqual([])
+      state.resetLayout()
       expect(state.placements.length).toBeGreaterThan(0)
       if (mode === 'custom' || mode === 'smart' || mode === 'neat') expect(state.placements).toHaveLength(2)
     } finally {

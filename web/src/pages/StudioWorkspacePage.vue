@@ -5,7 +5,7 @@ import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSiz
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
 import { imageSizePresets } from '../domain/studio/imageSizeConversion'
 import { arrangeItems, customItemGap, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
-import { resizePlacement } from '../domain/studio/placementAdjustments'
+import { distributePlacements, resizePlacement, selectPlacementsInBox } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
@@ -47,6 +47,14 @@ interface AssetDragState {
   targetIndex: number | null
 }
 
+interface BoxSelection {
+  pointerId: number
+  startXmm: number
+  startYmm: number
+  xMm: number
+  yMm: number
+}
+
 interface StudioBoard {
   preset: PaperPreset
   orientation: Orientation
@@ -62,6 +70,9 @@ interface StudioBoard {
   assets: StudioAsset[]
   groups: LockedGroup[]
   manualPlacements: Placement[]
+  placedAssets: StudioAsset[]
+  layoutPending: boolean
+  layoutOverflow: number
 }
 
 interface BoardScene {
@@ -84,7 +95,11 @@ const autoGap = ref(false)
 const useContours = ref(true)
 const assets = shallowRef<StudioAsset[]>([])
 const groups = shallowRef<LockedGroup[]>([])
-const manualPlacements = shallowRef<Placement[] | null>(null)
+// Draft settings never drive the canvas directly. Only an explicit layout commits them.
+const manualPlacements = shallowRef<Placement[]>([])
+const placedAssets = shallowRef<StudioAsset[]>([])
+const layoutPending = ref(false)
+const layoutOverflow = ref(0)
 const preview = ref<HTMLCanvasElement | null>(null)
 const fileInput = ref<HTMLInputElement | null>(null)
 const folderInput = ref<HTMLInputElement | null>(null)
@@ -97,6 +112,9 @@ const exporting = ref(false)
 const exportProgress = ref<number | null>(null)
 const batchExportLabel = ref('')
 const adjusting = ref(false)
+const adjustTool = ref<'move' | 'select'>('move')
+const boxSelection = shallowRef<BoxSelection | null>(null)
+const selectedPlacementIndices = ref<number[]>([])
 const background = ref<'checker' | 'white' | 'dark'>('checker')
 const drag = ref<DragState | null>(null)
 const assetDrag = ref<AssetDragState | null>(null)
@@ -105,7 +123,7 @@ const sidebar = ref<HTMLElement | null>(null)
 let assetDragHandle: HTMLElement | null = null
 let assetScrollFrame: number | null = null
 const selectedPlacementIndex = ref<number | null>(null)
-const status = ref('选择图片并设置尺寸后，画布会实时显示排版。')
+const status = ref('添加图片并设置尺寸后，点击「排版」生成排版；后续修改不会自动重排。')
 const generated = ref<{ url: string; name: string; size: number } | null>(null)
 const orderCopied = ref(false)
 const manualCopy = ref(false)
@@ -155,7 +173,6 @@ function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
     })),
   })
 }
-const layout = computed(() => arrangeAssets(assets.value, lockedPlacements.value))
 function overlaps(a: Placement, b: Placement): boolean {
   const first = assets.value.find(asset => asset.id === a.itemId)
   const second = assets.value.find(asset => asset.id === b.itemId)
@@ -166,9 +183,13 @@ function overlaps(a: Placement, b: Placement): boolean {
   return a.xMm < b.xMm + b.widthMm + gapX && a.xMm + a.widthMm + gapX > b.xMm &&
     a.yMm < b.yMm + b.heightMm + gapY && a.yMm + a.heightMm + gapY > b.yMm
 }
-const normalAuto = computed(() => mode.value === 'smart' || mode.value === 'neat' ? layout.value.placements : layout.value.placements.filter((placement) =>
-  lockedPlacements.value.every((locked) => !overlaps(placement, locked))))
-const placements = computed(() => [...lockedPlacements.value, ...(manualPlacements.value ?? normalAuto.value)])
+function calculateLayout(source: StudioAsset[], reserved: Placement[]) {
+  const result = arrangeAssets(source, reserved)
+  const normal = mode.value === 'smart' || mode.value === 'neat' ? result.placements : result.placements.filter(slot =>
+    reserved.every(locked => !overlaps(slot, locked)))
+  return { placements: normal, overflow: result.overflow + result.placements.length - normal.length }
+}
+const placements = computed(() => [...lockedPlacements.value, ...manualPlacements.value])
 const paperMarginError = computed(() => placements.value.some((slot) =>
   slot.xMm < PAPER_MARGIN_MM - 1e-6 || slot.yMm < PAPER_MARGIN_MM - 1e-6 ||
   slot.xMm + slot.widthMm > paper.value.widthMm - PAPER_MARGIN_MM + 1e-6 ||
@@ -193,7 +214,7 @@ const remainingAssets = computed(() => countMode.value ? assets.value
   })).filter((asset) => asset.quantity > 0) : [])
 const overflow = computed(() => countMode.value
   ? remainingAssets.value.reduce((sum, asset) => sum + asset.quantity, 0)
-  : layout.value.overflow + layout.value.placements.length - normalAuto.value.length)
+  : layoutOverflow.value)
 const previewWidth = 1200
 const previewHeight = computed(() => Math.round(previewWidth * paper.value.heightMm / paper.value.widthMm))
 const selectedCount = computed(() => assets.value.filter((asset) => asset.selected && !asset.lockedGroupId).length)
@@ -206,7 +227,9 @@ function snapshotBoard(): StudioBoard {
     autoGap: autoGap.value, useContours: useContours.value,
     assets: assets.value.map((asset) => ({ ...asset })),
     groups: groups.value.map((group) => ({ ...group, itemIds: [...group.itemIds], placements: group.placements.map((slot) => ({ ...slot })) })),
-    manualPlacements: (manualPlacements.value ?? normalAuto.value).map((slot) => ({ ...slot })),
+    manualPlacements: manualPlacements.value.map((slot) => ({ ...slot })),
+    placedAssets: placedAssets.value.map(asset => ({ ...asset })),
+    layoutPending: layoutPending.value, layoutOverflow: layoutOverflow.value,
   }
 }
 
@@ -218,7 +241,7 @@ const overviewBoards = computed(() => boards.value.flatMap((saved, index) => {
     preset: board.preset,
     dpi: board.dpi,
     paper: orientedPaperSize(board.preset, board.orientation, board.customWidth, board.customHeight),
-    assets: board.assets,
+    assets: board.placedAssets,
     placements: [...flattenGroups(board.groups), ...board.manualPlacements],
   }]
 }))
@@ -267,6 +290,9 @@ function selectBoard(index: number): void {
     assets.value = saved.assets.map((asset) => ({ ...asset }))
     groups.value = saved.groups
     manualPlacements.value = saved.manualPlacements.map((slot) => ({ ...slot }))
+    placedAssets.value = saved.placedAssets.map(asset => ({ ...asset }))
+    layoutPending.value = saved.layoutPending
+    layoutOverflow.value = saved.layoutOverflow
   } finally { switchingBoard = false }
   adjusting.value = false
   overviewOpen.value = false
@@ -281,17 +307,18 @@ function createRemainingBoard(): void {
   if (!countMode.value || exporting.value || uploading.value) return
   const remaining = remainingAssets.value
   if (!remaining.length) { status.value = '当前画板的目标数量已全部排入，没有剩余图片。'; return }
-  const nextLayout = arrangeAssets(remaining, [])
+  const nextLayout = calculateLayout(remaining, [])
   if (!nextLayout.placements.length) {
     status.value = '剩余图片的尺寸超出当前纸张可用范围（四周留边 4mm），请减小尺寸或更换纸张；未创建空画板。'
     return
   }
-  const currentPlacements = (manualPlacements.value ?? normalAuto.value).map((slot) => ({ ...slot }))
+  const pending = layoutPending.value
   const moved = new Map(remaining.map((asset) => [asset.id, asset.quantity]))
   assets.value = assets.value.map((asset) => moved.has(asset.id)
     ? { ...asset, quantity: Math.max(0, asset.quantity - moved.get(asset.id)!) } : asset)
-  manualPlacements.value = currentPlacements
-  const nextBoard: StudioBoard = { ...snapshotBoard(), assets: remaining, groups: [], manualPlacements: nextLayout.placements }
+  layoutPending.value = pending
+  const nextBoard: StudioBoard = { ...snapshotBoard(), assets: remaining, groups: [], manualPlacements: nextLayout.placements,
+    placedAssets: remaining.map(asset => ({ ...asset })), layoutPending: false, layoutOverflow: nextLayout.overflow }
   boards.value = [...boards.value, nextBoard]
   selectBoard(boards.value.length - 1)
   controlsOpen.value = false
@@ -339,7 +366,7 @@ function onGapChange(axis: 'x' | 'y', event: Event): void {
   input.value = String(gap.value)
   status.value = !Number.isFinite(value) || value !== gap.value
     ? `间距仅支持 0～30 的整数毫米，当前为 ${gap.value}mm。`
-    : '已更新间距，并按当前模式重新排版。'
+    : '已保存间距，点击「排版」后应用。'
 }
 
 function updateAsset(id: string, change: Partial<StudioAsset>): void {
@@ -355,14 +382,14 @@ function setAssetGap(id: string, axis: 'x' | 'y', event: Event): void {
   const normalized = value === undefined ? undefined : Number.isFinite(value) ? Math.min(30, Math.max(0, Math.round(value))) : asset[key]
   input.value = normalized === undefined ? '' : String(normalized)
   updateAsset(id, { [key]: normalized })
-  status.value = '已按定制模式更新间距；留空跟随全局，支持 0～30 的整数毫米，相邻图案取较大值。'
+  status.value = '已保存定制间距，点击「排版」后应用；留空跟随全局，相邻图案取较大值。'
 }
 
 function setAssetNewRow(id: string, value: boolean): void {
   const asset = assets.value.find(item => item.id === id)
   if (!asset || asset.lockedGroupId || mode.value !== 'custom' || exporting.value || uploading.value) return
   updateAsset(id, { startNewRow: value })
-  status.value = value ? '该图案从新的一行开始，后续副本正常连续排列。' : '已取消另起一行，按定制模式连续排列。'
+  status.value = value ? '已设置另起一行，点击「排版」后应用。' : '已取消另起一行，点击「排版」后应用。'
 }
 
 function setAssetSize(id: string, edge: 'widthMm' | 'heightMm', valueCm: number): void {
@@ -370,6 +397,7 @@ function setAssetSize(id: string, edge: 'widthMm' | 'heightMm', valueCm: number)
   if (!asset || asset.lockedGroupId) return
   try {
     updateAsset(id, resizeAssetSize(asset, asset.width, asset.height, edge, valueCm * 10, asset.ratioLocked))
+    status.value = '已保存图片尺寸，点击「排版」后应用；当前画板保持不变。'
   } catch (error) {
     status.value = error instanceof Error ? error.message : '请输入有效尺寸。'
   }
@@ -384,7 +412,7 @@ function setQuantity(id: string, value: number): void {
   }
   updateAsset(id, { quantity: Math.min(500, Math.max(0, Math.floor(value))) })
   status.value = countMode.value
-    ? '已更新数量，并按当前模式重新排版。'
+    ? '已保存数量，点击「排版」后应用。'
     : '已保存数量，保持当前排版模式；切换到定制、智能填充或整齐排版时按数量生效。'
 }
 
@@ -396,7 +424,7 @@ function reorderAsset(id: string, target: number): void {
   const [moved] = reordered.splice(index, 1)
   reordered.splice(target, 0, moved!)
   assets.value = reordered
-  status.value = '已调整图片顺序；定制和智能填充按列表从上到下优先排版，锁组保留原位。'
+  status.value = '已保存图片顺序，点击「排版」后按新顺序排版；当前画板保持不变。'
 }
 
 const assetDropIndicator = computed(() => {
@@ -509,7 +537,7 @@ function setSelectedWidth(valueCm: number): void {
   if (!selectedPlacement.value || selectedPlacementIndex.value === null || selectedLocked.value) return
   try {
     const normalIndex = selectedPlacementIndex.value - lockedPlacements.value.length
-    manualPlacements.value = resizePlacement(manualPlacements.value ?? normalAuto.value, normalIndex, valueCm * 10, paper.value)
+    manualPlacements.value = resizePlacement(manualPlacements.value, normalIndex, valueCm * 10, paper.value)
     status.value = '已调整选中图片大小；其他副本保持不变。'
   } catch (error) {
     status.value = error instanceof Error ? error.message : '请输入有效尺寸。'
@@ -535,6 +563,8 @@ function removeAsset(id: string): void {
     return updated ? [updated] : []
   })
   assets.value = assets.value.filter((item) => item.id !== id)
+  manualPlacements.value = manualPlacements.value.filter(slot => slot.itemId !== id)
+  placedAssets.value = placedAssets.value.filter(item => item.id !== id)
   if (asset) releaseUnusedImage(asset.url)
   status.value = `已从当前画板删除 ${asset.name}，其他画板不受影响。`
 }
@@ -557,7 +587,7 @@ async function addFiles(files: FileList | null): Promise<void> {
   }
   assets.value = [...assets.value, ...added]
   const oversized = added.filter((asset) => asset.widthMm > paper.value.widthMm - PAPER_MARGIN_MM * 2 || asset.heightMm > paper.value.heightMm - PAPER_MARGIN_MM * 2).length
-  status.value = `已添加 ${added.length} 张素材${skipped ? `，跳过 ${skipped} 个非图片文件` : ''}，按原像素和图片 DPI 换算尺寸（无 DPI 时使用 ${importDpi} DPI）。${oversized ? `${oversized} 张原尺寸超过纸张可用范围，请调整尺寸或纸张，未自动缩小。` : ''}${errors.join('；')}`
+  status.value = `已添加 ${added.length} 张素材${skipped ? `，跳过 ${skipped} 个非图片文件` : ''}，点击「排版」后排入，原排版保持不变。按原像素和图片 DPI 换算尺寸（无 DPI 时使用 ${importDpi} DPI）。${oversized ? `${oversized} 张原尺寸超过纸张可用范围，请调整尺寸或纸张，未自动缩小。` : ''}${errors.join('；')}`
   uploading.value = false
 }
 
@@ -583,22 +613,33 @@ function applyBulk(): void {
   assets.value = assets.value.map((asset) => asset.selected && !asset.lockedGroupId
     ? { ...asset, ...fitSizeMm(asset.width, asset.height, longEdgeMm), quantity: Math.min(500, Math.floor(quantity)) }
     : asset)
-  status.value = `已统一设置 ${count} 张素材，并按当前模式重新排版。${mode.value === 'balanced' || mode.value === 'compact' ? '数量设置在定制、智能填充或整齐排版时生效。' : ''}`
+  status.value = `已保存 ${count} 张素材的统一设置，点击「排版」后应用。${mode.value === 'balanced' || mode.value === 'compact' ? '数量设置在定制、智能填充或整齐排版时生效。' : ''}`
 }
 
 function lockSelected(): void {
-  const ids = assets.value.filter((asset) => asset.selected && !asset.lockedGroupId).map((asset) => asset.id)
+  const placedIds = new Set(manualPlacements.value.map(slot => slot.itemId))
+  const ids = assets.value.filter((asset) => asset.selected && !asset.lockedGroupId && placedIds.has(asset.id)).map((asset) => asset.id)
   const group = lockGroup(`group-${Date.now()}`, `第 ${groups.value.length + 1} 组`, ids, placements.value)
   if (!group) { status.value = '请先勾选并排入至少一张图片。'; return }
+  const pending = layoutPending.value
+  manualPlacements.value = manualPlacements.value.filter(slot => !ids.includes(slot.itemId))
   groups.value = [...groups.value, group]
   assets.value = assets.value.map((asset) => ids.includes(asset.id) ? { ...asset, selected: false, lockedGroupId: group.id } : asset)
+  layoutPending.value = pending
+  clearCanvasSelection()
   status.value = `已锁定 ${group.name}，保留组内位置。`
 }
 
 function unlockGroup(id: string): void {
+  const group = groups.value.find(group => group.id === id)
+  if (!group) return
+  const pending = layoutPending.value
+  manualPlacements.value = [...manualPlacements.value, ...flattenGroups([group])]
   groups.value = groups.value.filter((group) => group.id !== id)
   assets.value = assets.value.map((asset) => asset.lockedGroupId === id ? { ...asset, lockedGroupId: undefined, selected: true } : asset)
-  status.value = '已解除锁组，图片重新参与排版。'
+  layoutPending.value = pending
+  clearCanvasSelection()
+  status.value = '已解除锁组并保留当前位置，可单独调整；点击「排版」后重新参与排列。'
 }
 
 function mergeAllGroups(): void {
@@ -609,7 +650,7 @@ function mergeAllGroups(): void {
 }
 
 function render(context: CanvasRenderingContext2D, width: number, height: number, guides: boolean,
-  scene: BoardScene = { paper: paper.value, assets: assets.value, placements: placements.value }): void {
+  scene: BoardScene = { paper: paper.value, assets: placedAssets.value, placements: placements.value }): void {
   context.clearRect(0, 0, width, height)
   const scaleX = width / scene.paper.widthMm
   const scaleY = height / scene.paper.heightMm
@@ -634,7 +675,7 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
     else context.drawImage(asset.image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
     context.restore()
     if (guides) {
-      const selected = adjusting.value && selectedPlacementIndex.value === index
+      const selected = adjusting.value && (selectedPlacementIndex.value === index || selectedPlacementIndices.value.includes(index))
       context.save()
       context.strokeStyle = selected ? '#fbbf24' : adjusting.value ? 'rgba(124,58,237,.8)' : 'rgba(99,102,241,.28)'
       context.lineWidth = selected ? 3 : adjusting.value ? 2 : 1
@@ -642,6 +683,21 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
       context.strokeRect(x, y, w, h)
       context.restore()
     }
+  }
+  const box = boxSelection.value
+  if (guides && box) {
+    context.save()
+    context.fillStyle = 'rgba(167,139,250,.18)'
+    context.strokeStyle = '#a78bfa'
+    context.lineWidth = 2
+    context.setLineDash([6, 4])
+    const x = Math.min(box.startXmm, box.xMm) * scaleX
+    const y = Math.min(box.startYmm, box.yMm) * scaleY
+    const w = Math.abs(box.xMm - box.startXmm) * scaleX
+    const h = Math.abs(box.yMm - box.startYmm) * scaleY
+    context.fillRect(x, y, w, h)
+    context.strokeRect(x, y, w, h)
+    context.restore()
   }
 }
 
@@ -653,13 +709,17 @@ function renderPreview(): void {
 }
 
 watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () => {
-  if (!switchingBoard) { manualPlacements.value = null; selectedPlacementIndex.value = null }
+  if (!switchingBoard) {
+    layoutPending.value = true
+    clearCanvasSelection()
+  }
 }, { flush: 'sync' })
 watch([assets, exporting, uploading, controlsOpen], cancelAssetDrag, { flush: 'sync' })
-watch([paper, placements, assets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
+watch([paper, placements, placedAssets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
-watch(selectedPlacementIndex, () => { void nextTick(renderPreview) })
-watch(adjusting, (active) => { if (!active) selectedPlacementIndex.value = null })
+watch([selectedPlacementIndex, selectedPlacementIndices, boxSelection], () => { void nextTick(renderPreview) })
+watch(adjusting, (active) => { if (!active) { clearCanvasSelection(); adjustTool.value = 'move' } }, { flush: 'sync' })
+watch(adjustTool, clearCanvasSelection, { flush: 'sync' })
 watch(() => overviewOpen.value ? overviewBoards.value : null, () => {
   void nextTick(() => {
     if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index))
@@ -683,10 +743,38 @@ function pointMm(event: PointerEvent, canvas: HTMLCanvasElement): { xMm: number;
   }
 }
 
+function clearCanvasSelection(): void {
+  const pointerId = boxSelection.value?.pointerId ?? drag.value?.pointerId
+  boxSelection.value = null
+  drag.value = null
+  selectedPlacementIndex.value = null
+  selectedPlacementIndices.value = []
+  if (pointerId !== undefined && preview.value?.hasPointerCapture(pointerId)) preview.value.releasePointerCapture(pointerId)
+}
+
+function distributeSelected(axis: 'x' | 'y'): void {
+  if (exporting.value || uploading.value) return
+  try {
+    const result = distributePlacements(placements.value, selectedPlacementIndices.value, axis, paper.value, lockedPlacements.value.length)
+    manualPlacements.value = result.slice(lockedPlacements.value.length)
+    status.value = `已将 ${selectedPlacementIndices.value.length} 张图片${axis === 'x' ? '横向' : '纵向'}等间距排列，图片尺寸和其他图案保持不变。`
+  } catch (error) {
+    status.value = error instanceof Error ? error.message : '等间距排列失败，请重新框选。'
+  }
+}
+
 function onPointerDown(event: PointerEvent): void {
   const canvas = preview.value
-  if (!adjusting.value || !canvas) return
+  if (!adjusting.value || !canvas || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
   const point = pointMm(event, canvas)
+  if (adjustTool.value === 'select') {
+    selectedPlacementIndex.value = null
+    selectedPlacementIndices.value = []
+    boxSelection.value = { pointerId: event.pointerId, startXmm: point.xMm, startYmm: point.yMm, ...point }
+    canvas.setPointerCapture(event.pointerId)
+    event.preventDefault()
+    return
+  }
   let index = placements.value.length - 1
   while (index >= 0) {
     const slot = placements.value[index]
@@ -708,8 +796,14 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
-  const current = drag.value
   const canvas = preview.value
+  const box = boxSelection.value
+  if (box && box.pointerId === event.pointerId && canvas) {
+    boxSelection.value = { ...box, ...pointMm(event, canvas) }
+    event.preventDefault()
+    return
+  }
+  const current = drag.value
   if (!current || current.pointerId !== event.pointerId || !canvas) return
   const point = pointMm(event, canvas)
   const deltaX = point.xMm - current.startXmm
@@ -721,7 +815,7 @@ function onPointerMove(event: PointerEvent): void {
       yMm: clampPaperPosition(current.originYmm + deltaY, group.heightMm, paper.value.heightMm),
     } : group)
   } else if (current.normalIndex !== undefined) {
-    const updated = [...(manualPlacements.value ?? normalAuto.value)]
+    const updated = [...manualPlacements.value]
     const slot = updated[current.normalIndex]
     if (!slot) return
     updated[current.normalIndex] = {
@@ -734,14 +828,29 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function onPointerEnd(event: PointerEvent): void {
-  if (drag.value?.pointerId !== event.pointerId) return
+  const box = boxSelection.value
+  if (box?.pointerId === event.pointerId) {
+    if (event.type === 'pointerup' && preview.value) {
+      const end = pointMm(event, preview.value)
+      selectedPlacementIndices.value = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, end, lockedPlacements.value.length)
+      status.value = `已框选 ${selectedPlacementIndices.value.length} 张图片；至少选中 3 张可等间距排列，锁定组不参与。`
+    }
+    boxSelection.value = null
+  } else if (drag.value?.pointerId !== event.pointerId) return
   drag.value = null
   if (preview.value?.hasPointerCapture(event.pointerId)) preview.value.releasePointerCapture(event.pointerId)
 }
 
 function resetLayout(): void {
-  manualPlacements.value = null
-  selectedPlacementIndex.value = null
+  if (exporting.value || uploading.value) return
+  const result = calculateLayout(assets.value, lockedPlacements.value)
+  manualPlacements.value = result.placements
+  // Locked groups retain the geometry with which they were placed, even if draft settings changed before locking.
+  const prior = new Map(placedAssets.value.map(asset => [asset.id, asset]))
+  placedAssets.value = assets.value.map(asset => ({ ...(asset.lockedGroupId ? prior.get(asset.id) ?? asset : asset) }))
+  layoutOverflow.value = result.overflow
+  layoutPending.value = false
+  clearCanvasSelection()
   adjusting.value = false
   status.value = mode.value === 'smart' ? '已按当前排列方式重新智能排版；列表靠前的图片优先，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
 }
@@ -757,8 +866,11 @@ function clearAll(): void {
   assets.value = []
   removed.forEach((asset) => releaseUnusedImage(asset.url))
   groups.value = []
-  manualPlacements.value = null
-  selectedPlacementIndex.value = null
+  manualPlacements.value = []
+  placedAssets.value = []
+  layoutPending.value = false
+  layoutOverflow.value = 0
+  clearCanvasSelection()
   clearGenerated()
   status.value = '已清空当前画板，可以重新添加图片。'
 }
@@ -766,7 +878,7 @@ function clearAll(): void {
 async function generate(): Promise<void> {
   if (exporting.value || uploading.value) return
   if (!placements.value.length) {
-    status.value = '请先上传并选择至少一张素材。'
+    status.value = '请先添加图片，再点击「排版」后导出。'
     return
   }
   if (paperMarginError.value) { status.value = paperMarginError.value; return }
@@ -1059,11 +1171,12 @@ function downloadOnly(): void {
       <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
         <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
         <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
+        <span v-if="layoutPending" class="rounded-full bg-violet-100 px-3 py-1.5 text-violet-800" role="status">设置有更新，点击「排版」后应用</span>
         <span v-if="overflow" class="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">{{ overflow }} 个未排入</span>
         <span class="rounded-full bg-white px-3 py-1.5">{{ Number.isFinite(dpi) ? `${dpi} DPI` : '请填写 DPI' }}</span>
       </div>
       <div class="relative flex min-h-[45dvh] min-w-0 flex-1 items-center justify-center overflow-auto rounded-2xl bg-slate-800 p-3 sm:min-h-[480px] sm:p-6 lg:min-h-0">
-        <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas block h-auto max-h-[calc(100dvh-260px)] max-w-full shadow-2xl lg:max-h-full" :class="[`bg-${background}`, { 'is-adjusting': adjusting }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" />
+        <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas block h-auto max-h-[calc(100dvh-260px)] max-w-full shadow-2xl lg:max-h-full" :class="[`bg-${background}`, { 'is-adjusting': adjusting, 'is-selecting': adjusting && adjustTool === 'select' }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
       </div>
       <section v-if="adjusting && selectedPlacement" aria-label="选中图片调整" class="shrink-0 rounded-xl border border-amber-400 bg-slate-900 p-3 text-white">
         <div class="flex items-center justify-between gap-2 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-2 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
@@ -1079,15 +1192,26 @@ function downloadOnly(): void {
       </section>
       <div class="sticky bottom-2 z-10 space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg lg:static">
         <p class="text-xs text-slate-600" aria-live="polite">{{ status }}</p>
+        <div v-if="adjusting" class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2 text-xs" aria-label="框选与等间距排列">
+          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'move' }" :aria-pressed="adjustTool === 'move'" @click="adjustTool = 'move'">单张调整</button>
+          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'select' }" :aria-pressed="adjustTool === 'select'" @click="adjustTool = 'select'">框选图片</button>
+          <template v-if="adjustTool === 'select'">
+            <span class="text-slate-500">已选 {{ selectedPlacementIndices.length }} 张</span>
+            <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('x')">横向等间距</button>
+            <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('y')">纵向等间距</button>
+            <button type="button" class="px-2 py-2 text-slate-500" :disabled="!selectedPlacementIndices.length" @click="clearCanvasSelection">取消选择</button>
+          </template>
+        </div>
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-          <button type="button" class="studio-toolbar is-primary" @click="resetLayout">✦ 排版</button>
+          <button type="button" class="studio-toolbar is-primary" :disabled="!assets.length || exporting || uploading" @click="resetLayout">✦ 排版</button>
           <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="adjusting = !adjusting">✋ {{ adjusting ? '完成' : '调整' }}</button>
           <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '♧ 导出当前画板' : '♧ 导出 PNG' }}</button>
           <RouterLink class="studio-toolbar" to="/pricing">⭐ 升级</RouterLink>
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
         </div>
-        <p v-if="adjusting" class="text-xs text-indigo-700">点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动。</p>
+        <p v-if="adjusting" class="text-xs text-indigo-700">{{ adjustTool === 'select' ? '鼠标或手指拖框，完整框住需要排列的图片；至少 3 张。固定首尾范围，按图片边缘均分间距，锁定组需先解锁。' : '点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动。' }}</p>
+        <p v-if="layoutPending" class="text-xs text-violet-700">当前画板保持原样；点击「排版」将应用新设置并替换手动调整。导出仅包含当前已排入的图案。</p>
         <p v-if="dpiError" class="text-xs text-amber-700">{{ dpiError }}</p>
         <p v-if="paperMarginError" class="text-xs text-amber-700">{{ paperMarginError }}</p>
         <div v-if="generated" class="space-y-2 border-t border-slate-100 pt-2">
@@ -1177,6 +1301,7 @@ function downloadOnly(): void {
 .studio-canvas.bg-dark { background: #1e293b; }
 .studio-canvas.is-adjusting { cursor: grab; touch-action: none; }
 .studio-canvas.is-adjusting:active { cursor: grabbing; }
+.studio-canvas.is-selecting, .studio-canvas.is-selecting:active { cursor: crosshair; }
 @media (max-width: 520px) {
   .studio-gap-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 5px; }
   .studio-gap-row { gap: 3px; font-size: 11px; }
