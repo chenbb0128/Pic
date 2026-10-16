@@ -148,7 +148,7 @@ describe('overflow artboards', () => {
     } finally { cleanup() }
   })
 
-  it.each([['custom', 'free'], ['smart', 'free'], ['smart', 'rows'], ['smart', 'columns']])(
+  it.each([['custom', 'free'], ['smart', 'free'], ['smart', 'rows'], ['smart', 'columns'], ['neat', 'free']])(
     'uses list order and updates priority when moving images in %s/%s', async (mode, grouping) => {
       const { state, asset, cleanup } = mountWorkspace()
       try {
@@ -588,7 +588,7 @@ describe('overflow artboards', () => {
     }
   })
 
-  it.each(['custom', 'smart'])('moves only remaining quantities to new boards in %s mode', async (mode) => {
+  it.each(['custom', 'smart', 'neat'])('moves only remaining quantities to new boards in %s mode', async (mode) => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.mode = mode
@@ -663,10 +663,10 @@ describe('overflow artboards', () => {
     } finally { cleanup() }
   })
 
-  it('counts locked copies once and transfers only their unlocked remainder', async () => {
+  it.each(['custom', 'neat'])('counts locked copies once and transfers only their unlocked remainder in %s', async mode => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
-      state.mode = 'custom'
+      state.mode = mode
       state.assets = [asset('one', 5)]
       await nextTick()
       state.lockSelected()
@@ -724,7 +724,7 @@ describe('overflow artboards', () => {
 })
 
 describe('workspace editing preserves the selected layout mode', () => {
-  it.each(['balanced', 'compact', 'custom', 'smart'])('keeps %s when editing image details and bulk settings', async (mode) => {
+  it.each(['balanced', 'compact', 'custom', 'smart', 'neat'])('keeps %s when editing image details and bulk settings', async (mode) => {
     const app = renderer.createApp({ ...Workspace, render: () => null })
     app.provide(ssrContextKey, {})
     const vm = app.mount({})
@@ -749,7 +749,7 @@ describe('workspace editing preserves the selected layout mode', () => {
       expect(state.assets[0].quantity).toBe(2)
       await nextTick()
       expect(state.placements.length).toBeGreaterThan(0)
-      if (mode === 'custom' || mode === 'smart') expect(state.placements).toHaveLength(2)
+      if (mode === 'custom' || mode === 'smart' || mode === 'neat') expect(state.placements).toHaveLength(2)
     } finally {
       state.assets = []
       app.unmount()
