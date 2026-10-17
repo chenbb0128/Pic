@@ -12,6 +12,98 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('enforces 4mm in global and per-image inputs without rearranging existing layouts', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 3, 20)]
+      state.resetLayout()
+      const before = JSON.stringify(state.placements)
+      for (const axis of ['x', 'y']) {
+        const input = { valueAsNumber: 1, value: '1' }
+        state.onGapChange(axis, { target: input })
+        expect(input.value).toBe('4')
+        state.setAssetGap('one', axis, { target: input })
+      }
+      expect(state.assets[0]).toMatchObject({ gapXmm: 4, gapYmm: 4 })
+      expect(state.gapXmm).toBe(4)
+      expect(state.gapYmm).toBe(4)
+      expect(JSON.stringify(state.placements)).toBe(before)
+    } finally { cleanup() }
+  })
+
+  it.each(['balanced', 'compact', 'custom', 'smart', 'neat'])('keeps at least 4mm for every automatic placement in %s', mode => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.mode = mode
+      state.gapXmm = 0
+      state.gapYmm = 1
+      state.assets = [{ ...asset('one', 8, 20), gapXmm: 0, gapYmm: 0 }]
+      state.resetLayout()
+      expect(state.placements.length).toBeGreaterThan(1)
+      for (const [i, a] of state.placements.entries()) {
+        for (const b of state.placements.slice(i + 1)) {
+          expect(a.xMm + a.widthMm + 4 <= b.xMm + 1e-6 || b.xMm + b.widthMm + 4 <= a.xMm + 1e-6 ||
+            a.yMm + a.heightMm + 4 <= b.yMm + 1e-6 || b.yMm + b.heightMm + 4 <= a.yMm + 1e-6).toBe(true)
+        }
+      }
+    } finally { cleanup() }
+  })
+
+  it('blocks resize and dragging a single image or locked group closer than 4mm', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
+      setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
+    const event = (x: number, y: number, type = 'pointermove') => ({ clientX: x, clientY: y, pointerId: 1,
+      button: 0, isPrimary: true, type, preventDefault() {} })
+    try {
+      state.assets = [asset('one', 1, 10), { ...asset('two', 1, 10), selected: false }]
+      state.resetLayout()
+      state.manualPlacements = [
+        { itemId: 'one', xMm: 10, yMm: 10, widthMm: 10, heightMm: 10 },
+        { itemId: 'two', xMm: 30, yMm: 10, widthMm: 10, heightMm: 10 },
+      ]
+      state.preview = canvas
+      state.adjusting = true
+      state.selectedPlacementIndex = 0
+      state.setSelectedWidth(2.8)
+      expect(state.placements[0].widthMm).toBe(10)
+      expect(state.status).toContain('4mm')
+      for (const locked of [false, true]) {
+        if (locked) state.lockSelected()
+        state.onPointerDown(event(15, 15, 'pointerdown'))
+        state.onPointerMove(event(22, 15))
+        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(10)
+        state.onPointerMove(event(21, 15))
+        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(16)
+        state.onPointerMove(event(15, 15))
+        state.onPointerEnd(event(15, 15, 'pointerup'))
+      }
+    } finally { state.preview = null; cleanup() }
+  })
+
+  it('blocks both export paths for legacy spacing violations without changing placements', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 2, 10)]
+      state.resetLayout()
+      state.manualPlacements = [
+        { itemId: 'one', xMm: 10, yMm: 10, widthMm: 10, heightMm: 10 },
+        { itemId: 'one', xMm: 23, yMm: 10, widthMm: 10, heightMm: 10 },
+      ]
+      const before = JSON.stringify(state.placements)
+      await state.generate()
+      expect(state.status).toContain('间距')
+      expect(state.status).toContain('4mm')
+      state.boards = [state.snapshotBoard(), { ...state.snapshotBoard(), manualPlacements: [] }]
+      state.selectBoard(1)
+      await state.exportAllBoards()
+      expect(state.status).toContain('画板 1')
+      expect(state.status).toContain('4mm')
+      expect(JSON.stringify(state.boards[0].manualPlacements)).toBe(before)
+      expect(state.exporting).toBe(false)
+    } finally { cleanup() }
+  })
+
   it('only arranges on click and keeps committed geometry when adding images or editing settings', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
@@ -233,10 +325,10 @@ describe('overflow artboards', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [asset('one', 5)]
-      const input = { valueAsNumber: 2.6, value: '2.6' }
+      const input = { valueAsNumber: 11.6, value: '11.6' }
       state.setAssetGap('one', 'x', { target: input })
-      expect(input.value).toBe('3')
-      expect(state.assets[0].gapXmm).toBe(3)
+      expect(input.value).toBe('12')
+      expect(state.assets[0].gapXmm).toBe(12)
       state.setAssetGap('one', 'y', { target: { valueAsNumber: 0, value: '0' } })
       state.setAssetNewRow('one', true)
       state.resetLayout()
@@ -245,13 +337,13 @@ describe('overflow artboards', () => {
       expect(state.placements).toHaveLength(2)
       state.createRemainingBoard()
       await nextTick()
-      expect(state.assets[0]).toMatchObject({ gapXmm: 3, gapYmm: 0, startNewRow: true, quantity: 3 })
+      expect(state.assets[0]).toMatchObject({ gapXmm: 12, gapYmm: 4, startNewRow: true, quantity: 3 })
       state.mode = 'smart'
       state.resetLayout()
       await nextTick()
       expect(state.placements).toHaveLength(3)
       state.setAssetGap('one', 'x', { target: { valueAsNumber: 12, value: '12' } })
-      expect(state.assets[0].gapXmm).toBe(3)
+      expect(state.assets[0].gapXmm).toBe(12)
       state.mode = 'custom'
       state.setAssetGap('one', 'x', { target: { valueAsNumber: NaN, value: '' } })
       state.resetLayout()
@@ -260,11 +352,11 @@ describe('overflow artboards', () => {
       expect(state.placements).toHaveLength(3)
       state.selectBoard(0)
       await nextTick()
-      expect(state.assets[0]).toMatchObject({ gapXmm: 3, gapYmm: 0, startNewRow: true })
+      expect(state.assets[0]).toMatchObject({ gapXmm: 12, gapYmm: 4, startNewRow: true })
       state.lockSelected()
       state.setAssetGap('one', 'x', { target: { valueAsNumber: 9, value: '9' } })
       state.setAssetNewRow('one', false)
-      expect(state.assets[0]).toMatchObject({ gapXmm: 3, startNewRow: true })
+      expect(state.assets[0]).toMatchObject({ gapXmm: 12, startNewRow: true })
     } finally { cleanup() }
   })
 
@@ -551,7 +643,8 @@ describe('overflow artboards', () => {
     state.customHeight = 108
     state.gapXmm = 0
     state.gapYmm = 0
-    const asset = (id: string, quantity: number, widthMm = 50) => ({
+    // Four 46mm copies fit in this 108mm fixture with the required 4mm gaps.
+    const asset = (id: string, quantity: number, widthMm = 46) => ({
       id, name: id, url: `blob:${id}`, image: {}, width: 100, height: 100,
       widthMm, heightMm: widthMm, quantity, selected: true,
       important: true, ratioLocked: true, rotationDeg: 0,
@@ -630,10 +723,10 @@ describe('overflow artboards', () => {
       expect(state.placements).toEqual([])
       state.resetLayout()
       await nextTick()
-      expect(state.gapXmm).toBe(3)
-      expect(input.value).toBe('3')
-      expect(state.placements[1].xMm - state.placements[0].xMm).toBe(43)
-      for (const [axis, value, expected] of [['y', -4, 0], ['x', 40.8, 30], ['y', 4.2, 4]] as const) {
+      expect(state.gapXmm).toBe(4)
+      expect(input.value).toBe('4')
+      expect(state.placements[1].xMm - state.placements[0].xMm).toBe(44)
+      for (const [axis, value, expected] of [['y', -4, 4], ['x', 40.8, 30], ['y', 4.2, 4]] as const) {
         state.onGapChange(axis, { target: { valueAsNumber: value, value: String(value) } })
         expect(axis === 'x' ? state.gapXmm : state.gapYmm).toBe(expected)
       }
@@ -775,7 +868,7 @@ describe('overflow artboards', () => {
       state.selectBoard(0)
       await nextTick()
       expect(state.placements).toEqual([{ itemId: 'one', xMm: 7, yMm: 8, widthMm: 40, heightMm: 40 }])
-      expect(state.assets[0].widthMm).toBe(50)
+      expect(state.assets[0].widthMm).toBe(46)
       expect(state.dpi).toBe(500)
       state.selectBoard(1)
       await nextTick()

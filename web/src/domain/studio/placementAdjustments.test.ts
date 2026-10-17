@@ -77,4 +77,12 @@ describe('box selection and equal spacing', () => {
     expect(() => adjustments.distributePlacements([...slots, { ...slots[3], xMm: 40, yMm: 15 }], [0, 1, 2], 'x', paper)).toThrow('重叠')
     expect(() => adjustments.distributePlacements(slots, [0, 1, 2], 'x', { widthMm: 90, heightMm: 100 })).toThrow('4mm')
   })
+
+  it('rejects equal spacing under 4mm even when images do not overlap', () => {
+    const close = [slots[0], { ...slots[0], xMm: 22 }, { ...slots[0], xMm: 34 }]
+    expect(() => adjustments.distributePlacements(close, [0, 1, 2], 'x', paper)).toThrow('4mm')
+    const valid = close.map((slot, index) => ({ ...slot, xMm: 10 + index * 14 }))
+    expect(adjustments.distributePlacements(valid, [0, 1, 2], 'x', paper).map(slot => slot.xMm)).toEqual([10, 24, 38])
+    expect(() => adjustments.distributePlacements([...slots, { ...slots[3], xMm: 63, yMm: 15 }], [0, 1, 2], 'x', paper)).toThrow('4mm')
+  })
 })

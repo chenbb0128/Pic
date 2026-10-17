@@ -7,6 +7,7 @@ import { imageSizePresets } from '../domain/studio/imageSizeConversion'
 import { arrangeItems, customItemGap, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
 import { distributePlacements, resizePlacement, selectPlacementsInBox } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
+import { findSpacingConflict, MIN_PATTERN_GAP_MM, normalizePatternGap, type PlacementContour } from '../domain/studio/patternSpacing'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
 import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanvasPng, type LocalImage } from '../services/studioImage'
@@ -90,7 +91,7 @@ const mode = ref<LayoutMode>('custom')
 const grouping = ref<SmartGrouping>('free')
 const groupingOptions = [{ value: 'free', label: '尽量填满' }, { value: 'rows', label: '同类按行' }, { value: 'columns', label: '同类按列' }] as const
 const gapXmm = ref(5)
-const gapYmm = ref(2)
+const gapYmm = ref(MIN_PATTERN_GAP_MM)
 const autoGap = ref(false)
 const useContours = ref(true)
 const assets = shallowRef<StudioAsset[]>([])
@@ -153,8 +154,8 @@ const lockedPlacements = computed(() => flattenGroups(groups.value))
 function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
   return arrangeItems({
     paper: paper.value,
-    gapXmm: gapXmm.value,
-    gapYmm: gapYmm.value,
+    gapXmm: normalizePatternGap(gapXmm.value),
+    gapYmm: normalizePatternGap(gapYmm.value),
     autoGap: autoGap.value,
     mode: mode.value,
     grouping: grouping.value,
@@ -165,8 +166,8 @@ function arrangeAssets(source: StudioAsset[], reserved: Placement[]) {
       quantity: asset.quantity,
       selected: asset.selected && !asset.lockedGroupId,
       priority: source.length - index,
-      gapXmm: asset.gapXmm,
-      gapYmm: asset.gapYmm,
+      gapXmm: asset.gapXmm === undefined ? undefined : normalizePatternGap(asset.gapXmm),
+      gapYmm: asset.gapYmm === undefined ? undefined : normalizePatternGap(asset.gapYmm),
       startNewRow: asset.startNewRow,
       contour: mode.value === 'smart' && grouping.value === 'free' && useContours.value && asset.selected && !asset.lockedGroupId
         ? imageContour(asset.image, asset.widthMm, asset.heightMm, asset.rotationDeg, asset.ratioLocked) : undefined,
@@ -177,9 +178,9 @@ function overlaps(a: Placement, b: Placement): boolean {
   const first = assets.value.find(asset => asset.id === a.itemId)
   const second = assets.value.find(asset => asset.id === b.itemId)
   const gapX = mode.value === 'custom'
-    ? Math.max(customItemGap(first, 'x', autoGap.value ? 5 : gapXmm.value), customItemGap(second, 'x', autoGap.value ? 5 : gapXmm.value)) : gapXmm.value
+    ? Math.max(MIN_PATTERN_GAP_MM, customItemGap(first, 'x', autoGap.value ? 5 : gapXmm.value), customItemGap(second, 'x', autoGap.value ? 5 : gapXmm.value)) : normalizePatternGap(autoGap.value ? 5 : gapXmm.value)
   const gapY = mode.value === 'custom'
-    ? Math.max(customItemGap(first, 'y', autoGap.value ? 5 : gapYmm.value), customItemGap(second, 'y', autoGap.value ? 5 : gapYmm.value)) : gapYmm.value
+    ? Math.max(MIN_PATTERN_GAP_MM, customItemGap(first, 'y', autoGap.value ? 5 : gapYmm.value), customItemGap(second, 'y', autoGap.value ? 5 : gapYmm.value)) : normalizePatternGap(autoGap.value ? 5 : gapYmm.value)
   return a.xMm < b.xMm + b.widthMm + gapX && a.xMm + a.widthMm + gapX > b.xMm &&
     a.yMm < b.yMm + b.heightMm + gapY && a.yMm + a.heightMm + gapY > b.yMm
 }
@@ -190,6 +191,25 @@ function calculateLayout(source: StudioAsset[], reserved: Placement[]) {
   return { placements: normal, overflow: result.overflow + result.placements.length - normal.length }
 }
 const placements = computed(() => [...lockedPlacements.value, ...manualPlacements.value])
+function spacingContours(source: StudioAsset[]): PlacementContour {
+  const byId = new Map(source.map(asset => [asset.id, asset]))
+  return slot => {
+    const asset = byId.get(slot.itemId)
+    if (!asset) return undefined
+    const bounds = rotatedBounds(asset.widthMm, asset.heightMm, asset.rotationDeg)
+    const scale = slot.widthMm / bounds.widthMm
+    return imageContour(asset.image, asset.widthMm * scale, asset.heightMm * scale, asset.rotationDeg, asset.ratioLocked)
+  }
+}
+const placedContours = computed(() => spacingContours(placedAssets.value))
+const patternSpacingError = computed(() => findSpacingConflict(placements.value, placedContours.value)
+  ? '部分图案间距不足 4mm，请调整位置、缩小图片或点击「排版」后再导出。' : '')
+
+function allowPlacementChange(candidate: Placement[], changed?: ReadonlySet<number>): boolean {
+  if (!findSpacingConflict(candidate, placedContours.value, changed)) return true
+  status.value = '图案之间至少需要 4mm 间距，本次调整未应用；请留出更多空间。'
+  return false
+}
 const paperMarginError = computed(() => placements.value.some((slot) =>
   slot.xMm < PAPER_MARGIN_MM - 1e-6 || slot.yMm < PAPER_MARGIN_MM - 1e-6 ||
   slot.xMm + slot.widthMm > paper.value.widthMm - PAPER_MARGIN_MM + 1e-6 ||
@@ -283,11 +303,13 @@ function selectBoard(index: number): void {
     dpi.value = saved.dpi
     mode.value = saved.mode
     grouping.value = saved.grouping
-    gapXmm.value = saved.gapXmm
-    gapYmm.value = saved.gapYmm
+    gapXmm.value = normalizePatternGap(saved.gapXmm)
+    gapYmm.value = normalizePatternGap(saved.gapYmm)
     autoGap.value = saved.autoGap
     useContours.value = saved.useContours
-    assets.value = saved.assets.map((asset) => ({ ...asset }))
+    assets.value = saved.assets.map((asset) => ({ ...asset,
+      gapXmm: asset.gapXmm === undefined ? undefined : normalizePatternGap(asset.gapXmm),
+      gapYmm: asset.gapYmm === undefined ? undefined : normalizePatternGap(asset.gapYmm) }))
     groups.value = saved.groups
     manualPlacements.value = saved.manualPlacements.map((slot) => ({ ...slot }))
     placedAssets.value = saved.placedAssets.map(asset => ({ ...asset }))
@@ -361,11 +383,11 @@ function onGapChange(axis: 'x' | 'y', event: Event): void {
   const input = event.target as HTMLInputElement
   const gap = axis === 'x' ? gapXmm : gapYmm
   const value = input.valueAsNumber
-  if (Number.isFinite(value)) gap.value = Math.min(30, Math.max(0, Math.round(value)))
+  gap.value = normalizePatternGap(Number.isFinite(value) ? value : gap.value)
   // Restore the displayed input too when normalization leaves the ref unchanged.
   input.value = String(gap.value)
   status.value = !Number.isFinite(value) || value !== gap.value
-    ? `间距仅支持 0～30 的整数毫米，当前为 ${gap.value}mm。`
+    ? `间距仅支持 4～30 的整数毫米，当前为 ${gap.value}mm。`
     : '已保存间距，点击「排版」后应用。'
 }
 
@@ -379,7 +401,7 @@ function setAssetGap(id: string, axis: 'x' | 'y', event: Event): void {
   const input = event.target as HTMLInputElement
   const key = axis === 'x' ? 'gapXmm' : 'gapYmm'
   const value = input.value.trim() === '' ? undefined : input.valueAsNumber
-  const normalized = value === undefined ? undefined : Number.isFinite(value) ? Math.min(30, Math.max(0, Math.round(value))) : asset[key]
+  const normalized = value === undefined ? undefined : normalizePatternGap(Number.isFinite(value) ? value : asset[key] ?? MIN_PATTERN_GAP_MM)
   input.value = normalized === undefined ? '' : String(normalized)
   updateAsset(id, { [key]: normalized })
   status.value = '已保存定制间距，点击「排版」后应用；留空跟随全局，相邻图案取较大值。'
@@ -537,7 +559,9 @@ function setSelectedWidth(valueCm: number): void {
   if (!selectedPlacement.value || selectedPlacementIndex.value === null || selectedLocked.value) return
   try {
     const normalIndex = selectedPlacementIndex.value - lockedPlacements.value.length
-    manualPlacements.value = resizePlacement(manualPlacements.value, normalIndex, valueCm * 10, paper.value)
+    const updated = resizePlacement(manualPlacements.value, normalIndex, valueCm * 10, paper.value)
+    if (!allowPlacementChange([...lockedPlacements.value, ...updated], new Set([selectedPlacementIndex.value]))) return
+    manualPlacements.value = updated
     status.value = '已调整选中图片大小；其他副本保持不变。'
   } catch (error) {
     status.value = error instanceof Error ? error.message : '请输入有效尺寸。'
@@ -643,8 +667,9 @@ function unlockGroup(id: string): void {
 }
 
 function mergeAllGroups(): void {
-  const merged = mergeGroups(groups.value, paper.value, gapXmm.value, gapYmm.value)
+  const merged = mergeGroups(groups.value, paper.value, normalizePatternGap(gapXmm.value), normalizePatternGap(gapYmm.value))
   if (!merged) { status.value = '当前纸张放不下所有锁组，请换更大的纸张或减少组数。'; return }
+  if (!allowPlacementChange([...flattenGroups(merged), ...manualPlacements.value])) return
   groups.value = merged
   status.value = `已将 ${merged.length} 个锁组作为整体合并排版。`
 }
@@ -755,7 +780,7 @@ function clearCanvasSelection(): void {
 function distributeSelected(axis: 'x' | 'y'): void {
   if (exporting.value || uploading.value) return
   try {
-    const result = distributePlacements(placements.value, selectedPlacementIndices.value, axis, paper.value, lockedPlacements.value.length)
+    const result = distributePlacements(placements.value, selectedPlacementIndices.value, axis, paper.value, lockedPlacements.value.length, placedContours.value)
     manualPlacements.value = result.slice(lockedPlacements.value.length)
     status.value = `已将 ${selectedPlacementIndices.value.length} 张图片${axis === 'x' ? '横向' : '纵向'}等间距排列，图片尺寸和其他图案保持不变。`
   } catch (error) {
@@ -809,11 +834,19 @@ function onPointerMove(event: PointerEvent): void {
   const deltaX = point.xMm - current.startXmm
   const deltaY = point.yMm - current.startYmm
   if (current.groupId) {
-    groups.value = groups.value.map((group) => group.id === current.groupId ? {
+    const updated = groups.value.map((group) => group.id === current.groupId ? {
       ...group,
       xMm: clampPaperPosition(current.originXmm + deltaX, group.widthMm, paper.value.widthMm),
       yMm: clampPaperPosition(current.originYmm + deltaY, group.heightMm, paper.value.heightMm),
     } : group)
+    const changed = new Set<number>()
+    let offset = 0
+    for (const group of groups.value) {
+      if (group.id === current.groupId) group.placements.forEach((_, index) => changed.add(offset + index))
+      offset += group.placements.length
+    }
+    if (!allowPlacementChange([...flattenGroups(updated), ...manualPlacements.value], changed)) return
+    groups.value = updated
   } else if (current.normalIndex !== undefined) {
     const updated = [...manualPlacements.value]
     const slot = updated[current.normalIndex]
@@ -823,6 +856,7 @@ function onPointerMove(event: PointerEvent): void {
       xMm: clampPaperPosition(current.originXmm + deltaX, slot.widthMm, paper.value.widthMm),
       yMm: clampPaperPosition(current.originYmm + deltaY, slot.heightMm, paper.value.heightMm),
     }
+    if (!allowPlacementChange([...lockedPlacements.value, ...updated], new Set([lockedPlacements.value.length + current.normalIndex]))) return
     manualPlacements.value = updated
   }
 }
@@ -882,6 +916,7 @@ async function generate(): Promise<void> {
     return
   }
   if (paperMarginError.value) { status.value = paperMarginError.value; return }
+  if (patternSpacingError.value) { status.value = patternSpacingError.value; return }
   const size = dpiInfo.value
   if (dpiError.value) { status.value = dpiError.value; return }
   exporting.value = true
@@ -937,6 +972,10 @@ async function exportAllBoards(): Promise<void> {
       slot.xMm + slot.widthMm > scene.paper.widthMm - PAPER_MARGIN_MM + 1e-6 ||
       slot.yMm + slot.heightMm > scene.paper.heightMm - PAPER_MARGIN_MM + 1e-6)) {
       status.value = `画板 ${scene.index + 1} 的图案超出 4mm 留边，请调整后再导出。`
+      return
+    }
+    if (findSpacingConflict(scene.placements, spacingContours(scene.assets))) {
+      status.value = `画板 ${scene.index + 1} 的图案间距不足 4mm，请调整或重新排版后导出。`
       return
     }
   }
@@ -1064,10 +1103,10 @@ function downloadOnly(): void {
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>
-        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案间距为 0～30 整数毫米，输入小数会四舍五入。</p>
+        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案之间至少 {{ MIN_PATTERN_GAP_MM }}mm，支持 4～30 整数毫米，输入更小值会自动改为 4。</p>
         <div class="studio-gap-grid">
-          <label class="studio-gap-row"><span>↔</span><input :value="gapXmm" type="range" min="0" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" @input="onGapChange('x', $event)" /><input :value="gapXmm" type="number" min="0" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" @change="onGapChange('x', $event)" /><span>mm</span></label>
-          <label class="studio-gap-row"><span>↕</span><input :value="gapYmm" type="range" min="0" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" @input="onGapChange('y', $event)" /><input :value="gapYmm" type="number" min="0" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" @change="onGapChange('y', $event)" /><span>mm</span></label>
+          <label class="studio-gap-row"><span>↔</span><input :value="gapXmm" type="range" :min="MIN_PATTERN_GAP_MM" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" @input="onGapChange('x', $event)" /><input :value="gapXmm" type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" @change="onGapChange('x', $event)" /><span>mm</span></label>
+          <label class="studio-gap-row"><span>↕</span><input :value="gapYmm" type="range" :min="MIN_PATTERN_GAP_MM" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" @input="onGapChange('y', $event)" /><input :value="gapYmm" type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" @change="onGapChange('y', $event)" /><span>mm</span></label>
           <label class="studio-auto-gap"><input v-model="autoGap" type="checkbox" />自动</label>
         </div>
       </section>
@@ -1112,8 +1151,8 @@ function downloadOnly(): void {
             <span aria-hidden="true">°</span>
           </label>
           <div class="flex basis-full flex-wrap items-center gap-x-3 gap-y-1 border-t border-[#31415f] pt-1" :class="{ 'opacity-50': mode !== 'custom' }">
-            <label class="flex items-center gap-1">横距<input type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapXmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 横向间距毫米`" @change="setAssetGap(asset.id, 'x', $event)" /><span>mm</span></label>
-            <label class="flex items-center gap-1">纵距<input type="number" min="0" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapYmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 纵向间距毫米`" @change="setAssetGap(asset.id, 'y', $event)" /><span>mm</span></label>
+            <label class="flex items-center gap-1">横距<input type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapXmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 横向间距毫米`" @change="setAssetGap(asset.id, 'x', $event)" /><span>mm</span></label>
+            <label class="flex items-center gap-1">纵距<input type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" placeholder="全局" :value="asset.gapYmm ?? ''" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" class="studio-input studio-size-input" :aria-label="`${asset.name} 纵向间距毫米`" @change="setAssetGap(asset.id, 'y', $event)" /><span>mm</span></label>
             <label class="flex items-center gap-1"><input type="checkbox" :checked="!!asset.startNewRow" :disabled="mode !== 'custom' || !!asset.lockedGroupId || exporting || uploading" :aria-label="`${asset.name} 另起一行`" @change="setAssetNewRow(asset.id, ($event.target as HTMLInputElement).checked)" />另起一行</label>
             <span class="text-[10px] text-[#8098c5]">仅定制模式 · 留空跟随全局<template v-if="mode === 'custom' && autoGap && (asset.gapXmm !== undefined || asset.gapYmm !== undefined)"> · 独立间距的方向不自动拉伸</template></span>
           </div>
@@ -1205,7 +1244,7 @@ function downloadOnly(): void {
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
           <button type="button" class="studio-toolbar is-primary" :disabled="!assets.length || exporting || uploading" @click="resetLayout">✦ 排版</button>
           <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="adjusting = !adjusting">✋ {{ adjusting ? '完成' : '调整' }}</button>
-          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '♧ 导出当前画板' : '♧ 导出 PNG' }}</button>
+          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError || !!patternSpacingError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '♧ 导出当前画板' : '♧ 导出 PNG' }}</button>
           <RouterLink class="studio-toolbar" to="/pricing">⭐ 升级</RouterLink>
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
@@ -1214,6 +1253,7 @@ function downloadOnly(): void {
         <p v-if="layoutPending" class="text-xs text-violet-700">当前画板保持原样；点击「排版」将应用新设置并替换手动调整。导出仅包含当前已排入的图案。</p>
         <p v-if="dpiError" class="text-xs text-amber-700">{{ dpiError }}</p>
         <p v-if="paperMarginError" class="text-xs text-amber-700">{{ paperMarginError }}</p>
+        <p v-if="patternSpacingError" class="text-xs text-amber-700" role="alert">{{ patternSpacingError }}</p>
         <div v-if="generated" class="space-y-2 border-t border-slate-100 pt-2">
           <div class="flex flex-wrap items-center gap-2 text-xs"><span class="text-emerald-700">{{ generated.name }} · {{ formatBytes(generated.size) }}</span><a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a></div>
           <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-10 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white" @click="copyOrDownload">{{ orderCopied ? '点击下载图片' : '复制下单文案 → 下载' }}</button><button type="button" class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700" @click="downloadOnly">仅下载图片</button></div>

@@ -1,5 +1,6 @@
 import type { PaperSize, Placement } from './layout'
 import { clampPaperPosition, PAPER_MARGIN_MM } from './paperBounds'
+import { findSpacingConflict, MIN_PATTERN_GAP_MM, type PlacementContour } from './patternSpacing'
 
 interface PointMm { xMm: number; yMm: number }
 
@@ -12,7 +13,7 @@ export function selectPlacementsInBox(placements: Placement[], start: PointMm, e
     slot.xMm + slot.widthMm <= right && slot.yMm + slot.heightMm <= bottom ? [index] : [])
 }
 
-export function distributePlacements(placements: Placement[], indices: number[], axis: 'x' | 'y', paper: PaperSize, lockedCount = 0): Placement[] {
+export function distributePlacements(placements: Placement[], indices: number[], axis: 'x' | 'y', paper: PaperSize, lockedCount = 0, contourFor?: PlacementContour): Placement[] {
   const selected = [...new Set(indices)]
   if (selected.some(index => !Number.isInteger(index) || !placements[index])) throw new Error('选区已变化，请重新框选图片。')
   if (selected.some(index => index < lockedCount)) throw new Error('锁定组需先解锁后再进行等间距排列。')
@@ -27,6 +28,7 @@ export function distributePlacements(placements: Placement[], indices: number[],
   const end = Math.max(...slots.map(slot => slot[position] + slot[size]))
   const gap = (end - start - slots.reduce((sum, slot) => sum + slot[size], 0)) / (slots.length - 1)
   if (gap < -1e-6) throw new Error('当前选区空间不足，请先拉开首尾图片的位置。')
+  if (gap < MIN_PATTERN_GAP_MM - 1e-6) throw new Error('当前选区空间不足以保留 4mm 图案间距，请先拉开首尾图片的位置。')
   const center = (Math.min(...slots.map(slot => slot[crossPosition])) + Math.max(...slots.map(slot => slot[crossPosition] + slot[crossSize]))) / 2
   const result = [...placements]
   let cursor = start
@@ -41,12 +43,8 @@ export function distributePlacements(placements: Placement[], indices: number[],
     if (slot.xMm < PAPER_MARGIN_MM - 1e-6 || slot.yMm < PAPER_MARGIN_MM - 1e-6 ||
       slot.xMm + slot.widthMm > paper.widthMm - PAPER_MARGIN_MM + 1e-6 ||
       slot.yMm + slot.heightMm > paper.heightMm - PAPER_MARGIN_MM + 1e-6) throw new Error('排列后会超出 4mm 留边，请调整选区。')
-    if (result.some((other, otherIndex) => !selectedSet.has(otherIndex) &&
-      slot.xMm < other.xMm + other.widthMm - 1e-6 && slot.xMm + slot.widthMm > other.xMm + 1e-6 &&
-      slot.yMm < other.yMm + other.heightMm - 1e-6 && slot.yMm + slot.heightMm > other.yMm + 1e-6)) {
-      throw new Error('排列后会与未选中的图片或锁定组重叠，请先调整位置。')
-    }
   }
+  if (findSpacingConflict(result, contourFor, selectedSet)) throw new Error('排列后会与其他图案重叠或间距不足 4mm，请先调整位置。')
   return result
 }
 
