@@ -1099,10 +1099,10 @@ function downloadOnly(): void {
           <div class="studio-asset-content">
           <input type="checkbox" :checked="asset.selected" :disabled="!!asset.lockedGroupId" :aria-label="`选择 ${asset.name}`" @change="updateAsset(asset.id, { selected: ($event.target as HTMLInputElement).checked })" />
           <img :src="asset.url" :alt="asset.name" :title="`${asset.name} · ${asset.width}×${asset.height}px`" :draggable="false" class="studio-asset-thumb" />
-          <div class="studio-asset-meta" :title="asset.name"><span>{{ asset.width }}×{{ asset.height }}</span><small v-if="asset.lockedGroupId">已锁组</small></div>
           <input type="number" min="0.01" step="0.01" :value="(asset.widthMm / 10).toFixed(2)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input" :aria-label="`${asset.name} 宽度厘米`" @change="setAssetSize(asset.id, 'widthMm', Number(($event.target as HTMLInputElement).value))" />
           <button type="button" class="studio-asset-lock" :disabled="!!asset.lockedGroupId" :aria-label="asset.ratioLocked ? '解锁尺寸比例' : '锁定尺寸比例'" @click="updateAsset(asset.id, { ratioLocked: !asset.ratioLocked })">{{ asset.ratioLocked ? '🔒' : '🔓' }}</button>
           <input type="number" min="0.01" step="0.01" :value="(asset.heightMm / 10).toFixed(2)" :disabled="!!asset.lockedGroupId" class="studio-input studio-size-input studio-size-accent" :aria-label="`${asset.name} 高度厘米`" @change="setAssetSize(asset.id, 'heightMm', Number(($event.target as HTMLInputElement).value))" />
+          <small v-if="asset.lockedGroupId" class="text-[9px] text-[#8fa5cf]">已锁组</small>
           <label class="flex shrink-0 items-center gap-1" title="定制、智能填充的排版数量上限；修改后保留当前模式">
             <span>数量</span>
             <input type="number" min="0" max="500" step="1" inputmode="numeric" :value="asset.quantity" :disabled="!!asset.lockedGroupId" class="studio-input studio-quantity-input" :aria-label="`${asset.name} 数量`" @change="setQuantity(asset.id, ($event.target as HTMLInputElement).valueAsNumber)" />
@@ -1272,9 +1272,6 @@ function downloadOnly(): void {
 .studio-asset-row.is-drop-before::before { top: -4px; }
 .studio-asset-row.is-drop-after::after { bottom: -4px; }
 .studio-asset-thumb { width: 30px; height: 30px; flex: 0 0 30px; border-radius: 4px; background: rgb(255 255 255 / 10%); object-fit: contain; }
-.studio-asset-meta { display: flex; min-width: 48px; flex: 0 1 56px; flex-direction: column; overflow: hidden; font-size: 10px; line-height: 1.15; white-space: nowrap; }
-.studio-asset-meta span { color: #a9bbe1; }
-.studio-asset-meta small { margin-top: 2px; color: #8fa5cf; font-size: 9px; }
 .studio-size-input { width: 56px; height: 30px; flex: 0 0 56px; padding: 0 3px; text-align: center; }
 .studio-size-accent { border-color: #40537a; color: #f7c931; }
 .studio-asset-lock, .studio-remove-button, .studio-drag-handle { display: inline-flex; height: 30px; flex: 0 0 auto; align-items: center; justify-content: center; border: 1px solid #40537a; border-radius: 5px; color: #d6c8ff; }
@@ -1308,7 +1305,6 @@ function downloadOnly(): void {
   .studio-gap-value { width: 42px; flex-basis: 42px; }
   .studio-asset-row { gap: 3px; padding-inline: 4px; }
   .studio-asset-content { gap: 3px; }
-  .studio-asset-meta { display: none; }
   .studio-size-input { width: 48px; flex-basis: 48px; }
   .studio-asset-lock { width: 23px; }
   .studio-rotation-field { width: 52px; flex-basis: 52px; }

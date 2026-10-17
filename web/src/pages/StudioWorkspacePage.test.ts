@@ -422,6 +422,7 @@ describe('overflow artboards', () => {
     expect(html).toContain('aria-label="示例 横向间距毫米"')
     expect(html).toContain('aria-label="示例 纵向间距毫米"')
     expect(html).toContain('aria-label="示例 另起一行"')
+    expect(html).toMatch(/class="studio-asset-thumb"[^>]*>\s*<input[^>]*aria-label="示例 宽度厘米"/)
   })
 
   it('exports all populated boards with their own size, DPI and dated filenames without switching the editor', async () => {
