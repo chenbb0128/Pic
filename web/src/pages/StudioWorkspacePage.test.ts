@@ -12,6 +12,16 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('offers 600 DPI as a preset without a custom DPI input and keeps 300 selected by default', async () => {
+    const app = createSSRApp(Workspace)
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    expect(html).toMatch(/<button[^>]*title="600 DPI"[^>]*>600<\/button>/)
+    expect(html).toMatch(/<button[^>]*class="[^"]*is-active[^"]*"[^>]*title="300 DPI"[^>]*>300<\/button>/)
+    expect(html).not.toContain('aria-label="自定义 DPI"')
+    expect(html).toContain('id="dpi-feedback"')
+  })
+
   it('enforces 4mm in global and per-image inputs without rearranging existing layouts', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {

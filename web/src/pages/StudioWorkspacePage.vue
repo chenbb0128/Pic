@@ -134,7 +134,7 @@ const activeBoardIndex = ref(0)
 const overviewOpen = ref(false)
 const overviewCanvases = new Map<number, HTMLCanvasElement>()
 let switchingBoard = false
-const dpiChoices = [300, 500, 800, 1000]
+const dpiChoices = [300, 500, 600, 800, 1000]
 const paperOptions = [
   ...imageSizePresets.map((option) => {
     const size = paperSize(option.value, 'landscape')
@@ -1071,14 +1071,9 @@ function downloadOnly(): void {
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">DPI</h2>
-        <div class="grid grid-cols-4 gap-1">
+        <div class="grid grid-cols-5 gap-1">
           <button v-for="value in dpiChoices" :key="value" type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': dpi === value }" :disabled="!exportSize(paper, value).allowed" :title="exportSize(paper, value).allowed ? `${value} DPI` : '超出 1 亿像素导出上限'" @click="dpi = value">{{ value }}</button>
         </div>
-        <label class="mt-2 flex items-center gap-2 text-xs text-[#a9bbe1]">
-          <span class="shrink-0">自定义</span>
-          <input :value="Number.isFinite(dpi) ? dpi : ''" type="number" min="1" step="1" required inputmode="numeric" placeholder="输入 DPI" aria-label="自定义 DPI" :aria-invalid="!!dpiError" aria-describedby="dpi-feedback" class="studio-input w-full" @input="dpi = ($event.target as HTMLInputElement).valueAsNumber" />
-          <span>DPI</span>
-        </label>
         <p id="dpi-feedback" class="mt-1 text-[11px]" :class="dpiError ? 'text-amber-300' : 'text-[#a9bbe1]'" aria-live="polite">{{ dpiError || `输出：${dpiInfo.width} × ${dpiInfo.height} px` }}</p>
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
