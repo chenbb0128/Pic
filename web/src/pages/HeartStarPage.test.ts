@@ -1,7 +1,7 @@
 import { createRenderer, createSSRApp, nextTick, ssrContextKey } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { createMemoryHistory } from 'vue-router'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
 
 const renderer = createRenderer<object, object>({
@@ -22,15 +22,26 @@ async function renderPage(password?: string) {
   const Page = await getPage()
   return renderToString(createSSRApp({
     ...Page,
-    setup(props: any, context: any) {
+    async setup(props: any, context: any) {
       const state = Page.setup(props, context)
-      if (password !== undefined) { state.password.value = password; state.unlock() }
+      if (password !== undefined) { state.password.value = password; await state.unlock() }
       return state
     },
   }))
 }
 
 describe('heart and star tool access', () => {
+  beforeEach(() => {
+    const records = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => records.get(key) ?? null,
+      setItem: (key: string, value: string) => { records.set(key, value) },
+      removeItem: (key: string) => { records.delete(key) },
+    })
+  })
+
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
   it('shows a password form and does not load templates before unlocking', async () => {
     const html = await renderPage()
     expect(html).toContain('type="password"')
@@ -65,7 +76,7 @@ describe('heart and star tool access', () => {
     vi.stubGlobal('window', { confirm })
     try {
       state.password = '87654321'
-      state.unlock()
+      await state.unlock()
       await nextTick()
       expect(state.unlocked).toBe(true)
       expect(state.password).toBe('')
@@ -76,5 +87,36 @@ describe('heart and star tool access', () => {
       expect(state.unlocked).toBe(false)
       expect(state.error).toBe('')
     } finally { app.unmount(); vi.unstubAllGlobals() }
+  })
+
+  it('restores access when returning to the page and forgets it after relocking', async () => {
+    const Page = await getPage()
+    const mountPage = () => {
+      const app = renderer.createApp({ ...Page, render: () => null })
+      app.provide(ssrContextKey, {})
+      const vm = app.mount({})
+      return { app, state: (vm.$ as unknown as { setupState: Record<string, any> }).setupState }
+    }
+    vi.stubGlobal('window', { confirm: () => true })
+    const first = mountPage()
+    try {
+      await nextTick()
+      first.state.password = '87654321'
+      await first.state.unlock()
+      expect(first.state.unlocked).toBe(true)
+    } finally { first.app.unmount() }
+
+    const returned = mountPage()
+    try {
+      await vi.waitFor(() => expect(returned.state.unlocked).toBe(true))
+      returned.state.lock()
+      expect(returned.state.unlocked).toBe(false)
+    } finally { returned.app.unmount() }
+
+    const locked = mountPage()
+    try {
+      await vi.waitFor(() => expect(locked.state.checkingAccess).toBe(false))
+      expect(locked.state.unlocked).toBe(false)
+    } finally { locked.app.unmount() }
   })
 })
