@@ -10,6 +10,7 @@ export function createAppRouter(history: RouterHistory = createWebHistory()) {
       { path: '/cutout', component: () => import('../pages/CutoutPage.vue') },
       { path: '/tools/:kind(recolor|polka|frame|name|text)', component: () => import('../pages/CreativeToolsPage.vue') },
       { path: '/tools/resize', component: () => import('../pages/ImageSizeConverterPage.vue') },
+      { path: '/tools/heart-star', name: 'heart-star', component: () => import('../pages/HeartStarPage.vue') },
       { path: '/pricing', name: 'pricing', component: () => import('../pages/PricingPage.vue') },
       { path: '/help', component: () => import('../pages/HelpPage.vue') },
     ],
