@@ -1,12 +1,13 @@
 import { CONTOUR_CELL_MM, type ContourMask } from './contourMask'
 import type { Placement } from './layout'
 
-export const MIN_PATTERN_GAP_MM = 4
+export const DEFAULT_PATTERN_GAP_MM = 4
+export const MIN_PATTERN_GAP_MM = 0
 export type PlacementContour = (placement: Placement) => ContourMask | undefined
 const EPSILON = 1e-6
 
 export function normalizePatternGap(value: number): number {
-  return Number.isFinite(value) ? Math.min(30, Math.max(MIN_PATTERN_GAP_MM, Math.round(value))) : MIN_PATTERN_GAP_MM
+  return Number.isFinite(value) ? Math.min(30, Math.max(MIN_PATTERN_GAP_MM, Math.round(value))) : DEFAULT_PATTERN_GAP_MM
 }
 
 function rectanglesTooClose(a: Placement, b: Placement): boolean {

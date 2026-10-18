@@ -22,44 +22,55 @@ describe('overflow artboards', () => {
     expect(html).toContain('id="dpi-feedback"')
   })
 
-  it('enforces 4mm in global and per-image inputs without rearranging existing layouts', () => {
+  it('defaults both gaps to 4mm before any settings are edited', () => {
+    const app = renderer.createApp({ ...Workspace, render: () => null })
+    app.provide(ssrContextKey, {})
+    const vm = app.mount({})
+    try {
+      const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
+      expect(state.gapXmm).toBe(4)
+      expect(state.gapYmm).toBe(4)
+    } finally { app.unmount() }
+  })
+
+  it('accepts zero in global and per-image inputs without rearranging existing layouts', () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.assets = [asset('one', 3, 20)]
       state.resetLayout()
       const before = JSON.stringify(state.placements)
       for (const axis of ['x', 'y']) {
-        const input = { valueAsNumber: 1, value: '1' }
+        const input = { valueAsNumber: 0, value: '0' }
         state.onGapChange(axis, { target: input })
-        expect(input.value).toBe('4')
+        expect(input.value).toBe('0')
         state.setAssetGap('one', axis, { target: input })
       }
-      expect(state.assets[0]).toMatchObject({ gapXmm: 4, gapYmm: 4 })
-      expect(state.gapXmm).toBe(4)
-      expect(state.gapYmm).toBe(4)
+      expect(state.assets[0]).toMatchObject({ gapXmm: 0, gapYmm: 0 })
+      expect(state.gapXmm).toBe(0)
+      expect(state.gapYmm).toBe(0)
       expect(JSON.stringify(state.placements)).toBe(before)
     } finally { cleanup() }
   })
 
-  it.each(['balanced', 'compact', 'custom', 'smart', 'neat'])('keeps at least 4mm for every automatic placement in %s', mode => {
+  it.each(['balanced', 'compact', 'custom', 'smart', 'neat'])('uses zero gaps for automatic placement in %s', mode => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
       state.mode = mode
+      // Balanced mode spreads rows across its own 5mm margins; use an exact fit.
+      state.customWidth = 110
+      state.customHeight = 110
       state.gapXmm = 0
-      state.gapYmm = 1
-      state.assets = [{ ...asset('one', 8, 20), gapXmm: 0, gapYmm: 0 }]
+      state.gapYmm = 0
+      state.assets = [{ ...asset('one', 25, 20), gapXmm: 0, gapYmm: 0 }]
       state.resetLayout()
       expect(state.placements.length).toBeGreaterThan(1)
-      for (const [i, a] of state.placements.entries()) {
-        for (const b of state.placements.slice(i + 1)) {
-          expect(a.xMm + a.widthMm + 4 <= b.xMm + 1e-6 || b.xMm + b.widthMm + 4 <= a.xMm + 1e-6 ||
-            a.yMm + a.heightMm + 4 <= b.yMm + 1e-6 || b.yMm + b.heightMm + 4 <= a.yMm + 1e-6).toBe(true)
-        }
-      }
+      expect(state.placements.some((a: any) => state.placements.some((b: any) =>
+        a !== b && Math.abs(a.yMm - b.yMm) < 1e-6 && Math.abs(a.xMm + a.widthMm - b.xMm) < 1e-6))).toBe(true)
+      expect(state.patternSpacingError).toBe('')
     } finally { cleanup() }
   })
 
-  it('blocks resize and dragging a single image or locked group closer than 4mm', () => {
+  it('allows sub-4mm resize and touching single images or locked groups but rejects overlap', () => {
     const { state, asset, cleanup } = mountWorkspace()
     const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
       setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
@@ -75,43 +86,59 @@ describe('overflow artboards', () => {
       state.preview = canvas
       state.adjusting = true
       state.selectedPlacementIndex = 0
-      state.setSelectedWidth(2.8)
-      expect(state.placements[0].widthMm).toBe(10)
-      expect(state.status).toContain('4mm')
+      state.setSelectedWidth(2.4)
+      expect(state.placements[0].widthMm).toBe(24)
+      state.manualPlacements = [
+        { itemId: 'one', xMm: 10, yMm: 10, widthMm: 10, heightMm: 10 },
+        { itemId: 'two', xMm: 30, yMm: 10, widthMm: 10, heightMm: 10 },
+      ]
       for (const locked of [false, true]) {
         if (locked) state.lockSelected()
         state.onPointerDown(event(15, 15, 'pointerdown'))
         state.onPointerMove(event(22, 15))
-        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(10)
-        state.onPointerMove(event(21, 15))
-        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(16)
+        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(17)
+        state.onPointerMove(event(25, 15))
+        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(20)
+        state.onPointerMove(event(26, 15))
+        expect(state.placements.find((p: any) => p.itemId === 'one').xMm).toBe(20)
+        expect(state.status).toContain('重叠')
         state.onPointerMove(event(15, 15))
         state.onPointerEnd(event(15, 15, 'pointerup'))
       }
     } finally { state.preview = null; cleanup() }
   })
 
-  it('blocks both export paths for legacy spacing violations without changing placements', async () => {
+  it.each([0, 3])('allows both export paths for %imm gaps without changing placements', async gap => {
     const { state, asset, cleanup } = mountWorkspace()
+    const downloads: string[] = []
+    const png = vi.spyOn(studioImage, 'canvasPng').mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    vi.stubGlobal('document', {
+      body: { append() {} },
+      createElement(tag: string) {
+        if (tag === 'a') return { href: '', download: '', click() { downloads.push(this.download) }, remove() {} }
+        return { width: 0, height: 0, getContext: () => ({ clearRect() {}, save() {}, restore() {}, rotate() {}, translate() {}, drawImage() {} }) }
+      },
+    })
     try {
       state.assets = [asset('one', 2, 10)]
       state.resetLayout()
       state.manualPlacements = [
         { itemId: 'one', xMm: 10, yMm: 10, widthMm: 10, heightMm: 10 },
-        { itemId: 'one', xMm: 23, yMm: 10, widthMm: 10, heightMm: 10 },
+        { itemId: 'one', xMm: 20 + gap, yMm: 10, widthMm: 10, heightMm: 10 },
       ]
       const before = JSON.stringify(state.placements)
       await state.generate()
-      expect(state.status).toContain('间距')
-      expect(state.status).toContain('4mm')
+      expect(state.generated.name).toMatch(/_画板1\.png$/)
+      expect(JSON.stringify(state.placements)).toBe(before)
       state.boards = [state.snapshotBoard(), { ...state.snapshotBoard(), manualPlacements: [] }]
       state.selectBoard(1)
       await state.exportAllBoards()
-      expect(state.status).toContain('画板 1')
-      expect(state.status).toContain('4mm')
+      expect(downloads).toHaveLength(1)
+      expect(downloads[0]).toMatch(/_画板1\.png$/)
       expect(JSON.stringify(state.boards[0].manualPlacements)).toBe(before)
       expect(state.exporting).toBe(false)
-    } finally { cleanup() }
+    } finally { png.mockRestore(); cleanup(); vi.unstubAllGlobals() }
   })
 
   it('only arranges on click and keeps committed geometry when adding images or editing settings', async () => {
@@ -347,7 +374,7 @@ describe('overflow artboards', () => {
       expect(state.placements).toHaveLength(2)
       state.createRemainingBoard()
       await nextTick()
-      expect(state.assets[0]).toMatchObject({ gapXmm: 12, gapYmm: 4, startNewRow: true, quantity: 3 })
+      expect(state.assets[0]).toMatchObject({ gapXmm: 12, gapYmm: 0, startNewRow: true, quantity: 3 })
       state.mode = 'smart'
       state.resetLayout()
       await nextTick()
@@ -362,7 +389,7 @@ describe('overflow artboards', () => {
       expect(state.placements).toHaveLength(3)
       state.selectBoard(0)
       await nextTick()
-      expect(state.assets[0]).toMatchObject({ gapXmm: 12, gapYmm: 4, startNewRow: true })
+      expect(state.assets[0]).toMatchObject({ gapXmm: 12, gapYmm: 0, startNewRow: true })
       state.lockSelected()
       state.setAssetGap('one', 'x', { target: { valueAsNumber: 9, value: '9' } })
       state.setAssetNewRow('one', false)
@@ -653,7 +680,7 @@ describe('overflow artboards', () => {
     state.customHeight = 108
     state.gapXmm = 0
     state.gapYmm = 0
-    // Four 46mm copies fit in this 108mm fixture with the required 4mm gaps.
+    // Four 46mm copies fit in this 108mm fixture with zero gaps.
     const asset = (id: string, quantity: number, widthMm = 46) => ({
       id, name: id, url: `blob:${id}`, image: {}, width: 100, height: 100,
       widthMm, heightMm: widthMm, quantity, selected: true,
@@ -733,10 +760,10 @@ describe('overflow artboards', () => {
       expect(state.placements).toEqual([])
       state.resetLayout()
       await nextTick()
-      expect(state.gapXmm).toBe(4)
-      expect(input.value).toBe('4')
-      expect(state.placements[1].xMm - state.placements[0].xMm).toBe(44)
-      for (const [axis, value, expected] of [['y', -4, 4], ['x', 40.8, 30], ['y', 4.2, 4]] as const) {
+      expect(state.gapXmm).toBe(3)
+      expect(input.value).toBe('3')
+      expect(state.placements[1].xMm - state.placements[0].xMm).toBe(43)
+      for (const [axis, value, expected] of [['y', -4, 0], ['x', 40.8, 30], ['y', 4.2, 4]] as const) {
         state.onGapChange(axis, { target: { valueAsNumber: value, value: String(value) } })
         expect(axis === 'x' ? state.gapXmm : state.gapYmm).toBe(expected)
       }

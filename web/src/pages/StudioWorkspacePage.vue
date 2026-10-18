@@ -7,7 +7,7 @@ import { imageSizePresets } from '../domain/studio/imageSizeConversion'
 import { arrangeItems, customItemGap, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
 import { distributePlacements, resizePlacement, selectPlacementsInBox } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
-import { findSpacingConflict, MIN_PATTERN_GAP_MM, normalizePatternGap, type PlacementContour } from '../domain/studio/patternSpacing'
+import { DEFAULT_PATTERN_GAP_MM, findSpacingConflict, MIN_PATTERN_GAP_MM, normalizePatternGap, type PlacementContour } from '../domain/studio/patternSpacing'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
 import { copyText } from '../services/clipboard'
 import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanvasPng, type LocalImage } from '../services/studioImage'
@@ -90,8 +90,8 @@ const dpi = ref(300)
 const mode = ref<LayoutMode>('custom')
 const grouping = ref<SmartGrouping>('free')
 const groupingOptions = [{ value: 'free', label: '尽量填满' }, { value: 'rows', label: '同类按行' }, { value: 'columns', label: '同类按列' }] as const
-const gapXmm = ref(5)
-const gapYmm = ref(MIN_PATTERN_GAP_MM)
+const gapXmm = ref(DEFAULT_PATTERN_GAP_MM)
+const gapYmm = ref(DEFAULT_PATTERN_GAP_MM)
 const autoGap = ref(false)
 const useContours = ref(true)
 const assets = shallowRef<StudioAsset[]>([])
@@ -203,11 +203,11 @@ function spacingContours(source: StudioAsset[]): PlacementContour {
 }
 const placedContours = computed(() => spacingContours(placedAssets.value))
 const patternSpacingError = computed(() => findSpacingConflict(placements.value, placedContours.value)
-  ? '部分图案间距不足 4mm，请调整位置、缩小图片或点击「排版」后再导出。' : '')
+  ? '部分图案重叠，请调整位置、缩小图片或点击「排版」后再导出。' : '')
 
 function allowPlacementChange(candidate: Placement[], changed?: ReadonlySet<number>): boolean {
   if (!findSpacingConflict(candidate, placedContours.value, changed)) return true
-  status.value = '图案之间至少需要 4mm 间距，本次调整未应用；请留出更多空间。'
+  status.value = '图案发生重叠，本次调整未应用；请调整位置或尺寸。'
   return false
 }
 const paperMarginError = computed(() => placements.value.some((slot) =>
@@ -387,7 +387,7 @@ function onGapChange(axis: 'x' | 'y', event: Event): void {
   // Restore the displayed input too when normalization leaves the ref unchanged.
   input.value = String(gap.value)
   status.value = !Number.isFinite(value) || value !== gap.value
-    ? `间距仅支持 4～30 的整数毫米，当前为 ${gap.value}mm。`
+    ? `间距支持 0～30 的整数毫米，当前为 ${gap.value}mm。`
     : '已保存间距，点击「排版」后应用。'
 }
 
@@ -401,7 +401,7 @@ function setAssetGap(id: string, axis: 'x' | 'y', event: Event): void {
   const input = event.target as HTMLInputElement
   const key = axis === 'x' ? 'gapXmm' : 'gapYmm'
   const value = input.value.trim() === '' ? undefined : input.valueAsNumber
-  const normalized = value === undefined ? undefined : normalizePatternGap(Number.isFinite(value) ? value : asset[key] ?? MIN_PATTERN_GAP_MM)
+  const normalized = value === undefined ? undefined : normalizePatternGap(Number.isFinite(value) ? value : asset[key] ?? DEFAULT_PATTERN_GAP_MM)
   input.value = normalized === undefined ? '' : String(normalized)
   updateAsset(id, { [key]: normalized })
   status.value = '已保存定制间距，点击「排版」后应用；留空跟随全局，相邻图案取较大值。'
@@ -975,7 +975,7 @@ async function exportAllBoards(): Promise<void> {
       return
     }
     if (findSpacingConflict(scene.placements, spacingContours(scene.assets))) {
-      status.value = `画板 ${scene.index + 1} 的图案间距不足 4mm，请调整或重新排版后导出。`
+      status.value = `画板 ${scene.index + 1} 的图案重叠，请调整或重新排版后导出。`
       return
     }
   }
@@ -1098,7 +1098,7 @@ function downloadOnly(): void {
       </section>
       <section class="border-b border-[#31415f] px-4 py-3">
         <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>
-        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案之间至少 {{ MIN_PATTERN_GAP_MM }}mm，支持 4～30 整数毫米，输入更小值会自动改为 4。</p>
+        <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案间距默认 {{ DEFAULT_PATTERN_GAP_MM }}mm，可设置为 0～30 整数毫米。</p>
         <div class="studio-gap-grid">
           <label class="studio-gap-row"><span>↔</span><input :value="gapXmm" type="range" :min="MIN_PATTERN_GAP_MM" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" @input="onGapChange('x', $event)" /><input :value="gapXmm" type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" @change="onGapChange('x', $event)" /><span>mm</span></label>
           <label class="studio-gap-row"><span>↕</span><input :value="gapYmm" type="range" :min="MIN_PATTERN_GAP_MM" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" @input="onGapChange('y', $event)" /><input :value="gapYmm" type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" @change="onGapChange('y', $event)" /><span>mm</span></label>
