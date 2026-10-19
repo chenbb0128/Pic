@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import backgroundSource from '../../public/embedded/heart-star/slot-background.js?raw'
 
-function api(layer?: ReturnType<typeof canvas>) {
-  const document = { createElement: () => layer?.element }
+function api(layer?: ReturnType<typeof canvas>, outline = canvas()) {
+  let created = 0
+  const document = { createElement: () => created++ === 0 ? layer?.element : outline.element }
   return new Function('globalThis', 'document', `${backgroundSource}\nreturn globalThis.HeartStarBackground;`)({}, document)
 }
 
@@ -19,23 +20,62 @@ function canvas() {
     set globalCompositeOperation(value: string) { calls.push(['composite', value]) },
     getTransform() { return { a: 1, d: 1 } },
     scale(...args: number[]) { calls.push(['scale', ...args]) },
+    getImageData(_x: number, _y: number, w: number, h: number) {
+      return { data: new Uint8ClampedArray(w * h * 4) }
+    },
+    putImageData() {},
   }
   const element = { width: 0, height: 0, getContext: () => ctx }
   return { ctx, calls, element }
 }
 
 describe('single-pattern background', () => {
+  it('fills old pattern holes and interior transparency while retaining only the outer silhouette', () => {
+    const pixels = new Uint8ClampedArray(7 * 7 * 4)
+    for (let y = 1; y <= 5; y++) for (let x = 1; x <= 5; x++) {
+      const i = (y * 7 + x) * 4
+      pixels[i] = 220
+      pixels[i + 3] = x === 3 && y === 3 ? 0 : x === 2 && y === 3 ? 50 : 255
+    }
+    pixels[(1 * 7 + 1) * 4 + 3] = 64
+    const before = pixels.slice()
+    const mask = api().outerMask(pixels, 7, 7)
+    expect(mask[(3 * 7 + 3) * 4 + 3]).toBe(255)
+    expect(mask[(3 * 7 + 2) * 4 + 3]).toBe(255)
+    expect(mask[(1 * 7 + 1) * 4 + 3]).toBe(64)
+    expect(mask[(0 * 7 + 3) * 4 + 3]).toBe(0)
+    expect(mask[(3 * 7 + 0) * 4 + 3]).toBe(0)
+    expect(mask[(3 * 7 + 2) * 4]).toBe(0)
+    expect(pixels).toEqual(before)
+  })
+
+  it('does not fill exterior notches or the transparent space between separate shapes', () => {
+    const pixels = new Uint8ClampedArray(9 * 5 * 4)
+    for (let y = 0; y < 5; y++) for (let x = 0; x < 9; x++) {
+      if (x < 3 || x > 5) pixels[(y * 9 + x) * 4 + 3] = 255
+    }
+    pixels[(1 * 9 + 1) * 4 + 3] = 0
+    pixels[(0 * 9 + 1) * 4 + 3] = 0
+    const mask = api().outerMask(pixels, 9, 5)
+    expect(mask[(1 * 9 + 1) * 4 + 3]).toBe(0)
+    expect(mask[(2 * 9 + 4) * 4 + 3]).toBe(0)
+    expect(mask[(2 * 9 + 1) * 4 + 3]).toBe(255)
+    expect(mask[(2 * 9 + 7) * 4 + 3]).toBe(255)
+  })
+
   it('resizes selected background patterns live with synchronized slider and number controls', () => {
     const controls = new Map<string, any>()
     const document = { getElementById(id: string) {
       if (!controls.has(id)) controls.set(id, Object.assign(new EventTarget(), { value: '' }))
       return controls.get(id)
     } }
-    const layer = canvas(), feature = new Function('globalThis', 'document',
+    const layer = canvas(), outline = canvas()
+    let created = 0
+    const feature = new Function('globalThis', 'document',
       `${backgroundSource}\nreturn globalThis.HeartStarBackground;`)({}, {
-        ...document, createElement: () => layer.element,
+        ...document, createElement: () => created++ === 0 ? layer.element : outline.element,
       })
-    const image = { naturalWidth: 200, naturalHeight: 100 }, source = {}
+    const image = { naturalWidth: 200, naturalHeight: 100 }, source = { width: 500, height: 500 }
     const states = [
       { imageScale: 2, imageDx: 15, background: { type: 'image', image, scale: 1, dx: 0, dy: 0 } },
       { background: { type: 'image', image, scale: 1, dx: 0, dy: 0 } },
@@ -53,7 +93,7 @@ describe('single-pattern background', () => {
     expect(states[1]!.background.scale).toBe(1)
     expect(number.value).toBe('800')
     expect(layer.calls).toContainEqual(['image', image, -460, -210, 960, 480])
-    expect(layer.calls).toContainEqual(['image', source, 80, 70, 40, 60, 0, 0, 40, 60])
+    expect(layer.calls).toContainEqual(['image', outline.element, 80, 70, 40, 60, 0, 0, 40, 60])
     expect(states[0]!.imageScale).toBe(2)
     expect(states[0]!.imageDx).toBe(15)
     number.value = '250'
@@ -122,24 +162,24 @@ describe('single-pattern background', () => {
     expect(feature.has(states[2])).toBe(true)
   })
 
-  it('uses the original template alpha as the outline instead of producing a rectangular background', () => {
+  it('clips the new background with the filled outline rather than the old template texture', () => {
     const { ctx, calls } = canvas()
-    const layer = canvas(), source = { width: 500, height: 500 }
-    api(layer).draw(ctx, { background: { type: 'color', color: '#ffccdd' } }, 100, 100, 40, 60, source)
+    const layer = canvas(), outline = canvas(), source = { width: 500, height: 500 }
+    api(layer, outline).draw(ctx, { background: { type: 'color', color: '#ffccdd' } }, 100, 100, 40, 60, source)
     expect(layer.calls).toEqual([['scale', 1, 1], ['fill', '#ffccdd', 0, 0, 40, 60],
-      ['composite', 'destination-in'], ['image', source, 80, 70, 40, 60, 0, 0, 40, 60]])
+      ['composite', 'destination-in'], ['image', outline.element, 80, 70, 40, 60, 0, 0, 40, 60]])
     expect(calls).toEqual([['image', layer.element, 80, 70, 40, 60]])
   })
 
   it('covers the original silhouette proportionally and uses background transforms, not photo transforms', () => {
     const { ctx, calls } = canvas()
-    const layer = canvas(), source = { width: 500, height: 500 }
+    const layer = canvas(), outline = canvas(), source = { width: 500, height: 500 }
     const image = { naturalWidth: 200, naturalHeight: 100 }
-    api(layer).draw(ctx, { imageScale: 9, imageDx: 999, background: {
+    api(layer, outline).draw(ctx, { imageScale: 9, imageDx: 999, background: {
       type: 'image', image, scale: 2, dx: 5, dy: -3,
     } }, 100, 100, 40, 60, source)
     expect(layer.calls).toEqual([['scale', 1, 1], ['image', image, -95, -33, 240, 120],
-      ['composite', 'destination-in'], ['image', source, 80, 70, 40, 60, 0, 0, 40, 60]])
+      ['composite', 'destination-in'], ['image', outline.element, 80, 70, 40, 60, 0, 0, 40, 60]])
     expect(calls).toEqual([['image', layer.element, 80, 70, 40, 60]])
   })
 

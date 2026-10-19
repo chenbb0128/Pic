@@ -1,7 +1,8 @@
-// Replace pattern colors while preserving the original template's alpha outline.
+// Replace the background completely, reusing only the template's outer silhouette.
 (() => {
   const regionCache = new WeakMap();
   const layerCache = new WeakMap();
+  const outlineCache = new WeakMap();
   function has(state) {
     const bg = state?.background;
     return !!bg && (bg.type === 'color' ? /^#[0-9a-f]{6}$/i.test(bg.color) :
@@ -12,6 +13,51 @@
     for (const id of ids) {
       if (states[id]) states[id].background = { ...states[id].background, ...patch };
     }
+  }
+
+  function outerMask(pixels, w, h) {
+    const count = w * h, outside = new Uint8Array(count), queue = new Uint32Array(count);
+    let head = 0, tail = 0;
+    const visit = i => {
+      if (!outside[i] && !pixels[i * 4 + 3]) { outside[i] = 1; queue[tail++] = i; }
+    };
+    // Only transparency connected to the image border is outside the silhouette.
+    // Enclosed holes and translucent texture belong to the new, solid background.
+    for (let x = 0; x < w; x++) { visit(x); visit((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { visit(y * w); visit(y * w + w - 1); }
+    while (head < tail) {
+      const i = queue[head++], x = i % w;
+      if (x) visit(i - 1);
+      if (x + 1 < w) visit(i + 1);
+      if (i >= w) visit(i - w);
+      if (i + w < count) visit(i + w);
+    }
+    const mask = new Uint8ClampedArray(count * 4);
+    for (let i = 0; i < count; i++) {
+      if (outside[i]) continue;
+      const x = i % w, alpha = pixels[i * 4 + 3];
+      const edge = !x || x === w - 1 || i < w || i >= count - w ||
+        outside[i - 1] || outside[i + 1] || outside[i - w] || outside[i + w];
+      // Preserve antialiasing at the original exterior, not the old interior texture.
+      mask[i * 4 + 3] = edge && alpha ? alpha : 255;
+    }
+    return mask;
+  }
+
+  function outline(source) {
+    let mask = outlineCache.get(source);
+    if (!mask) {
+      mask = document.createElement('canvas');
+      mask.width = source.naturalWidth || source.width;
+      mask.height = source.naturalHeight || source.height;
+      const paint = mask.getContext('2d', { willReadFrequently: true });
+      paint.drawImage(source, 0, 0, mask.width, mask.height);
+      const image = paint.getImageData(0, 0, mask.width, mask.height);
+      image.data.set(outerMask(image.data, mask.width, mask.height));
+      paint.putImageData(image, 0, 0);
+      outlineCache.set(source, mask);
+    }
+    return mask;
   }
 
   function measureRegions(cfg, pixels) {
@@ -118,9 +164,9 @@
       const dw = bg.image.naturalWidth * ratio, dh = bg.image.naturalHeight * ratio;
       paint.drawImage(bg.image, w / 2 + (bg.dx || 0) - dw / 2, h / 2 + (bg.dy || 0) - dh / 2, dw, dh);
     }
-    // Use only the template's alpha, never its old colors or a generic heart path.
+    // Reuse the exterior only; the old pattern's holes/opacity must not cut the new background.
     paint.globalCompositeOperation = 'destination-in';
-    paint.drawImage(source, x - w / 2, y - h / 2, w, h, 0, 0, w, h);
+    paint.drawImage(outline(source), x - w / 2, y - h / 2, w, h, 0, 0, w, h);
     ctx.drawImage(layer, x - w / 2, y - h / 2, w, h);
   }
 
@@ -158,7 +204,7 @@
       scaleRange.value = String((first.scale ?? 1) * 100);
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
-        mode.value === 'image' ? (first.image?.naturalWidth ? '花纹未铺满时，可调大“花纹大小”，并用 X / Y 调整位置。超出原轮廓的部分自动裁掉，照片保持不变。' : '上传背景图片，只替换内部花纹，保留原来的爱心、星星等轮廓。') :
+        mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓。') :
         mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';
     }
 
@@ -209,7 +255,7 @@
         if (target !== getStates()) return;
         if (success) {
           apply(target, selected, { type: 'image', image, scale: 1, dx: 0, dy: 0 });
-          report(`已替换 ${selected.length} 个图案的背景花纹，原轮廓和照片保持不变。`);
+          report(`已为 ${selected.length} 个图案设置全新背景，仅复用外轮廓，照片保持不变。`);
         } else report('背景图片读取失败，请重新选择。', true);
         update();
         redraw();
@@ -235,5 +281,5 @@
     return { update, busy, hasAny: () => getStates().some(has) };
   }
 
-  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, regions, frame, create };
+  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, regions, frame, create, outerMask };
 })();
