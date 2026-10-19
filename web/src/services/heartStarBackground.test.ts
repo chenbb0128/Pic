@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import backgroundSource from '../../public/embedded/heart-star/slot-background.js?raw'
 
-function api() {
-  return new Function('globalThis', `${backgroundSource}\nreturn globalThis.HeartStarBackground;`)({})
+function api(layer?: ReturnType<typeof canvas>) {
+  const document = { createElement: () => layer?.element }
+  return new Function('globalThis', 'document', `${backgroundSource}\nreturn globalThis.HeartStarBackground;`)({}, document)
 }
 
 function canvas() {
@@ -15,8 +16,12 @@ function canvas() {
     clip(rule?: string) { calls.push(rule ? ['clip', rule] : 'clip') },
     fillRect(...args: number[]) { calls.push(['fill', this.fillStyle, ...args]) },
     drawImage(...args: any[]) { calls.push(['image', ...args]) },
+    set globalCompositeOperation(value: string) { calls.push(['composite', value]) },
+    getTransform() { return { a: 1, d: 1 } },
+    scale(...args: number[]) { calls.push(['scale', ...args]) },
   }
-  return { ctx, calls }
+  const element = { width: 0, height: 0, getContext: () => ctx }
+  return { ctx, calls, element }
 }
 
 describe('single-pattern background', () => {
@@ -40,20 +45,32 @@ describe('single-pattern background', () => {
     expect(feature.has(states[2])).toBe(true)
   })
 
-  it('draws a rectangular replacement without retaining the old heart or star outline', () => {
+  it('uses the original template alpha as the outline instead of producing a rectangular background', () => {
     const { ctx, calls } = canvas()
-    api().draw(ctx, { background: { type: 'color', color: '#ffccdd' } }, 100, 100, 40, 60,
-      () => calls.push('heart'))
-    expect(calls).toEqual(['save', ['fill', '#ffccdd', 80, 70, 40, 60], 'restore'])
+    const layer = canvas(), source = { width: 500, height: 500 }
+    api(layer).draw(ctx, { background: { type: 'color', color: '#ffccdd' } }, 100, 100, 40, 60, source)
+    expect(layer.calls).toEqual([['scale', 1, 1], ['fill', '#ffccdd', 0, 0, 40, 60],
+      ['composite', 'destination-in'], ['image', source, 80, 70, 40, 60, 0, 0, 40, 60]])
+    expect(calls).toEqual([['image', layer.element, 80, 70, 40, 60]])
   })
 
-  it('fits an image proportionally and uses background transforms, not photo transforms', () => {
+  it('covers the original silhouette proportionally and uses background transforms, not photo transforms', () => {
     const { ctx, calls } = canvas()
+    const layer = canvas(), source = { width: 500, height: 500 }
     const image = { naturalWidth: 200, naturalHeight: 100 }
-    api().draw(ctx, { imageScale: 9, imageDx: 999, background: {
+    api(layer).draw(ctx, { imageScale: 9, imageDx: 999, background: {
       type: 'image', image, scale: 2, dx: 5, dy: -3,
-    } }, 100, 100, 40, 60, () => calls.push('star'))
-    expect(calls).toEqual(['save', ['image', image, 65, 77, 80, 40], 'restore'])
+    } }, 100, 100, 40, 60, source)
+    expect(layer.calls).toEqual([['scale', 1, 1], ['image', image, -95, -33, 240, 120],
+      ['composite', 'destination-in'], ['image', source, 80, 70, 40, 60, 0, 0, 40, 60]])
+    expect(calls).toEqual([['image', layer.element, 80, 70, 40, 60]])
+  })
+
+  it('does not expand or move the photo frame when a background is enabled on a combination pattern', () => {
+    const cfg = { custom: true, slots: [{ x: 30, y: 15, w: 10, h: 12, type: 'heart' }],
+      placements: [{ x: 0, y: 0, w: 40, h: 50 }] }
+    const states = [{ background: { type: 'color', color: '#ffccdd' } }]
+    expect(api().frame(cfg, {}, states, 0)).toEqual({ x: 30, y: 15, w: 10, h: 12, type: 'heart' })
   })
 
   it('removes only replaced artwork from the base and restores the untouched base after clearing', () => {

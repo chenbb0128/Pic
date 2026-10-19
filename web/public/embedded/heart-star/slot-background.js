@@ -1,6 +1,7 @@
-// Optional complete artwork replacement; inactive slots keep the original template.
+// Replace pattern colors while preserving the original template's alpha outline.
 (() => {
   const regionCache = new WeakMap();
+  const layerCache = new WeakMap();
   function has(state) {
     const bg = state?.background;
     return !!bg && (bg.type === 'color' ? /^#[0-9a-f]{6}$/i.test(bg.color) :
@@ -59,7 +60,7 @@
   }
 
   function frame(cfg, source, states, index) {
-    return has(states[index]) ? regions(cfg, source)[index] : cfg.slots[index];
+    return cfg.slots[index];
   }
 
   function drawTemplate(ctx, cfg, source, states) {
@@ -78,19 +79,29 @@
     ctx.restore();
   }
 
-  function draw(ctx, state, x, y, w, h) {
+  function draw(ctx, state, x, y, w, h, source) {
     if (!has(state)) return;
     const bg = state.background;
-    ctx.save();
+    let layer = layerCache.get(state);
+    if (!layer) { layer = document.createElement('canvas'); layerCache.set(state, layer); }
+    const transform = ctx.getTransform(), density = Math.max(1, Math.abs(transform.a), Math.abs(transform.d));
+    // Reset the offscreen layer each time, including its previous composite mode.
+    layer.width = Math.ceil(w * density);
+    layer.height = Math.ceil(h * density);
+    const paint = layer.getContext('2d');
+    paint.scale(layer.width / w, layer.height / h);
     if (bg.type === 'color') {
-      ctx.fillStyle = bg.color;
-      ctx.fillRect(x - w / 2, y - h / 2, w, h);
+      paint.fillStyle = bg.color;
+      paint.fillRect(0, 0, w, h);
     } else {
-      const ratio = Math.min(w / bg.image.naturalWidth, h / bg.image.naturalHeight) * (bg.scale ?? 1);
+      const ratio = Math.max(w / bg.image.naturalWidth, h / bg.image.naturalHeight) * (bg.scale ?? 1);
       const dw = bg.image.naturalWidth * ratio, dh = bg.image.naturalHeight * ratio;
-      ctx.drawImage(bg.image, x + (bg.dx || 0) - dw / 2, y + (bg.dy || 0) - dh / 2, dw, dh);
+      paint.drawImage(bg.image, w / 2 + (bg.dx || 0) - dw / 2, h / 2 + (bg.dy || 0) - dh / 2, dw, dh);
     }
-    ctx.restore();
+    // Use only the template's alpha, never its old colors or a generic heart path.
+    paint.globalCompositeOperation = 'destination-in';
+    paint.drawImage(source, x - w / 2, y - h / 2, w, h, 0, 0, w, h);
+    ctx.drawImage(layer, x - w / 2, y - h / 2, w, h);
   }
 
   function create({ getStates, getSelection, getTemplate, redraw, report }) {
@@ -125,8 +136,8 @@
       }
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
-        mode.value === 'image' ? (first.image?.naturalWidth ? '原图案已移除，新图片完整显示，不套爱心或星星外形。照片仍可叠加。' : '上传新图片以完整替换所选原图案，不保留原花纹及外形。') :
-        mode.value === 'color' ? `所选 ${selected.length} 个原图案已替换为纯色矩形。` : '未启用，保留原图案。可多选后批量替换。';
+        mode.value === 'image' ? (first.image?.naturalWidth ? '已替换内部花纹，保留原模板轮廓；背景等比例铺满，超出轮廓的部分裁掉。照片保持不变。' : '上传背景图片，只替换内部花纹，保留原来的爱心、星星等轮廓。') :
+        mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';
     }
 
     function change(patch) {
@@ -167,7 +178,7 @@
         if (target !== getStates()) return;
         if (success) {
           apply(target, selected, { type: 'image', image, scale: 1, dx: 0, dy: 0 });
-          report(`已用新背景完整替换 ${selected.length} 个原图案，照片保持不变。`);
+          report(`已替换 ${selected.length} 个图案的背景花纹，原轮廓和照片保持不变。`);
         } else report('背景图片读取失败，请重新选择。', true);
         update();
         redraw();
@@ -187,5 +198,5 @@
     return { update, busy, hasAny: () => getStates().some(has) };
   }
 
-  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, frame, create };
+  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, regions, frame, create };
 })();

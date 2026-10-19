@@ -125,11 +125,11 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
  <div class="field"><div class="label">裁剪形状 <span class="small">只影响选中的图形</span></div><label class="check clip-toggle"><input id="clip" type="checkbox" checked><span>启用裁剪</span></label><select class="select" id="clipShape"><option value="mixed" disabled>混合</option><option value="template" selected>跟随模板</option><option value="heart">爱心</option><option value="star">星星</option><option value="circle">圆形</option><option value="oval">椭圆</option><option value="roundRect">圆角方形</option><option value="square">正方形</option><option value="diamond">菱形</option><option value="hexagon">六边形</option></select></div>
  <div class="field" id="photoFrameField"><div class="label">裁剪内图片 <span class="small">所选位置</span></div><label class="check clip-toggle"><input id="photoDragMode" type="checkbox"><span>拖动图片</span></label><div class="size-entry"><input id="photoScaleNumber" type="number" min="25" max="400" step="1" value="100" aria-label="裁剪内图片缩放"><span>%</span></div><div class="range-line"><input id="photoScale" type="range" min="25" max="400" step="1" value="100" aria-label="裁剪内图片缩放"><output id="photoScaleOut">100%</output></div><div class="photo-offsets"><label>X <input id="photoOffsetX" type="number" step="1" value="0" aria-label="裁剪内图片水平偏移"> px</label><label>Y <input id="photoOffsetY" type="number" step="1" value="0" aria-label="裁剪内图片垂直偏移"> px</label></div><div class="move-control"><div class="move-pad photo-pad"><span></span><button type="button" data-photo-move="0,-1" title="图片上移" aria-label="图片上移">↑</button><span></span><button type="button" data-photo-move="-1,0" title="图片左移" aria-label="图片左移">←</button><button type="button" id="resetPhoto" title="重置图片位置和缩放" aria-label="重置图片位置和缩放"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 0 3-6M3 3v6h6"/></svg></button><button type="button" data-photo-move="1,0" title="图片右移" aria-label="图片右移">→</button><span></span><button type="button" data-photo-move="0,1" title="图片下移" aria-label="图片下移">↓</button><span></span></div><label class="step">步长 <select id="photoMoveStep"><option value="1">1 px</option><option value="5" selected>5 px</option><option value="10">10 px</option></select></label></div><div class="small" id="photoOffsetReadout" style="margin-top:8px">X 0 px　Y 0 px</div></div>
  <div class="field" id="slotBackgroundField">
-  <div class="label">替换图案背景 <span class="small">移除原图案 · 可多选</span></div>
+  <div class="label">替换图案背景 <span class="small">保留原轮廓 · 可多选</span></div>
   <select class="select" id="slotBackgroundMode" aria-label="图案背景类型"><option value="none">不启用（保留原效果）</option><option value="color">纯色背景</option><option value="image">图片背景</option><option value="mixed" disabled>混合背景</option></select>
   <div id="slotBackgroundColorRow" hidden style="margin-top:10px"><label class="small">背景颜色 <input id="slotBackgroundColor" type="color" value="#fff0f5" aria-label="图案背景颜色" style="width:56px;height:36px;vertical-align:middle;border:1px solid var(--line);border-radius:8px;background:#fff"></label></div>
   <div id="slotBackgroundImageRow" hidden style="margin-top:10px">
-   <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%">上传新背景，替换原图案</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
+   <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%">上传背景，替换内部花纹</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
    <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px">背景缩放 <input id="slotBackgroundScale" type="number" min="25" max="400" step="1" value="100" aria-label="背景图片缩放" style="width:80px;min-height:36px"> %</label>
    <div class="photo-offsets"><label>X <input id="slotBackgroundX" type="number" min="-10000" max="10000" value="0" step="1" aria-label="背景图片水平偏移"> px</label><label>Y <input id="slotBackgroundY" type="number" min="-10000" max="10000" value="0" step="1" aria-label="背景图片垂直偏移"> px</label></div>
    <button type="button" class="btn" id="slotBackgroundReset" style="width:100%;height:36px;font-size:12px">重置背景缩放与位置</button>
@@ -144,7 +144,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </main>
 <dialog class="preview-dialog" id="previewDialog" aria-labelledby="previewTitle"></dialog>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
-<script src="./slot-background.js?v=background-replacement-1"></script>
+<script src="./slot-background.js?v=background-outline-2"></script>
 <script>
 const templateSources={"模板混合.png":"./assets/2561b63dada0b6cad889.png","模板爱心.png":"./assets/24f04555370fa8156a2f.png","模板粉色.png":"./assets/55541387191da454ff80.png","模板蓝色.png":"./assets/6cc0d5693e698afad67e.png","模板黄色.png":"./assets/d4b5365aef3e80d8bdd3.png","波点圆形.png":"./assets/7cbd4eac0cf3fa069115.png","波点爱心.png":"./assets/2fa2bc82b6db18b98fcc.png","豹纹星星.png":"./assets/0e00c7263d8ef3613332.png"};
 const templates={
@@ -277,7 +277,7 @@ function starPath(c,x,y,w,h){c.beginPath();for(let i=0;i<10;i++){const a=-Math.P
 function circlePath(c,x,y,w,h){c.beginPath();c.ellipse(x,y,w/2,h/2,0,0,Math.PI*2);c.closePath()}
 function roundRectPath(c,x,y,w,h,r){r=Math.max(0,Math.min(r,w/2,h/2));c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath()}
 function polygonPath(c,x,y,w,h,n,offset=0){c.beginPath();for(let i=0;i<n;i++){const a=offset+i*Math.PI*2/n,px=x+Math.cos(a)*w/2,py=y+Math.sin(a)*h/2;i?c.lineTo(px,py):c.moveTo(px,py)}c.closePath()}
-function slotShape(p,i){const s=states[i]?.shape||'template';return s==='template'?(HeartStarBackground.has(states[i])?'rect':p.type):s}
+function slotShape(p,i){const s=states[i]?.shape||'template';return s==='template'?p.type:s}
 function clipPath(c,type,x,y,w,h){if(type==='heart')return heartPath(c,x,y,w,h);if(type==='star')return starPath(c,x,y,w,h);if(type==='rect')return roundRectPath(c,x-w/2,y-h/2,w,h,0);if(type==='circle')return circlePath(c,x,y,Math.min(w,h),Math.min(w,h));if(type==='oval')return circlePath(c,x,y,w,h);if(type==='roundRect')return roundRectPath(c,x-w/2,y-h/2,w,h,Math.min(w,h)*.18);if(type==='square'){const s=Math.min(w,h);return roundRectPath(c,x-s/2,y-s/2,s,s,0)}if(type==='diamond')return polygonPath(c,x,y,w,h,4,-Math.PI/2);if(type==='hexagon')return polygonPath(c,x,y,w,h,6,-Math.PI/6);return circlePath(c,x,y,w,h)}
 function draw(showSelection=true){
  const cfg=templates[sel.value];
@@ -291,7 +291,7 @@ function draw(showSelection=true){
   const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=slotPhoto(i),f=cfg.text?p:HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
   if(cfg.text)drawCopy(x,y,w,h,st.size,st.text??DEFAULT_COPY);
   else {
-   HeartStarBackground.draw(ctx,st,f.x,f.y,f.w,f.h);
+   if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}
    if(im){ctx.save();if(clip.checked){clipPath(ctx,slotShape(p,i),x,y,w,h);ctx.clip()}const ratio=Math.max(w/im.width,h/im.height)*(st.imageScale??1),dw=im.width*ratio,dh=im.height*ratio;ctx.drawImage(im,x+(st.imageDx||0)-dw/2,y+(st.imageDy||0)-dh/2,dw,dh);ctx.restore()}
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
