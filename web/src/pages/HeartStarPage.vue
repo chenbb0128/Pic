@@ -9,7 +9,7 @@ const unlocked = ref(false)
 const checkingAccess = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=outer-silhouette-6`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=fast-preview-7`
 
 onMounted(async () => {
   checkingAccess.value = true

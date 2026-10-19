@@ -30,6 +30,36 @@ function canvas() {
 }
 
 describe('single-pattern background', () => {
+  it('reuses unchanged background layers and refreshes only for background, outline or resolution changes', () => {
+    const layer = canvas(), feature = api(layer), target = canvas(), source = { width: 500, height: 500 }
+    const state = { imageScale: 1, background: { type: 'color', color: '#ffccdd', dx: 0 } }
+    feature.draw(target.ctx, state, 100, 100, 40, 60, source)
+    const firstPass = layer.calls.length
+    state.imageScale = 2
+    feature.draw(target.ctx, state, 100, 100, 40, 60, source)
+    expect(layer.calls).toHaveLength(firstPass)
+    expect(target.calls).toHaveLength(2)
+    state.background.color = '#abcdef'
+    feature.draw(target.ctx, state, 100, 100, 40, 60, source)
+    expect(layer.calls.length).toBeGreaterThan(firstPass)
+    const afterColor = layer.calls.length
+    state.background.dx = 5
+    feature.draw(target.ctx, state, 100, 100, 40, 60, source)
+    expect(layer.calls.length).toBeGreaterThan(afterColor)
+    const afterOffset = layer.calls.length
+    target.ctx.getTransform = () => ({ a: 2, d: 2 })
+    feature.draw(target.ctx, state, 100, 100, 40, 60, source)
+    expect(layer.element.width).toBe(80)
+    expect(layer.element.height).toBe(120)
+    expect(layer.calls.length).toBeGreaterThan(afterOffset)
+    const afterResolution = layer.calls.length
+    feature.draw(target.ctx, state, 120, 100, 40, 60, source)
+    expect(layer.calls.length).toBeGreaterThan(afterResolution)
+    const afterPosition = layer.calls.length
+    feature.draw(target.ctx, state, 120, 100, 40, 60, { width: 500, height: 500 })
+    expect(layer.calls.length).toBeGreaterThan(afterPosition)
+  })
+
   it('fills old pattern holes and interior transparency while retaining only the outer silhouette', () => {
     const pixels = new Uint8ClampedArray(7 * 7 * 4)
     for (let y = 1; y <= 5; y++) for (let x = 1; x <= 5; x++) {

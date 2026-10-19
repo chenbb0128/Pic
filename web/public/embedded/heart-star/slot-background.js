@@ -148,12 +148,18 @@
   function draw(ctx, state, x, y, w, h, source) {
     if (!has(state)) return;
     const bg = state.background;
-    let layer = layerCache.get(state);
-    if (!layer) { layer = document.createElement('canvas'); layerCache.set(state, layer); }
-    const transform = ctx.getTransform(), density = Math.max(1, Math.abs(transform.a), Math.abs(transform.d));
-    // Reset the offscreen layer each time, including its previous composite mode.
-    layer.width = Math.ceil(w * density);
-    layer.height = Math.ceil(h * density);
+    const transform = ctx.getTransform(), density = Math.max(.1, Math.abs(transform.a), Math.abs(transform.d));
+    const pixelW = Math.ceil(w * density), pixelH = Math.ceil(h * density);
+    const key = [source, x, y, w, h, pixelW, pixelH, bg.type, bg.color, bg.image, bg.scale ?? 1, bg.dx || 0, bg.dy || 0];
+    const cached = layerCache.get(state);
+    if (cached && key.every((value, i) => value === cached.key[i])) {
+      ctx.drawImage(cached.layer, x - w / 2, y - h / 2, w, h);
+      return;
+    }
+    const layer = cached?.layer || document.createElement('canvas');
+    // Resize/reset only when the background or target resolution has changed.
+    layer.width = pixelW;
+    layer.height = pixelH;
     const paint = layer.getContext('2d');
     paint.scale(layer.width / w, layer.height / h);
     if (bg.type === 'color') {
@@ -167,6 +173,7 @@
     // Reuse the exterior only; the old pattern's holes/opacity must not cut the new background.
     paint.globalCompositeOperation = 'destination-in';
     paint.drawImage(outline(source), x - w / 2, y - h / 2, w, h, 0, 0, w, h);
+    layerCache.set(state, { layer, key });
     ctx.drawImage(layer, x - w / 2, y - h / 2, w, h);
   }
 
