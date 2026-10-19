@@ -75,6 +75,18 @@
     }, { passive: false });
   }
 
+  function createShortcuts({ target, canClear, onClear }) {
+    target.addEventListener('keydown', event => {
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing ||
+          event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      if (event.target?.isContentEditable ||
+          event.target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])')) return;
+      if (target.querySelector('dialog[open]') || !canClear()) return;
+      event.preventDefault();
+      onClear();
+    });
+  }
+
   function createSections(fields) {
     fields.forEach((field, index) => {
       const key = `heart-star-section-${field.id || field.querySelector('input[id],select[id],textarea[id]')?.id || index}`;
@@ -108,5 +120,5 @@
     });
   }
 
-  globalThis.HeartStarInteractions = { createSelection, resizeSelection, createSections };
+  globalThis.HeartStarInteractions = { createSelection, resizeSelection, createShortcuts, createSections };
 })();

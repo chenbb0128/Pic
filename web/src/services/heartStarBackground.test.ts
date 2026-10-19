@@ -30,6 +30,14 @@ function canvas() {
 }
 
 describe('single-pattern background', () => {
+  it('uses the photo opening of a replacement I ♥ ME motif without changing the original template slot', () => {
+    const feature = api(), original = { x: 100, y: 200, w: 140, h: 140 }, updated = { x: 120, y: 180, w: 130, h: 150 }
+    const cfg = { slots: [original] }
+    expect(feature.frame(cfg, {}, [{ motif: { frame: updated } }], 0)).toBe(updated)
+    expect(feature.frame(cfg, {}, [{}], 0)).toBe(original)
+    expect(cfg.slots[0]).toBe(original)
+  })
+
   it('reuses unchanged background layers and refreshes only for background, outline or resolution changes', () => {
     const layer = canvas(), feature = api(layer), target = canvas(), source = { width: 500, height: 500 }
     const state = { imageScale: 1, background: { type: 'color', color: '#ffccdd', dx: 0 } }

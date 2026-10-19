@@ -13,6 +13,7 @@ import { copyText } from '../services/clipboard'
 import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanvasPng, type LocalImage } from '../services/studioImage'
 import { formatBytes } from '../services/pngExporter'
 import { imageContour } from '../services/imageContour'
+import { drawPreviewWatermark } from '../services/studioWatermark'
 
 interface StudioAsset extends LocalImage {
   widthMm: number
@@ -54,6 +55,7 @@ interface BoxSelection {
   startYmm: number
   xMm: number
   yMm: number
+  previousIndices?: number[]
 }
 
 interface StudioBoard {
@@ -133,6 +135,14 @@ const boards = shallowRef<(StudioBoard | null)[]>([null])
 const activeBoardIndex = ref(0)
 const overviewOpen = ref(false)
 const overviewCanvases = new Map<number, HTMLCanvasElement>()
+const watermarkEnabled = ref(true)
+const watermarkText = ref('仅供确认 · 禁止盗用')
+const watermarkOpacity = ref(20)
+const previewDialog = ref<HTMLDialogElement | null>(null)
+const shortcutDialog = ref<HTMLDialogElement | null>(null)
+const previewImage = ref('')
+const previewTitle = ref('')
+const proofDownloading = ref(false)
 let switchingBoard = false
 const dpiChoices = [300, 500, 600, 800, 1000]
 const paperOptions = [
@@ -274,7 +284,10 @@ function renderOverviewBoard(index: number): void {
   canvas.width = Math.max(1, Math.round(scene.paper.widthMm * scale))
   canvas.height = Math.max(1, Math.round(scene.paper.heightMm * scale))
   const context = canvas.getContext('2d')
-  if (context) render(context, canvas.width, canvas.height, false, scene)
+  if (context) {
+    render(context, canvas.width, canvas.height, false, scene)
+    stampPreview(context, canvas.width, canvas.height)
+  }
 }
 
 function setOverviewCanvas(index: number, canvas: HTMLCanvasElement | null): void {
@@ -730,7 +743,83 @@ function renderPreview(): void {
   const canvas = preview.value
   if (!canvas) return
   const context = canvas.getContext('2d')
-  if (context) render(context, canvas.width, canvas.height, true)
+  if (context) {
+    render(context, canvas.width, canvas.height, true)
+    stampPreview(context, canvas.width, canvas.height)
+  }
+}
+
+function stampPreview(context: CanvasRenderingContext2D, width: number, height: number, enabled = watermarkEnabled.value): void {
+  drawPreviewWatermark(context, width, height, { enabled, text: watermarkText.value, opacity: watermarkOpacity.value })
+}
+
+function createProofCanvas(withWatermark = watermarkEnabled.value): HTMLCanvasElement {
+  if (!placements.value.length || exporting.value || uploading.value) throw new Error('请先排版，并等待图片处理完成后再预览。')
+  const canvas = document.createElement('canvas')
+  const scale = 1600 / Math.max(paper.value.widthMm, paper.value.heightMm)
+  canvas.width = Math.max(1, Math.round(paper.value.widthMm * scale))
+  canvas.height = Math.max(1, Math.round(paper.value.heightMm * scale))
+  const context = canvas.getContext('2d')
+  if (!context) throw new Error('浏览器无法创建预览图。')
+  render(context, canvas.width, canvas.height, false)
+  // Flatten proofs on white; print exports keep their original transparency.
+  context.save()
+  context.globalCompositeOperation = 'destination-over'
+  context.fillStyle = '#fff'
+  context.fillRect(0, 0, canvas.width, canvas.height)
+  context.restore()
+  stampPreview(context, canvas.width, canvas.height, withWatermark)
+  return canvas
+}
+
+function openPreviewDialog(): void {
+  if (!previewDialog.value || previewDialog.value.open) return
+  try {
+    const canvas = createProofCanvas()
+    previewImage.value = canvas.toDataURL('image/png')
+    previewTitle.value = `画板 ${activeBoardIndex.value + 1} · ${preset.value === 'custom' ? '自定义' : preset.value} · ${paper.value.widthMm} × ${paper.value.heightMm} mm`
+    canvas.width = canvas.height = 0
+    previewDialog.value.showModal()
+  } catch (error) { status.value = error instanceof Error ? error.message : '预览图生成失败。' }
+}
+
+async function downloadWatermarkedPreview(): Promise<void> {
+  if (proofDownloading.value) return
+  let canvas: HTMLCanvasElement | null = null
+  let url = ''
+  try {
+    canvas = createProofCanvas(true)
+    const name = boardPngName(preset.value, paper.value, activeBoardIndex.value).replace(/\.png$/, '_水印预览.png')
+    proofDownloading.value = true
+    const blob = await canvasPng(canvas, 150)
+    url = URL.createObjectURL(blob)
+    downloadBlob(url, name)
+    status.value = '已下载带水印预览图；用于确认效果，正式印刷请导出透明 PNG。'
+  } catch (error) { status.value = error instanceof Error ? error.message : '水印预览图生成失败。' }
+  finally {
+    if (canvas) canvas.width = canvas.height = 0
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 1000)
+    proofDownloading.value = false
+  }
+}
+
+function closeDialogOnBackdrop(event: MouseEvent): void {
+  const dialog = event.currentTarget as HTMLDialogElement
+  if (event.target !== dialog) return
+  const bounds = dialog.getBoundingClientRect()
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close()
+}
+
+function onWorkspaceKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey ||
+    drag.value || boxSelection.value || assetDrag.value || exporting.value || uploading.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])') ||
+    (typeof document !== 'undefined' && document.querySelector?.('dialog[open]'))) return
+  if (selectedPlacementIndex.value === null && !selectedPlacementIndices.value.length) return
+  event.preventDefault()
+  clearCanvasSelection()
+  status.value = '已取消画板选择，图片位置和素材勾选保持不变。'
 }
 
 watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () => {
@@ -743,6 +832,9 @@ watch([assets, exporting, uploading, controlsOpen], cancelAssetDrag, { flush: 's
 watch([paper, placements, placedAssets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
 watch([selectedPlacementIndex, selectedPlacementIndices, boxSelection], () => { void nextTick(renderPreview) })
+watch([watermarkEnabled, watermarkText, watermarkOpacity], () => {
+  void nextTick(() => { renderPreview(); if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index)) })
+})
 watch(adjusting, (active) => { if (!active) { clearCanvasSelection(); adjustTool.value = 'move' } }, { flush: 'sync' })
 watch(adjustTool, clearCanvasSelection, { flush: 'sync' })
 watch(() => overviewOpen.value ? overviewBoards.value : null, () => {
@@ -750,8 +842,9 @@ watch(() => overviewOpen.value ? overviewBoards.value : null, () => {
     if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index))
   })
 })
-onMounted(() => { void nextTick(renderPreview) })
+onMounted(() => { void nextTick(renderPreview); if (typeof window !== 'undefined') window.addEventListener?.('keydown', onWorkspaceKeydown) })
 onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') window.removeEventListener?.('keydown', onWorkspaceKeydown)
   cancelAssetDrag()
   assetRows.clear()
   overviewCanvases.clear()
@@ -793,9 +886,10 @@ function onPointerDown(event: PointerEvent): void {
   if (!adjusting.value || !canvas || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
   const point = pointMm(event, canvas)
   if (adjustTool.value === 'select') {
+    const previousIndices = event.shiftKey ? [...selectedPlacementIndices.value] : []
     selectedPlacementIndex.value = null
-    selectedPlacementIndices.value = []
-    boxSelection.value = { pointerId: event.pointerId, startXmm: point.xMm, startYmm: point.yMm, ...point }
+    if (!event.shiftKey) selectedPlacementIndices.value = []
+    boxSelection.value = { pointerId: event.pointerId, startXmm: point.xMm, startYmm: point.yMm, ...point, previousIndices }
     canvas.setPointerCapture(event.pointerId)
     event.preventDefault()
     return
@@ -866,7 +960,8 @@ function onPointerEnd(event: PointerEvent): void {
   if (box?.pointerId === event.pointerId) {
     if (event.type === 'pointerup' && preview.value) {
       const end = pointMm(event, preview.value)
-      selectedPlacementIndices.value = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, end, lockedPlacements.value.length)
+      const found = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, end, lockedPlacements.value.length)
+      selectedPlacementIndices.value = [...new Set([...(box.previousIndices ?? []), ...found])].sort((a, b) => a - b)
       status.value = `已框选 ${selectedPlacementIndices.value.length} 张图片；至少选中 3 张可等间距排列，锁定组不参与。`
     }
     boxSelection.value = null
@@ -1054,8 +1149,8 @@ function downloadOnly(): void {
     <aside ref="sidebar" :class="controlsOpen ? 'fixed inset-x-0 bottom-0 top-0 z-40 block' : 'hidden lg:block'" class="w-full shrink-0 overflow-y-auto border-r border-[#31415f] bg-[#17233d] pb-[env(safe-area-inset-bottom)] text-white lg:static lg:max-h-full lg:w-[466px] lg:pb-0">
       <button type="button" class="sticky top-0 z-10 flex min-h-11 w-full items-center justify-between bg-[#a78bfa] px-5 text-sm font-bold text-white lg:hidden" @click="controlsOpen = false"><span>排版设置</span><span>完成 ✓</span></button>
       <h1 class="border-b border-[#31415f] px-4 py-3 text-sm font-bold text-[#c796ff]">✦ 小星贴自动排版</h1>
-      <section class="border-b border-[#31415f] px-4 py-3">
-        <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">◩&nbsp; 纸张</h2>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">◩&nbsp; 纸张</summary>
         <div class="grid grid-cols-3 gap-1">
           <button v-for="option in paperOptions" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': preset === option.value }" @click="preset = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ orientation === 'landscape' ? option.size : option.portraitSize }}</small></button>
         </div>
@@ -1068,16 +1163,16 @@ function downloadOnly(): void {
           <label>高度 mm<input v-model.number="customHeight" type="number" min="50" max="420" class="studio-input mt-1 w-full" /></label>
         </div>
         <p v-if="preset === 'custom' && (customWidth !== paper.widthMm || customHeight !== paper.heightMm)" class="mt-1 text-[11px] text-[#a9bbe1]">已按{{ orientation === 'landscape' ? '横排' : '竖排' }}调整为 {{ paper.widthMm }} × {{ paper.heightMm }} mm</p>
-      </section>
-      <section class="border-b border-[#31415f] px-4 py-3">
-        <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">DPI</h2>
+      </details>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">DPI</summary>
         <div class="grid grid-cols-5 gap-1">
           <button v-for="value in dpiChoices" :key="value" type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': dpi === value }" :disabled="!exportSize(paper, value).allowed" :title="exportSize(paper, value).allowed ? `${value} DPI` : '超出 1 亿像素导出上限'" @click="dpi = value">{{ value }}</button>
         </div>
         <p id="dpi-feedback" class="mt-1 text-[11px]" :class="dpiError ? 'text-amber-300' : 'text-[#a9bbe1]'" aria-live="polite">{{ dpiError || `输出：${dpiInfo.width} × ${dpiInfo.height} px` }}</p>
-      </section>
-      <section class="border-b border-[#31415f] px-4 py-3">
-        <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">管理模式</h2>
+      </details>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">管理模式</summary>
         <div class="grid grid-cols-2 gap-1 sm:grid-cols-5">
           <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '列表顺序逐行' }, { value: 'smart', label: '智能填充', hint: '列表靠前先排' }, { value: 'neat', label: '整齐排版', hint: '分块对齐' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" :aria-pressed="mode === option.value" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
         </div>
@@ -1095,18 +1190,18 @@ function downloadOnly(): void {
           </template>
           <p v-else class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">每张素材视为一类，同类连续{{ grouping === 'rows' ? '横排，换素材另起一行' : '竖排，换素材另起一列' }}；按图片外框整齐对齐，不穿插透明空隙，可能比尽量填满少排。锁组保留原位，自动排版会避让。</p>
         </template>
-      </section>
-      <section class="border-b border-[#31415f] px-4 py-3">
-        <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">间距</h2>
+      </details>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">间距</summary>
         <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案间距默认 {{ DEFAULT_PATTERN_GAP_MM }}mm，可设置为 0～30 整数毫米。</p>
         <div class="studio-gap-grid">
           <label class="studio-gap-row"><span>↔</span><input :value="gapXmm" type="range" :min="MIN_PATTERN_GAP_MM" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="横向间距" :disabled="autoGap" @input="onGapChange('x', $event)" /><input :value="gapXmm" type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="横向间距毫米" :disabled="autoGap" @change="onGapChange('x', $event)" /><span>mm</span></label>
           <label class="studio-gap-row"><span>↕</span><input :value="gapYmm" type="range" :min="MIN_PATTERN_GAP_MM" max="30" step="1" class="min-w-0 flex-1 accent-[#a78bfa]" aria-label="纵向间距" :disabled="autoGap" @input="onGapChange('y', $event)" /><input :value="gapYmm" type="number" :min="MIN_PATTERN_GAP_MM" max="30" step="1" inputmode="numeric" class="studio-input studio-gap-value" aria-label="纵向间距毫米" :disabled="autoGap" @change="onGapChange('y', $event)" /><span>mm</span></label>
           <label class="studio-auto-gap"><input v-model="autoGap" type="checkbox" />自动</label>
         </div>
-      </section>
-      <section class="border-b border-[#31415f] px-4 py-3">
-        <h2 class="mb-2 text-xs font-medium text-[#a9bbe1]">添加图片</h2>
+      </details>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">添加图片</summary>
         <input ref="fileInput" class="hidden" type="file" accept="image/png,image/webp,image/jpeg" multiple @change="onFileChange" />
         <input ref="folderInput" class="hidden" type="file" webkitdirectory multiple @change="onFileChange" />
         <div class="grid grid-cols-[1fr_64px] gap-2">
@@ -1119,9 +1214,9 @@ function downloadOnly(): void {
           <span class="ml-auto text-[#9db1dc]">已选 {{ selectedCount }}</span>
         </div>
         <div v-if="groups.length" class="mt-2 flex flex-wrap gap-1 text-[11px]"><span v-for="group in groups" :key="group.id" class="rounded border border-[#52658c] px-2 py-1 text-[#c8bbff]">{{ group.name }} · {{ group.itemIds.length }} 图 <button type="button" class="ml-1 text-rose-300" @click="unlockGroup(group.id)">解锁</button></span></div>
-      </section>
-      <section class="min-h-[190px] border-b border-[#31415f] px-4 py-3">
-        <h2 class="text-xs font-medium text-[#a9bbe1]">图片明细 <span class="text-[11px] text-[#8098c5]">（勾选后排版；尺寸单位 cm）</span></h2>
+      </details>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">图片明细 <span class="text-[11px] text-[#8098c5]">（尺寸单位 cm）</span></summary>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
         <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">定制、智能填充按列表从上到下优先排版；拖动右侧手柄调整顺序，松手后更新排版。数量 0 表示不排入，最多 500 份。导入按图片 DPI 换算原尺寸，无 DPI 时用导入时的画板 DPI；修改导出 DPI 不改变厘米尺寸，修改明细保持当前模式。</p>
         <div v-if="bulkOpen" class="mt-2 grid grid-cols-[1fr_1fr_auto] items-end gap-2 rounded-lg border border-[#40537a] p-2 text-[11px] text-[#a9bbe1]">
@@ -1168,7 +1263,7 @@ function downloadOnly(): void {
           </div>
         </div>
         <p v-if="!assets.length" class="flex min-h-[100px] items-center justify-center text-center text-xs text-[#8fa5cf]">还没有添加图片</p>
-      </section>
+      </details>
       <RouterLink class="mx-4 my-3 block rounded-lg border border-[#5e579d] bg-[#232952] p-3 text-xs leading-5 text-[#c8bbff]" to="/pricing">查看纸张价格与下单说明 →</RouterLink>
     </aside>
 
@@ -1182,6 +1277,17 @@ function downloadOnly(): void {
         </div>
         <button v-if="countMode" type="button" class="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-40" :disabled="!overflow || exporting || uploading" @click="createRemainingBoard">＋ 新建画板排剩余<span v-if="overflow">（{{ overflow }}）</span></button>
         <button type="button" class="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="overviewOpen ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-700'" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回当前画板' : '▦ 画板总览' }}</button>
+        <div class="ml-auto flex flex-wrap gap-2">
+          <button type="button" class="min-h-10 rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 disabled:opacity-40" aria-haspopup="dialog" aria-controls="studio-preview-dialog" :disabled="!placements.length || exporting || uploading" @click="openPreviewDialog">预览图</button>
+          <button type="button" class="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600" aria-haspopup="dialog" aria-controls="studio-shortcut-dialog" @click="shortcutDialog?.showModal()">快捷键指南</button>
+        </div>
+      </div>
+      <div class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600" aria-label="预览水印设置">
+        <label class="flex min-h-9 items-center gap-2"><input v-model="watermarkEnabled" type="checkbox" class="accent-violet-600" />预览水印</label>
+        <input v-model="watermarkText" type="text" maxlength="40" aria-label="水印文字" :disabled="!watermarkEnabled" placeholder="仅供确认 · 禁止盗用" class="h-9 min-w-0 w-44 rounded-lg border border-slate-200 px-2 disabled:opacity-40" />
+        <label class="flex min-h-9 items-center gap-2">浓度<input v-model.number="watermarkOpacity" type="range" min="8" max="50" step="1" aria-label="水印浓度" :disabled="!watermarkEnabled" class="w-24 accent-violet-600 disabled:opacity-40" /><output class="w-8">{{ watermarkOpacity }}%</output></label>
+        <button type="button" class="min-h-9 rounded-lg border border-violet-200 px-3 font-semibold text-violet-700 disabled:opacity-40" :disabled="!placements.length || exporting || uploading || proofDownloading" @click="downloadWatermarkedPreview">{{ proofDownloading ? '正在生成…' : '下载带水印预览图' }}</button>
+        <span class="text-[11px] text-slate-400">普通 PNG 导出不带水印</span>
       </div>
       <section v-if="overviewOpen" aria-label="画板总览" class="min-h-0 flex-1 overflow-y-auto rounded-2xl bg-slate-100 p-3 sm:p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -1233,7 +1339,7 @@ function downloadOnly(): void {
             <span class="text-slate-500">已选 {{ selectedPlacementIndices.length }} 张</span>
             <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('x')">横向等间距</button>
             <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('y')">纵向等间距</button>
-            <button type="button" class="px-2 py-2 text-slate-500" :disabled="!selectedPlacementIndices.length" @click="clearCanvasSelection">取消选择</button>
+            <button type="button" class="px-2 py-2 text-slate-500" :disabled="!selectedPlacementIndices.length" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
           </template>
         </div>
         <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
@@ -1244,7 +1350,7 @@ function downloadOnly(): void {
           <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
           <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
         </div>
-        <p v-if="adjusting" class="text-xs text-indigo-700">{{ adjustTool === 'select' ? '鼠标或手指拖框，完整框住需要排列的图片；至少 3 张。固定首尾范围，按图片边缘均分间距，锁定组需先解锁。' : '点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动。' }}</p>
+        <p v-if="adjusting" class="text-xs text-indigo-700">{{ adjustTool === 'select' ? '鼠标或手指拖框，完整框住需要排列的图片；Shift 拖框追加选择，Esc 取消选择。至少 3 张可等间距排列，锁定组需先解锁。' : '点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动，Esc 取消选择。' }}</p>
         <p v-if="layoutPending" class="text-xs text-violet-700">当前画板保持原样；点击「排版」将应用新设置并替换手动调整。导出仅包含当前已排入的图案。</p>
         <p v-if="dpiError" class="text-xs text-amber-700">{{ dpiError }}</p>
         <p v-if="paperMarginError" class="text-xs text-amber-700">{{ paperMarginError }}</p>
@@ -1257,11 +1363,41 @@ function downloadOnly(): void {
       </div>
       </div>
     </main>
+    <dialog id="studio-preview-dialog" ref="previewDialog" aria-labelledby="studio-preview-title" class="studio-dialog studio-proof-dialog" @click="closeDialogOnBackdrop" @close="previewImage = ''">
+      <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3">
+        <div><h2 id="studio-preview-title" class="text-sm font-bold text-slate-800">{{ previewTitle || '排版预览图' }}</h2><p class="mt-1 text-xs text-slate-500">仅展示当前已排版内容，无选择框；预览为白底，正式 PNG 保持透明。</p></div>
+        <button type="button" autofocus aria-label="关闭预览图" class="h-10 w-10 rounded-lg border border-slate-200 text-xl text-slate-500" @click="previewDialog?.close()">×</button>
+      </div>
+      <div class="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-slate-100 p-3 sm:p-6"><img v-if="previewImage" :src="previewImage" :alt="`${previewTitle} 排版预览`" class="block max-h-full max-w-full object-contain shadow-lg" /></div>
+      <div class="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3"><span class="text-xs text-slate-500">{{ watermarkEnabled ? '已包含预览水印，方便截图确认' : '当前未启用预览水印' }}</span><button type="button" class="min-h-10 rounded-lg bg-violet-600 px-4 text-xs font-semibold text-white disabled:opacity-40" :disabled="proofDownloading" @click="downloadWatermarkedPreview">{{ proofDownloading ? '正在生成…' : '下载带水印预览图' }}</button></div>
+    </dialog>
+    <dialog id="studio-shortcut-dialog" ref="shortcutDialog" aria-labelledby="studio-shortcut-title" class="studio-dialog studio-shortcut-dialog" @click="closeDialogOnBackdrop">
+      <div class="flex items-center justify-between gap-3"><h2 id="studio-shortcut-title" class="text-lg font-bold">快捷键指南</h2><button type="button" autofocus aria-label="关闭快捷键指南" class="h-9 w-9 rounded-lg border border-slate-200 text-xl text-slate-500" @click="shortcutDialog?.close()">×</button></div>
+      <p class="mt-2 text-xs leading-6 text-slate-500">画板操作先点击「调整」。输入框编辑时不触发画板快捷键，手机可使用触摸和页面按钮。</p>
+      <dl class="mt-4 divide-y divide-slate-100 text-sm">
+        <div class="py-3"><dt class="font-semibold">取消画板选择 <kbd>Esc</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">仅取消选中，不删除图片、不改变素材勾选；弹窗打开时 Esc 只关闭弹窗。</dd></div>
+        <div class="py-3"><dt class="font-semibold">框选图片 <kbd>鼠标 / 手指拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">切换「框选图片」，完整框住所需图片；至少 3 张可横向或纵向等间距排列。</dd></div>
+        <div class="py-3"><dt class="font-semibold">追加选择 <kbd>Shift + 拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">保留已选图片，再添加新框住的图片；锁定组需先解锁。</dd></div>
+        <div class="py-3"><dt class="font-semibold">素材列表排序 <kbd>↑ / ↓ / Home / End</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">先聚焦图片明细右侧拖拽手柄，上下移动或移至首尾。只改变列表优先级，点击「排版」后应用。</dd></div>
+      </dl>
+      <p class="mt-4 text-xs text-slate-400">按 Esc、点击 × 或弹窗外部可关闭指南。</p>
+    </dialog>
     <div v-if="exporting" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-5" role="status"><div class="rounded-2xl bg-white p-6 text-center shadow-xl"><span class="mx-auto block h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-indigo-600"></span><p class="mt-4 font-bold">{{ batchExportLabel || `正在生成 ${dpi} DPI 图片` }}</p><p v-if="exportProgress !== null" class="mt-1 text-sm text-slate-500">已处理 {{ exportProgress }}%</p><p class="mt-1 text-sm text-slate-500">请勿关闭页面</p></div></div>
   </div>
 </template>
 
 <style scoped>
+.studio-section-summary { display: flex; align-items: center; gap: 6px; min-height: 28px; color: #a9bbe1; font-size: 12px; cursor: pointer; list-style: none; }
+.studio-section-summary::-webkit-details-marker { display: none; }
+.studio-section-summary::after { content: '展开'; margin-left: auto; flex-shrink: 0; font-size: 11px; color: #c8bbff; }
+.studio-settings-section[open] > .studio-section-summary { margin-bottom: 8px; }
+.studio-settings-section[open] > .studio-section-summary::after { content: '收起'; }
+.studio-dialog { margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; padding: 0; background: white; color: #334155; box-shadow: 0 20px 80px #0f172a40; }
+.studio-dialog::backdrop { background: #0f172a99; }
+.studio-proof-dialog { width: min(1100px, calc(100vw - 24px)); height: calc(100dvh - 32px); max-width: none; max-height: none; }
+.studio-proof-dialog[open] { display: flex; flex-direction: column; }
+.studio-shortcut-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 20px; }
+.studio-shortcut-dialog kbd { display: inline-block; margin: 4px 0 0 8px; border: 1px solid #e2e8f0; border-radius: 5px; background: #f8fafc; padding: 2px 6px; font-family: inherit; font-size: 11px; font-weight: 400; }
 .studio-choice {
   display: flex;
   min-height: 50px;

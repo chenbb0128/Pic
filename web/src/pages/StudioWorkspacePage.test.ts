@@ -12,6 +12,105 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  it('preview tools: appends Shift-box selections and clears only canvas selection with Esc outside editors and dialogs', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
+      setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
+    const event = (x: number, y: number, shiftKey = false) => ({ clientX: x, clientY: y, pointerId: 1,
+      button: 0, isPrimary: true, shiftKey, type: 'pointerup', preventDefault() {} })
+    let modal = false
+    vi.stubGlobal('document', { querySelector: () => modal ? {} : null })
+    try {
+      state.assets = [asset('one', 3, 10)]
+      state.resetLayout()
+      state.manualPlacements = [10, 40, 75].map(xMm => ({ itemId: 'one', xMm, yMm: 10, widthMm: 10, heightMm: 10 }))
+      state.preview = canvas
+      state.adjusting = true
+      state.adjustTool = 'select'
+      state.selectedPlacementIndices = [0]
+      state.onPointerDown(event(35, 5, true))
+      state.onPointerEnd(event(55, 25))
+      expect(state.selectedPlacementIndices).toEqual([0, 1])
+      const before = JSON.stringify(state.placements)
+      const key = { key: 'Escape', preventDefault: vi.fn(), target: { closest: () => null } }
+      state.onWorkspaceKeydown({ ...key, target: { closest: () => ({}) } })
+      expect(state.selectedPlacementIndices).toEqual([0, 1])
+      modal = true
+      state.onWorkspaceKeydown(key)
+      expect(state.selectedPlacementIndices).toEqual([0, 1])
+      modal = false
+      state.onWorkspaceKeydown(key)
+      expect(state.selectedPlacementIndices).toEqual([])
+      expect(state.assets[0].selected).toBe(true)
+      expect(JSON.stringify(state.placements)).toBe(before)
+    } finally { state.preview = null; cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('preview tools: watermarks current and overview previews without watermarking print rendering or rearranging images', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = { clearRect() {}, save() {}, restore() {}, rotate() {}, translate() {}, drawImage() {},
+      setLineDash() {}, strokeRect() {}, fillRect() {}, fillText: vi.fn() }
+    const canvas = { width: 600, height: 600, getContext: () => context }
+    try {
+      state.assets = [asset('one', 1, 20)]
+      state.resetLayout()
+      state.preview = canvas
+      state.watermarkText = '测试水印'
+      const before = JSON.stringify(state.placements)
+      state.renderPreview()
+      expect(context.fillText).toHaveBeenCalledWith('测试水印', 0, 0)
+      context.fillText.mockClear()
+      state.setOverviewCanvas(0, canvas)
+      expect(context.fillText).toHaveBeenCalledWith('测试水印', 0, 0)
+      context.fillText.mockClear()
+      state.render(context, 1200, 1200, false)
+      expect(context.fillText).not.toHaveBeenCalled()
+      state.watermarkEnabled = false
+      await nextTick()
+      context.fillText.mockClear()
+      state.renderPreview()
+      state.renderOverviewBoard(0)
+      expect(context.fillText).not.toHaveBeenCalled()
+      expect(JSON.stringify(state.placements)).toBe(before)
+    } finally { state.preview = null; cleanup() }
+  })
+
+  it('preview tools: creates an isolated guide-free preview and a white-backed watermarked proof without changing print exports', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = { clearRect() {}, save() {}, restore() {}, rotate() {}, translate() {}, drawImage() {},
+      fillRect: vi.fn(), strokeRect: vi.fn(), fillText: vi.fn() }
+    const canvases: any[] = []
+    vi.stubGlobal('document', { createElement: () => {
+      const canvas = { width: 0, height: 0, getContext: () => context, toDataURL: () => 'data:image/png;base64,cHJvb2Y=' }
+      canvases.push(canvas); return canvas
+    } })
+    const png = vi.spyOn(studioImage, 'canvasPng').mockResolvedValue(new Blob(['proof'], { type: 'image/png' }))
+    const download = vi.spyOn(studioImage, 'downloadBlob').mockImplementation(() => {})
+    try {
+      state.assets = [asset('one', 1, 20)]
+      state.resetLayout()
+      state.selectedPlacementIndices = [0]
+      await nextTick()
+      const print = { url: 'blob:print', name: 'print.png', size: 100 }
+      state.generated = print
+      const before = JSON.stringify(state.placements)
+      state.previewDialog = { open: false, showModal: vi.fn(), close() {} }
+      state.openPreviewDialog()
+      expect(state.previewImage).toBe('data:image/png;base64,cHJvb2Y=')
+      expect(state.previewDialog.showModal).toHaveBeenCalledOnce()
+      expect(context.strokeRect).not.toHaveBeenCalled()
+      expect(context.fillRect).toHaveBeenCalled()
+      expect(Math.max(canvases[0].width, canvases[0].height)).toBeLessThanOrEqual(1600)
+      state.watermarkEnabled = false
+      await state.downloadWatermarkedPreview()
+      expect(context.fillText).toHaveBeenCalled()
+      expect(download).toHaveBeenCalledWith(expect.any(String), expect.stringMatching(/_画板1_水印预览\.png$/))
+      expect(state.generated).toEqual(print)
+      expect(state.selectedPlacementIndices).toEqual([0])
+      expect(JSON.stringify(state.placements)).toBe(before)
+    } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
+  })
+
   it('offers 600 DPI as a preset without a custom DPI input and keeps 300 selected by default', async () => {
     const app = createSSRApp(Workspace)
     app.component('RouterLink', { render: () => null })
@@ -728,6 +827,8 @@ describe('overflow artboards', () => {
   it('draws each thumbnail using its own paper, image and placement geometry', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     try {
+      // This case checks artwork transforms; watermark rendering has its own cases above.
+      state.watermarkEnabled = false
       state.assets = [{ ...asset('one', 5), ratioLocked: false }]
       state.resetLayout()
       await nextTick()

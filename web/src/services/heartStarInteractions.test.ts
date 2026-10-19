@@ -139,6 +139,51 @@ function field() {
   return { section, label, content }
 }
 
+describe('heart-star clear-selection shortcut', () => {
+  function shortcut() {
+    const target = element(), selected = new Set([0, 1, 2])
+    let ready = true, prevented = 0
+    api().createShortcuts({ target, canClear: () => ready && selected.size > 0, onClear: () => selected.clear() })
+    return { target, selected, set ready(value: boolean) { ready = value },
+      get prevented() { return prevented },
+      key(extra = {}) { target.fire('keydown', { key: 'Escape', target: {}, preventDefault() { prevented++ }, ...extra }) },
+    }
+  }
+
+  it('clears all selected patterns with Escape and leaves other keys alone', () => {
+    const s = shortcut()
+    s.key({ key: 'a' })
+    expect([...s.selected]).toEqual([0, 1, 2])
+    s.key()
+    expect([...s.selected]).toEqual([])
+    expect(s.prevented).toBe(1)
+    s.key()
+    expect(s.prevented).toBe(1)
+  })
+
+  it('does not intercept typing, IME composition or already-handled keyboard events', () => {
+    const s = shortcut()
+    for (const target of [{ closest: () => ({ tagName: 'INPUT' }) }, { isContentEditable: true }]) s.key({ target })
+    for (const flag of ['isComposing', 'defaultPrevented', 'ctrlKey', 'metaKey', 'altKey', 'shiftKey']) s.key({ [flag]: true })
+    expect([...s.selected]).toEqual([0, 1, 2])
+    expect(s.prevented).toBe(0)
+  })
+
+  it('leaves Escape to open dialogs and does not act while the board is unavailable', () => {
+    const s = shortcut()
+    s.target.control = { open: true }
+    s.key()
+    s.target.control = null
+    s.ready = false
+    s.key()
+    expect([...s.selected]).toEqual([0, 1, 2])
+    expect(s.prevented).toBe(0)
+    s.ready = true
+    s.key()
+    expect([...s.selected]).toEqual([])
+  })
+})
+
 describe('heart-star collapsible settings', () => {
   it('remembers section collapse without overwriting child visibility or control values', () => {
     const records = new Map<string, string>(), feature = api(records), first = field()

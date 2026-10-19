@@ -1,8 +1,9 @@
-import { createRenderer, createSSRApp, nextTick, ssrContextKey } from 'vue'
+import { compile, createRenderer, createSSRApp, markRaw, nextTick, ssrContextKey } from 'vue'
 import { renderToString } from 'vue/server-renderer'
 import { createMemoryHistory } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppRouter } from '../router'
+import pageSource from './HeartStarPage.vue?raw'
 
 const renderer = createRenderer<object, object>({
   patchProp() {}, insert() {}, remove() {}, setText() {}, setElementText() {},
@@ -64,6 +65,57 @@ describe('heart and star tool access', () => {
     expect(html).toContain('allow-downloads')
     expect(html).not.toContain('type="password"')
     expect(html).not.toContain('87654321')
+  })
+
+  it('opens and closes the shortcut guide from the header without recreating the editing iframe', async () => {
+    const Page = await getPage()
+    const nodes: any[] = []
+    const host = createRenderer<any, any>({
+      patchProp(node, key, _previous, value) { node.props[key] = value },
+      insert() {}, remove() {}, setText() {}, setElementText(node, text) { node.text = text },
+      createElement(tag) {
+        const node = { tag, props: {} as Record<string, any>, open: false, addEventListener() {},
+          showModal() { this.open = true }, close() { this.open = false },
+          getBoundingClientRect: () => ({ left: 100, top: 100, right: 600, bottom: 600 }),
+        }
+        nodes.push(node)
+        return markRaw(node)
+      },
+      createText: () => ({ props: {} }), createComment: () => ({ props: {} }),
+      parentNode: () => null, nextSibling: () => null,
+    })
+    const template = pageSource.slice(pageSource.indexOf('<template>') + 10, pageSource.indexOf('</template>'))
+    const app = host.createApp({ ...Page, render: compile(template),
+      setup(props: any, context: any) { return { ...Page.setup(props, context) } },
+    })
+    app.provide(ssrContextKey, {})
+    const vm = app.mount({})
+    const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
+    try {
+      await vi.waitFor(() => expect(state.checkingAccess).toBe(false))
+      state.password = '87654321'
+      await state.unlock()
+      await nextTick()
+      const iframe = nodes.find(node => node.tag === 'iframe')
+      const button = nodes.find(node => node.props['aria-controls'] === 'heart-star-shortcut-guide')
+      expect(button).toBeDefined()
+      const dialog = nodes.find(node => node.tag === 'dialog')
+      expect(dialog.open).toBe(false)
+      button.props.onClick()
+      expect(dialog.open).toBe(true)
+      expect(nodes.some(node => node.text === 'Esc')).toBe(true)
+      expect(nodes.some(node => node.text === 'Alt + 滚轮')).toBe(true)
+      dialog.props.onClick({ target: dialog, clientX: 150, clientY: 150 })
+      expect(dialog.open).toBe(true)
+      dialog.props.onClick({ target: dialog, clientX: 50, clientY: 50 })
+      expect(dialog.open).toBe(false)
+      button.props.onClick()
+      nodes.find(node => node.props['aria-label'] === '关闭快捷键指南').props.onClick()
+      expect(dialog.open).toBe(false)
+      await nextTick()
+      expect(nodes.filter(node => node.tag === 'iframe')).toEqual([iframe])
+      expect(state.unlocked).toBe(true)
+    } finally { app.unmount() }
   })
 
   it('clears the entered password and confirms before discarding the tool on relock', async () => {

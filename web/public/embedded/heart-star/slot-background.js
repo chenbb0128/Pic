@@ -126,7 +126,7 @@
   }
 
   function frame(cfg, source, states, index) {
-    return cfg.slots[index];
+    return states[index]?.motif?.frame || cfg.slots[index];
   }
 
   function drawTemplate(ctx, cfg, source, states) {

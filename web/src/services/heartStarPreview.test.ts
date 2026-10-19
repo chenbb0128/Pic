@@ -22,7 +22,8 @@ function setup() {
     pngFilename: () => 'test.png', resizePreview() {}, sel: { value: 'test' },
     templates: { test: { w: 1400, h: 2048, slots: [] } }, base: { complete: true, naturalWidth: 1400 },
     slotBackgrounds: { update() {}, busy: () => false, hasAny: () => true },
-    HeartStarBackground: { drawTemplate() {} },
+    motifEditor: { source: (base: any) => base, busy: () => false }, updateMotifControls() {},
+    HeartStarBackground: { drawTemplate() {}, frame: (cfg: any, _source: any, states: any[], i: number) => states[i]?.motif?.frame || cfg.slots[i] },
     ctx: { clearRect() {}, save() {}, beginPath() {}, clip() {}, restore() {},
       rect(...args: number[]) { paints.push(args) }, scale() {} },
     drawFooter() {}, updatePhotoControls() {}, download: {}, watermarkDownload: {}, states: [],
@@ -36,15 +37,57 @@ function setup() {
   const source = section('function renderConfig(', 'function loadTemplate(') +
     section('function draw(showSelection', 'function chooseAtCanvas(') +
     section('function requestPhotoDraw(', 'function startPhotoDrag(') +
-    section('function slotAtCanvas(', 'function requestPhotoDraw(') +
+    section('function slotFrame(', 'function requestPhotoDraw(') +
     section('async function exportPng(', 'const customAssets=') +
     section('function picturePreviewSnapshot(', 'function resizePreview(') +
     section('function selectionBoard(', 'HeartStarInteractions.createSelection(')
-  const feature = new Function('env', `with(env){${source};return {renderConfig,draw,requestPhotoDraw,slotAtCanvas,exportPng,picturePreviewSnapshot,selectionBoard}}`)(env)
+  const feature = new Function('env', `with(env){${source};return {renderConfig,draw,requestPhotoDraw,slotFrame,slotAtCanvas,exportPng,picturePreviewSnapshot,selectionBoard}}`)(env)
   return { env, feature, output, scheduled, paints, snapshots, downloads }
 }
 
 describe('heart-star lightweight preview', () => {
+  it('centers heart artwork and keeps photo frames and selection in the same coordinates at preview and export resolution', () => {
+    const { env, feature } = setup()
+    const templates = new Function(`${section('const templates=', 'const canvas=')};return templates`)()
+    const original = templates['模板爱心.png']
+    env.templates.test = { ...original, slots: [original.slots[0]] }
+    env.states = [{ size: .62, dx: 0, dy: 0 }]
+    env.selectedSlots = new Set()
+    env.slotPhoto = () => null
+    env.HeartStarBackground.has = () => false
+    const translations: number[][] = []
+    env.ctx.translate = (...args: number[]) => translations.push(args)
+    expect(feature.slotFrame(0)).toMatchObject({ x: 113, y: 118, w: 190, h: 190 })
+    expect(feature.selectionBoard().slots[0].x).toBe(113)
+    expect(original.slots[0].x).toBe(95)
+    // The original image occupies columns 0–1376 of a 1413 px canvas.
+    expect(1413 - (1377 + feature.slotFrame(0).x - 95)).toBe(18)
+    feature.draw(false)
+    feature.draw(false, true)
+    expect(translations).toEqual([[18, 0], [18, 0]])
+    const r = env.canvas.getBoundingClientRect()
+    const d = feature.renderConfig()
+    const hit = feature.slotAtCanvas({ clientX: 113 / 1413 * r.width, clientY: 118 / 2048 * r.height * d.contentPxH / d.pxH })
+    expect(hit.index).toBe(0)
+    expect(hit.x).toBeCloseTo(113)
+    env.states[0].motif = { frame: { x: 203, y: 1518, w: 136, h: 135 } }
+    expect(feature.slotFrame(0).x).toBe(221)
+  })
+
+  it('uses the replaced whole-motif artwork for rendering and blocks export while a replacement is loading', async () => {
+    const { env, feature, snapshots } = setup()
+    const composite = { width: 1400, height: 2048 }
+    let rendered: any
+    env.motifEditor.source = () => composite
+    env.HeartStarBackground.drawTemplate = (_ctx: any, _cfg: any, image: any) => { rendered = image }
+    feature.draw()
+    expect(rendered).toBe(composite)
+    env.motifEditor.busy = () => true
+    await feature.exportPng()
+    expect(snapshots).toEqual([])
+    expect(feature.selectionBoard().ready).toBe(false)
+  })
+
   it('limits editing canvas pixels without changing the configured export dimensions', () => {
     const { feature, env, output } = setup()
     feature.draw()

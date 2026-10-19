@@ -13,6 +13,7 @@ function setup() {
     footerHeightMm: 3, numberingEnabled: { checked: true }, footerText: { value: '订单001', focus() {} },
     sel: { value: 'heart.png' }, templates: { 'heart.png': {} },
     exportBusy: false, customBusy: false, customDirty: false, slotBackgrounds: { busy: () => false },
+    motifEditor: { busy: () => false },
     draw() {}, say: (message: string) => messages.push(message), updateCanvasSize() {},
     canvas: { width: 1082, height: 1600, toBlob(callback: (blob: Blob | null) => void) { callback(new Blob()) } },
     HeartStarWatermark: { preview: () => env.canvas },
