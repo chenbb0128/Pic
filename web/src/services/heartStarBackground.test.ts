@@ -180,6 +180,34 @@ describe('single-pattern background', () => {
     expect(bounds[3]).toEqual({ x: 9.5, y: 8, w: 3, h: 4 })
   })
 
+  it('keeps the top of a larger next-row pattern out of the previous row background', () => {
+    const cfg = { w: 20, h: 30, slots: [
+      { x: 3, y: 5, w: 4, h: 4 }, { x: 15, y: 5, w: 4, h: 4 },
+      { x: 5, y: 19, w: 8, h: 8 }, { x: 15, y: 19, w: 8, h: 8 },
+    ] }
+    const pixels = new Uint8ClampedArray(20 * 30 * 4)
+    for (const [left, top, right, bottom] of [[1, 3, 5, 9], [13, 3, 17, 9], [1, 11, 10, 27], [12, 11, 20, 27]]) {
+      for (let y = top!; y < bottom!; y++) for (let x = left!; x < right!; x++) pixels[(y * 20 + x) * 4 + 3] = 255
+    }
+    expect(api().measureRegions(cfg, pixels)).toEqual([
+      { x: 3, y: 6, w: 4, h: 6 }, { x: 15, y: 6, w: 4, h: 6 },
+      { x: 5.5, y: 19, w: 9, h: 16 }, { x: 16, y: 19, w: 8, h: 16 },
+    ])
+  })
+
+  it('keeps complete neighboring patterns when their artwork crosses the column midpoint', () => {
+    const cfg = { w: 20, h: 12, slots: [
+      { x: 4, y: 6, w: 2, h: 2 }, { x: 14, y: 6, w: 2, h: 2 },
+    ] }
+    const pixels = new Uint8ClampedArray(20 * 12 * 4)
+    for (let y = 2; y < 10; y++) for (let x = 0; x < 20; x++) {
+      if (x < 6 || x >= 7) pixels[(y * 20 + x) * 4 + 3] = 255
+    }
+    expect(api().measureRegions(cfg, pixels)).toEqual([
+      { x: 3, y: 6, w: 6, h: 8 }, { x: 13.5, y: 6, w: 13, h: 8 },
+    ])
+  })
+
   it('does not export a background image before it has successfully loaded', () => {
     const feature = api()
     const { ctx, calls } = canvas()

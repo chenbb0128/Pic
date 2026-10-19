@@ -15,6 +15,18 @@
   }
 
   function measureRegions(cfg, pixels) {
+    // Photo openings are not the centers of the complete artwork. Prefer real
+    // transparent gutters so a larger neighbor cannot spill into another cell.
+    function gap(occupied, a, b) {
+      const middle = Math.round((a + b) / 2);
+      const min = Math.max(0, Math.ceil(a)), max = Math.min(occupied.length - 1, Math.floor(b));
+      for (let distance = 0; distance <= Math.max(middle - min, max - middle); distance++) {
+        const before = middle - distance, after = middle + distance;
+        if (before >= min && before <= max && !occupied[before]) return before;
+        if (after >= min && after <= max && !occupied[after]) return after;
+      }
+      return middle;
+    }
     const rows = [];
     cfg.slots.map((slot, index) => ({ ...slot, index })).sort((a, b) => a.y - b.y).forEach(slot => {
       let row = rows[rows.length - 1];
@@ -22,15 +34,23 @@
       row.push(slot);
     });
     const centers = rows.map(row => row.reduce((sum, p) => sum + p.y + (p.bottom ? p.h / 2 : 0), 0) / row.length);
+    const occupiedRows = new Uint8Array(cfg.h);
+    for (let y = 0; y < cfg.h; y++) for (let x = 0; x < cfg.w; x++) {
+      if (pixels[(y * cfg.w + x) * 4 + 3]) { occupiedRows[y] = 1; break; }
+    }
+    const rowCuts = [0, ...centers.slice(1).map((center, i) => gap(occupiedRows, centers[i], center)), cfg.h];
     const bounds = [];
     rows.forEach((row, r) => {
       row.sort((a, b) => a.x - b.x);
       const xs = row.map(p => p.x - (p.bottom ? p.w / 2 : 0));
-      const top = r ? Math.round((centers[r - 1] + centers[r]) / 2) : 0;
-      const bottom = r + 1 < rows.length ? Math.round((centers[r] + centers[r + 1]) / 2) : cfg.h;
+      const top = rowCuts[r], bottom = rowCuts[r + 1];
+      const occupiedColumns = new Uint8Array(cfg.w);
+      for (let y = top; y < bottom; y++) for (let x = 0; x < cfg.w; x++) {
+        if (pixels[(y * cfg.w + x) * 4 + 3]) occupiedColumns[x] = 1;
+      }
+      const columnCuts = [0, ...xs.slice(1).map((x, i) => gap(occupiedColumns, xs[i], x)), cfg.w];
       row.forEach((p, column) => {
-        const left = column ? Math.round((xs[column - 1] + xs[column]) / 2) : 0;
-        const right = column + 1 < row.length ? Math.round((xs[column] + xs[column + 1]) / 2) : cfg.w;
+        const left = columnCuts[column], right = columnCuts[column + 1];
         let minX = right, minY = bottom, maxX = -1, maxY = -1;
         for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
           if (pixels[(y * cfg.w + x) * 4 + 3]) {
