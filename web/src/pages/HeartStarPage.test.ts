@@ -60,7 +60,7 @@ describe('heart and star tool access', () => {
   it('unlocks the embedded tool only with the fixed password', async () => {
     const html = await renderPage('87654321')
     expect(html).toContain('<iframe')
-    expect(html).toContain('src="/embedded/heart-star/index.html"')
+    expect(html).toMatch(/src="\/embedded\/heart-star\/index\.html\?v=[^"\s]+"/)
     expect(html).toContain('allow-downloads')
     expect(html).not.toContain('type="password"')
     expect(html).not.toContain('87654321')
