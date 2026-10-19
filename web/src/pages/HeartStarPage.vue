@@ -9,7 +9,7 @@ const unlocked = ref(false)
 const checkingAccess = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=background-outline-2`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=selected-upload-3`
 
 onMounted(async () => {
   checkingAccess.value = true

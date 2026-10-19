@@ -110,7 +110,7 @@
     const upload = el('slotBackgroundUpload'), file = el('slotBackgroundFile'), clear = el('slotBackgroundClear');
     const scale = el('slotBackgroundScale'), dx = el('slotBackgroundX'), dy = el('slotBackgroundY');
     const note = el('slotBackgroundNote'), reset = el('slotBackgroundReset');
-    let request = 0, pending = null;
+    let request = 0, pending = null, uploadTarget = null;
     const ids = () => [...getSelection()].filter(id => getStates()[id]);
     const busy = () => pending?.states === getStates();
 
@@ -162,10 +162,19 @@
       update();
       redraw();
     });
-    upload.addEventListener('click', () => { file.value = ''; file.click(); });
+    upload.addEventListener('click', () => {
+      const selected = ids();
+      if (!selected.length) { report('请先选择要替换背景的图案。', true); return; }
+      uploadTarget = { states: getStates(), selected };
+      file.value = '';
+      file.click();
+    });
+    file.addEventListener('cancel', () => { uploadTarget = null; file.value = ''; });
     file.addEventListener('change', () => {
-      const picked = file.files?.[0], selected = ids();
-      if (!picked || !selected.length || getTemplate().text) return;
+      const picked = file.files?.[0], selection = uploadTarget;
+      uploadTarget = null;
+      if (!picked || !selection || selection.states !== getStates() || getTemplate().text) return;
+      const selected = selection.selected;
       if (!picked.type.startsWith('image/')) { report('请选择有效的背景图片。', true); return; }
       const target = getStates(), token = ++request, image = new Image(), url = URL.createObjectURL(picked);
       pending = { states: target };

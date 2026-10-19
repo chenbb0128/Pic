@@ -25,6 +25,35 @@ function canvas() {
 }
 
 describe('single-pattern background', () => {
+  it('uses the selection from opening the background file picker, not a later selection', () => {
+    const controls = new Map<string, any>(), images: any[] = []
+    const document = { getElementById(id: string) {
+      if (!controls.has(id)) controls.set(id, Object.assign(new EventTarget(), {
+        value: '', files: null, click(this: EventTarget) { this.dispatchEvent(new Event('click')) },
+      }))
+      return controls.get(id)
+    } }
+    const Image = class { constructor() { images.push(this) } }
+    const feature = new Function('globalThis', 'document', 'Image', 'URL',
+      `${backgroundSource}\nreturn globalThis.HeartStarBackground;`)({}, document, Image,
+      { createObjectURL: () => 'bg-url', revokeObjectURL() {} })
+    const states: any[] = [{}, {}, {}]
+    let selection = new Set([0, 2])
+    feature.create({ getStates: () => states, getSelection: () => selection,
+      getTemplate: () => ({}), redraw() {}, report() {} })
+    document.getElementById('slotBackgroundUpload').click()
+    selection = new Set([1])
+    const file = document.getElementById('slotBackgroundFile')
+    file.files = [{ type: 'image/png' }]
+    file.dispatchEvent(new Event('change'))
+    images[0].naturalWidth = 100
+    images[0].naturalHeight = 100
+    images[0].onload()
+    expect(states[0].background?.image).toBe(images[0])
+    expect(states[2].background?.image).toBe(images[0])
+    expect(states[1].background).toBeUndefined()
+  })
+
   it('does not draw anything by default, preserving the original template', () => {
     const { ctx, calls } = canvas()
     api().draw(ctx, {}, 100, 100, 40, 60, () => calls.push('shape'))
