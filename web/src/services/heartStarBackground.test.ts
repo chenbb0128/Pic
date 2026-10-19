@@ -25,6 +25,54 @@ function canvas() {
 }
 
 describe('single-pattern background', () => {
+  it('resizes selected background patterns live with synchronized slider and number controls', () => {
+    const controls = new Map<string, any>()
+    const document = { getElementById(id: string) {
+      if (!controls.has(id)) controls.set(id, Object.assign(new EventTarget(), { value: '' }))
+      return controls.get(id)
+    } }
+    const layer = canvas(), feature = new Function('globalThis', 'document',
+      `${backgroundSource}\nreturn globalThis.HeartStarBackground;`)({}, {
+        ...document, createElement: () => layer.element,
+      })
+    const image = { naturalWidth: 200, naturalHeight: 100 }, source = {}
+    const states = [
+      { imageScale: 2, imageDx: 15, background: { type: 'image', image, scale: 1, dx: 0, dy: 0 } },
+      { background: { type: 'image', image, scale: 1, dx: 0, dy: 0 } },
+    ]
+    const controller = feature.create({ getStates: () => states, getSelection: () => new Set([0]),
+      getTemplate: () => ({}), report() {},
+      redraw() { feature.draw(canvas().ctx, states[0], 100, 100, 40, 60, source) },
+    })
+    controller.update()
+    const slider = document.getElementById('slotBackgroundScaleRange')
+    const number = document.getElementById('slotBackgroundScale')
+    slider.value = '800'
+    slider.dispatchEvent(new Event('input'))
+    expect(states[0]!.background.scale).toBe(8)
+    expect(states[1]!.background.scale).toBe(1)
+    expect(number.value).toBe('800')
+    expect(layer.calls).toContainEqual(['image', image, -460, -210, 960, 480])
+    expect(layer.calls).toContainEqual(['image', source, 80, 70, 40, 60, 0, 0, 40, 60])
+    expect(states[0]!.imageScale).toBe(2)
+    expect(states[0]!.imageDx).toBe(15)
+    number.value = '250'
+    number.dispatchEvent(new Event('input'))
+    expect(states[0]!.background.scale).toBe(2.5)
+    expect(slider.value).toBe('250')
+    number.value = ''
+    number.dispatchEvent(new Event('input'))
+    expect(states[0]!.background.scale).toBe(2.5)
+    number.value = '1200'
+    number.dispatchEvent(new Event('change'))
+    expect(states[0]!.background.scale).toBe(10)
+    expect(slider.value).toBe('1000')
+    document.getElementById('slotBackgroundReset').dispatchEvent(new Event('click'))
+    expect(states[0]!.background.scale).toBe(1)
+    expect(slider.value).toBe('100')
+    expect(number.value).toBe('100')
+  })
+
   it('uses the selection from opening the background file picker, not a later selection', () => {
     const controls = new Map<string, any>(), images: any[] = []
     const document = { getElementById(id: string) {

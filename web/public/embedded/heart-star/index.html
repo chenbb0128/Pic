@@ -130,7 +130,9 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <div id="slotBackgroundColorRow" hidden style="margin-top:10px"><label class="small">背景颜色 <input id="slotBackgroundColor" type="color" value="#fff0f5" aria-label="图案背景颜色" style="width:56px;height:36px;vertical-align:middle;border:1px solid var(--line);border-radius:8px;background:#fff"></label></div>
   <div id="slotBackgroundImageRow" hidden style="margin-top:10px">
    <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%">上传背景，替换所选图案</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
-   <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px">背景缩放 <input id="slotBackgroundScale" type="number" min="25" max="400" step="1" value="100" aria-label="背景图片缩放" style="width:80px;min-height:36px"> %</label>
+   <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px">花纹大小 <input id="slotBackgroundScale" type="number" min="25" max="1000" step="1" value="100" aria-label="背景花纹缩放百分比" style="width:80px;min-height:36px"> %</label>
+   <div class="range-line"><input id="slotBackgroundScaleRange" type="range" min="25" max="1000" step="1" value="100" aria-label="背景花纹缩放滑杆"></div>
+   <div class="small" style="margin-top:6px;line-height:1.6">拖动滑杆或输入百分比，实时放大花纹至覆盖整个图案；只改变内部花纹，不改变外形和照片。</div>
    <div class="photo-offsets"><label>X <input id="slotBackgroundX" type="number" min="-10000" max="10000" value="0" step="1" aria-label="背景图片水平偏移"> px</label><label>Y <input id="slotBackgroundY" type="number" min="-10000" max="10000" value="0" step="1" aria-label="背景图片垂直偏移"> px</label></div>
    <button type="button" class="btn" id="slotBackgroundReset" style="width:100%;height:36px;font-size:12px">重置背景缩放与位置</button>
   </div>
@@ -144,7 +146,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </main>
 <dialog class="preview-dialog" id="previewDialog" aria-labelledby="previewTitle"></dialog>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
-<script src="./slot-background.js?v=selected-upload-3"></script>
+<script src="./slot-background.js?v=pattern-scale-4"></script>
 <script>
 const templateSources={"模板混合.png":"./assets/2561b63dada0b6cad889.png","模板爱心.png":"./assets/24f04555370fa8156a2f.png","模板粉色.png":"./assets/55541387191da454ff80.png","模板蓝色.png":"./assets/6cc0d5693e698afad67e.png","模板黄色.png":"./assets/d4b5365aef3e80d8bdd3.png","波点圆形.png":"./assets/7cbd4eac0cf3fa069115.png","波点爱心.png":"./assets/2fa2bc82b6db18b98fcc.png","豹纹星星.png":"./assets/0e00c7263d8ef3613332.png"};
 const templates={

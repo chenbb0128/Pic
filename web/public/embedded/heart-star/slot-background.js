@@ -109,6 +109,7 @@
     const field = el('slotBackgroundField'), mode = el('slotBackgroundMode'), color = el('slotBackgroundColor');
     const upload = el('slotBackgroundUpload'), file = el('slotBackgroundFile'), clear = el('slotBackgroundClear');
     const scale = el('slotBackgroundScale'), dx = el('slotBackgroundX'), dy = el('slotBackgroundY');
+    const scaleRange = el('slotBackgroundScaleRange');
     const note = el('slotBackgroundNote'), reset = el('slotBackgroundReset');
     let request = 0, pending = null, uploadTarget = null;
     const ids = () => [...getSelection()].filter(id => getStates()[id]);
@@ -127,16 +128,17 @@
       el('slotBackgroundImageRow').hidden = mode.value !== 'image';
       color.value = first.color || '#fff0f5';
       const imageDisabled = disabled || mode.value !== 'image' || !values.some(bg => bg.image?.naturalWidth);
-      [scale, dx, dy, reset].forEach(control => { control.disabled = imageDisabled; });
+      [scale, scaleRange, dx, dy, reset].forEach(control => { control.disabled = imageDisabled; });
       for (const [control, key, fallback, factor] of [[scale, 'scale', 1, 100], [dx, 'dx', 0, 1], [dy, 'dy', 0, 1]]) {
         const value = (first[key] ?? fallback) * factor;
         const same = values.every(bg => (bg[key] ?? fallback) * factor === value);
         control.value = same ? String(value) : '';
         control.placeholder = same ? '' : '混合';
       }
+      scaleRange.value = String((first.scale ?? 1) * 100);
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
-        mode.value === 'image' ? (first.image?.naturalWidth ? '已替换内部花纹，保留原模板轮廓；背景等比例铺满，超出轮廓的部分裁掉。照片保持不变。' : '上传背景图片，只替换内部花纹，保留原来的爱心、星星等轮廓。') :
+        mode.value === 'image' ? (first.image?.naturalWidth ? '花纹未铺满时，可调大“花纹大小”，并用 X / Y 调整位置。超出原轮廓的部分自动裁掉，照片保持不变。' : '上传背景图片，只替换内部花纹，保留原来的爱心、星星等轮廓。') :
         mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';
     }
 
@@ -196,7 +198,13 @@
       image.onerror = () => finish(false);
       image.src = url;
     });
-    for (const [control, key, min, max, factor] of [[scale, 'scale', 25, 400, 100], [dx, 'dx', -10000, 10000, 1], [dy, 'dy', -10000, 10000, 1]]) {
+    scaleRange.addEventListener('input', () => change({ scale: Math.max(25, Math.min(1000, Number(scaleRange.value))) / 100 }));
+    scale.addEventListener('input', () => {
+      const value = Number(scale.value);
+      // Allow an incomplete number while typing; normalize it only on commit.
+      if (scale.value.trim() && Number.isFinite(value) && value >= 25 && value <= 1000) change({ scale: value / 100 });
+    });
+    for (const [control, key, min, max, factor] of [[scale, 'scale', 25, 1000, 100], [dx, 'dx', -10000, 10000, 1], [dy, 'dy', -10000, 10000, 1]]) {
       control.addEventListener('change', () => {
         const value = Number(control.value);
         if (!control.value.trim() || !Number.isFinite(value)) { update(); return; }
