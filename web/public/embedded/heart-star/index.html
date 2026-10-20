@@ -353,7 +353,7 @@ function draw(showSelection=true,fullResolution=false){
   const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=slotPhoto(i),f=cfg.text?p:HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
   if(cfg.text)drawCopy(x,y,w,h,st.size,st.text??DEFAULT_COPY);
   else {
-   if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}
+   if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage,states)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}
    if(im){ctx.save();if(clip.checked){clipPath(ctx,slotShape(p,i),x,y,w,h);ctx.clip()}const ratio=Math.max(w/im.width,h/im.height)*(st.imageScale??1),dw=im.width*ratio,dh=im.height*ratio;ctx.drawImage(im,x+(st.imageDx||0)-dw/2,y+(st.imageDy||0)-dh/2,dw,dh);ctx.restore()}
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
@@ -446,7 +446,7 @@ function buildCustomLayout(rows,assets,widthMm,heightMm){
   row.items.forEach((item,column)=>{
    const asset=item.asset,pw=item.w,ph=item.h,x=left,y=top+(row.height-ph)/2,frame=asset.frame;
    placements.push({assetId:item.assetId,x,y,w:pw,h:ph,key:item.key});
-   slots.push({x:x+frame.x*pw,y:y+frame.y*ph,w:frame.w*pw,h:frame.h*ph,type:asset.type,assetId:item.assetId,key:item.key,row:row.index,column});
+   slots.push({x:x+frame.x*pw,y:y+frame.y*ph,w:frame.w*pw,h:frame.h*ph,type:asset.type,assetId:item.assetId,key:item.key,row:row.index,column,...(asset.group==='I ♥ ME 组合'?{backgroundPart:'heart'}:{})});
    left+=pw+gap;
   });
   top+=row.height+verticalGap;

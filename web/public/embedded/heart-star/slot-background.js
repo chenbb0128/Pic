@@ -111,15 +111,62 @@
     return bounds;
   }
 
-  function regions(cfg, source) {
-    if (cfg.custom) return cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h }));
+  const heartOnly = slot => slot.bottom || slot.backgroundPart === 'heart';
+
+  function componentBounds(mask, w, h, region, center) {
+    const left = Math.max(0, Math.floor(region.x - region.w / 2));
+    const top = Math.max(0, Math.floor(region.y - region.h / 2));
+    const right = Math.min(w, Math.ceil(region.x + region.w / 2));
+    const bottom = Math.min(h, Math.ceil(region.y + region.h / 2));
+    let seed = -1, distance = Infinity;
+    // The filled silhouette includes the photo opening. Select its component,
+    // not the disconnected I / ME lettering in the same artwork cell.
+    for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
+      if (!mask[(y * w + x) * 4 + 3]) continue;
+      const d = (x + .5 - center.x) ** 2 + (y + .5 - center.y) ** 2;
+      if (d < distance) { distance = d; seed = y * w + x; }
+    }
+    if (seed < 0) return region;
+    const width = right - left, count = width * (bottom - top);
+    const visited = new Uint8Array(count), queue = new Uint32Array(count);
+    let head = 0, tail = 0, minX = right, minY = bottom, maxX = left, maxY = top;
+    function visit(x, y) {
+      if (x < left || x >= right || y < top || y >= bottom) return;
+      const local = (y - top) * width + x - left;
+      if (visited[local] || !mask[(y * w + x) * 4 + 3]) return;
+      visited[local] = 1; queue[tail++] = y * w + x;
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+    visit(seed % w, Math.floor(seed / w));
+    while (head < tail) {
+      const i = queue[head++], x = i % w, y = Math.floor(i / w);
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (dx || dy) visit(x + dx, y + dy);
+      }
+    }
+    return { x: (minX + maxX + 1) / 2, y: (minY + maxY + 1) / 2, w: maxX - minX + 1, h: maxY - minY + 1 };
+  }
+
+  function measureBackgroundRegions(cfg, pixels, states = []) {
+    const bounds = cfg.custom ? cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h })) :
+      measureRegions(cfg, pixels);
+    if (!cfg.slots.some(heartOnly)) return bounds;
+    const mask = outerMask(pixels, cfg.w, cfg.h);
+    return bounds.map((region, index) => heartOnly(cfg.slots[index]) ?
+      componentBounds(mask, cfg.w, cfg.h, region, states[index]?.motif?.frame || cfg.slots[index]) : region);
+  }
+
+  function regions(cfg, source, states = []) {
+    if (cfg.custom && !cfg.slots.some(heartOnly)) return cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h }));
+    const frames = states.map(state => state.motif?.frame);
     let cached = regionCache.get(source);
-    if (!cached || cached.cfg !== cfg) {
+    if (!cached || cached.cfg !== cfg || cached.frames.length !== frames.length || frames.some((frame, i) => frame !== cached.frames[i])) {
       const canvas = document.createElement('canvas');
       canvas.width = cfg.w; canvas.height = cfg.h;
       const context = canvas.getContext('2d', { willReadFrequently: true });
       context.drawImage(source, 0, 0, cfg.w, cfg.h);
-      cached = { cfg, bounds: measureRegions(cfg, context.getImageData(0, 0, cfg.w, cfg.h).data) };
+      cached = { cfg, frames, bounds: measureBackgroundRegions(cfg, context.getImageData(0, 0, cfg.w, cfg.h).data, states) };
       regionCache.set(source, cached);
     }
     return cached.bounds;
@@ -131,7 +178,7 @@
 
   function drawTemplate(ctx, cfg, source, states) {
     if (!states.some(has)) { ctx.drawImage(source, 0, 0, cfg.w, cfg.h); return; }
-    const bounds = regions(cfg, source);
+    const bounds = regions(cfg, source, states);
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, cfg.w, cfg.h);
@@ -211,7 +258,7 @@
       scaleRange.value = String((first.scale ?? 1) * 100);
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
-        mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓。') :
+        mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变；I ♥ ME 仅替换爱心，字母保持原色。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓；I ♥ ME 的字母保持原色。') :
         mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';
     }
 
@@ -288,5 +335,5 @@
     return { update, busy, hasAny: () => getStates().some(has) };
   }
 
-  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, regions, frame, create, outerMask };
+  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, outerMask };
 })();

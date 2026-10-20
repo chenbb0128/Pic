@@ -30,6 +30,37 @@ function canvas() {
 }
 
 describe('single-pattern background', () => {
+  it.each([false, true])('replaces only the heart of an I ♥ ME combination (custom: %s)', custom => {
+    const pixels = new Uint8ClampedArray(12 * 10 * 4)
+    // Separate I, heart and ME, with an enclosed transparent opening in the heart.
+    for (const [left, top, right, bottom] of [[1, 1, 3, 5], [6, 1, 11, 5], [1, 6, 11, 9]]) {
+      for (let y = top!; y < bottom!; y++) for (let x = left!; x < right!; x++) {
+        pixels[(y * 12 + x) * 4 + 3] = 255
+      }
+    }
+    pixels[(2 * 12 + 8) * 4 + 3] = 0
+    const cfg = { w: 12, h: 10, custom, slots: [
+      { x: 8, y: 3, w: 3, h: 2, bottom: !custom, backgroundPart: custom ? 'heart' : undefined },
+    ], placements: [{ x: 1, y: 1, w: 10, h: 8 }] }
+    expect(api().measureBackgroundRegions(cfg, pixels)).toEqual([{ x: 8.5, y: 3, w: 5, h: 4 }])
+    const source = {}, surface = canvas(), target = canvas()
+    surface.ctx.getImageData = () => ({ data: pixels })
+    const feature = api(surface)
+    feature.drawTemplate(target.ctx, cfg, source, [{ background: { type: 'color', color: '#ffccdd' } }])
+    expect(target.calls).toContainEqual(['rect', 6, 1, 5, 4])
+    expect(target.calls).not.toContainEqual(['rect', 1, 1, 10, 8])
+  })
+
+  it('finds the replacement heart using its new photo frame rather than the original opening', () => {
+    const pixels = new Uint8ClampedArray(12 * 10 * 4)
+    for (const [left, top, right, bottom] of [[1, 1, 3, 5], [6, 1, 11, 5], [1, 6, 11, 9]]) {
+      for (let y = top!; y < bottom!; y++) for (let x = left!; x < right!; x++) pixels[(y * 12 + x) * 4 + 3] = 255
+    }
+    const cfg = { w: 12, h: 10, slots: [{ x: 2, y: 3, w: 2, h: 2, bottom: true }] }
+    const states = [{ motif: { frame: { x: 8, y: 3, w: 3, h: 2 } } }]
+    expect(api().measureBackgroundRegions(cfg, pixels, states)).toEqual([{ x: 8.5, y: 3, w: 5, h: 4 }])
+  })
+
   it('uses the photo opening of a replacement I ♥ ME motif without changing the original template slot', () => {
     const feature = api(), original = { x: 100, y: 200, w: 140, h: 140 }, updated = { x: 120, y: 180, w: 130, h: 150 }
     const cfg = { slots: [original] }
