@@ -19,7 +19,7 @@ function setup() {
 }
 
 describe('heart-star independent 210×144 template', () => {
-  it('creates two rows of six letter combinations and three rows of eight small hearts at their native dimensions', () => {
+  it('creates two rows of six letter combinations and three rows of eight small motifs at their native dimensions', () => {
     const { api, assets, build } = setup()
     expect(api).toBeDefined()
     const cfg = api.build(assets, build)
@@ -45,8 +45,8 @@ describe('heart-star independent 210×144 template', () => {
     const expected = [
       ['ime-rose', 'ime-rose', 'ime-rose', 'ime-teal', 'ime-teal', 'ime-teal'],
       ['ime-mint', 'ime-mint', 'ime-mint', 'ive-spiral', 'ive-spiral', 'ive-spiral'],
-      ['rose-heart-small', 'rose-heart-small', 'rose-heart-small', 'rose-heart-small', 'teal-heart-small', 'teal-heart-small', 'teal-heart-small', 'teal-heart-small'],
-      ['pink-stripe-heart-small', 'pink-stripe-heart-small', 'pink-stripe-heart-small', 'pink-stripe-heart-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small'],
+      ['rose-heart-small', 'rose-heart-small', 'rose-heart-small', 'rose-dot-star-small', 'teal-dot-star-small', 'teal-heart-small', 'teal-heart-small', 'teal-heart-small'],
+      ['pink-stripe-heart-small', 'pink-stripe-heart-small', 'pink-stripe-heart-small', 'mint-star-small', 'white-mint-star-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small'],
       ['purple-white-polka-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small', 'polka-heart-small', 'polka-heart-small', 'polka-heart-small', 'polka-heart-small'],
     ]
     expect(expected.map((_, row) => cfg.placements.filter((_: any, i: number) => cfg.slots[i].row === row).map((p: any) => p.assetId))).toEqual(expected)

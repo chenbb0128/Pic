@@ -7,8 +7,8 @@
     const rows = [
       [...repeat('ime-rose', 3), ...repeat('ime-teal', 3)],
       [...repeat('ime-mint', 3), ...repeat('ive-spiral', 3)],
-      [...repeat('rose-heart-small', 4), ...repeat('teal-heart-small', 4)],
-      [...repeat('pink-stripe-heart-small', 4), ...repeat('mint-plaid-heart-small', 4)],
+      [...repeat('rose-heart-small', 3), 'rose-dot-star-small', 'teal-dot-star-small', ...repeat('teal-heart-small', 3)],
+      [...repeat('pink-stripe-heart-small', 3), 'mint-star-small', 'white-mint-star-small', ...repeat('mint-plaid-heart-small', 3)],
       [...repeat('purple-white-polka-heart-small', 4), ...repeat('polka-heart-small', 4)],
     ].map((ids, row) => ({
       id: `preset-${row}`, groups: ids.map((assetId, column) => ({ id: String(column), assetId, count: 1 })),

@@ -59,6 +59,12 @@ describe('single-pattern background', () => {
     const cfg = { w: 12, h: 10, slots: [{ x: 2, y: 3, w: 2, h: 2, bottom: true }] }
     const states = [{ motif: { frame: { x: 8, y: 3, w: 3, h: 2 } } }]
     expect(api().measureBackgroundRegions(cfg, pixels, states)).toEqual([{ x: 8.5, y: 3, w: 5, h: 4 }])
+    // A standalone replacement overrides the original combination's heart-only background.
+    expect(api().measureBackgroundRegions(cfg, pixels, [{ motif: { ...states[0]!.motif, backgroundPart: 'whole' } }]))
+      .toEqual([{ x: 6, y: 5, w: 10, h: 8 }])
+    const plainCfg = { ...cfg, slots: [{ ...cfg.slots[0], bottom: false }] }
+    expect(api().measureBackgroundRegions(plainCfg, pixels, [{ motif: { ...states[0]!.motif, backgroundPart: 'heart' } }]))
+      .toEqual([{ x: 8.5, y: 3, w: 5, h: 4 }])
   })
 
   it('uses the photo opening of a replacement I ♥ ME motif without changing the original template slot', () => {

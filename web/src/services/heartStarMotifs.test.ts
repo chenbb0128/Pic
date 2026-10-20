@@ -79,10 +79,33 @@ describe('heart-star built-in motifs', () => {
     expect(s.cfg.slots[2].w).toBe(150)
   })
 
-  it('rejects mismatched variants, stars and selections from other templates without changing artwork', async () => {
+  it.each(['小款', '大款'])('allows only matching %s hearts and stars, fitting the existing position', async variant => {
     const s = setup()
-    await s.feature.replace([0, 2], 'heart')
+    Object.assign(s.cfg, { motifSlots: [
+      { row: 0, column: 0, name: '爱心', variant, box: [0, 0, 200, 200] },
+      { row: 0, column: 1, name: '爱心', variant, box: [240, 0, 200, 200] },
+      { row: 1, column: 0, name: '组合', variant: '原款', box: [0, 500, 300, 300] },
+    ] })
+    s.assets.star.variant = variant
+    s.assets.star.nativeW = 21
+    s.assets.star.nativeH = 21
+    s.assets.heart.variant = variant
+    expect(s.feature.allowed(s.assets.star, [0, 1])).toBe(true)
+    expect(s.feature.allowed(s.assets.star, [0, 2])).toBe(false)
+    expect(s.feature.allowed({ ...s.assets.star, variant: variant === '小款' ? '大款' : '小款', nativeW: 10, nativeH: 10 }, [0])).toBe(false)
+    expect(s.feature.allowed({ ...s.assets.star, type: 'circle', nativeW: 10, nativeH: 10 }, [0])).toBe(false)
     await s.feature.replace([0], 'star')
+    expect(s.env.states[0].motif).toMatchObject({ assetId: 'star', type: 'star', placement: { x: 0, y: 0, w: 200, h: 200 }, frame: { x: 140, y: 50, w: 80, h: 100 } })
+    await s.feature.replace([1], 'combo')
+    expect(s.env.states[1].motif).toBeUndefined()
+    await s.feature.replace([0], 'heart')
+    expect(s.env.states[0].motif.placement).toEqual({ x: 0, y: 0, w: 200, h: 200 })
+    expect(s.feature.allowed(s.assets.star, [0])).toBe(true)
+    expect(s.env.states[0].imageDx).toBe(8)
+  })
+
+  it('rejects replacements from unsupported templates without changing artwork', async () => {
+    const s = setup()
     s.env.name = '模板混合.png'
     await s.feature.replace([0], 'heart')
     expect(s.env.states.some((state: any) => state.motif)).toBe(false)
@@ -149,11 +172,23 @@ describe('heart-star catalog and overflow details', () => {
     expect(scope.HeartStarPink).toBeDefined()
     const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
     const entries = scope.HeartStarPink.register(assets)
-    expect(Object.keys(entries)).toHaveLength(2)
+    expect(Object.keys(entries)).toHaveLength(4)
     for (const suffix of ['-small', '']) {
       const original = assets[`rose-heart${suffix}`], variant = entries[`pink-stripe-heart${suffix}`]
       expect(variant).toMatchObject({ type: 'heart', variant: original.variant, nativeW: original.nativeW,
         nativeH: original.nativeH, frame: original.frame, baseName: '粉色条纹爱心' })
+      expect([...readFileSync(new URL(variant.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    }
+  })
+  it('offers white-background pink stars in both sizes with the existing star silhouette and dimensions', () => {
+    const scope: any = {}
+    new Function('globalThis', source('pink-motifs.js'))(scope)
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const entries = scope.HeartStarPink.register(assets)
+    for (const suffix of ['-small', '']) {
+      const original = assets[`white-mint-star${suffix}`], variant = entries[`white-pink-star${suffix}`]
+      expect(variant).toMatchObject({ type: 'star', variant: original.variant, nativeW: original.nativeW,
+        nativeH: original.nativeH, frame: original.frame, baseName: '白底粉星星' })
       expect([...readFileSync(new URL(variant.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
     }
   })

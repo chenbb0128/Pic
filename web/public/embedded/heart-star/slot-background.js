@@ -111,7 +111,7 @@
     return bounds;
   }
 
-  const heartOnly = slot => slot.bottom || slot.backgroundPart === 'heart';
+  const heartOnly = (slot, state) => state?.motif?.backgroundPart ? state.motif.backgroundPart === 'heart' : slot.bottom || slot.backgroundPart === 'heart';
 
   function componentBounds(mask, w, h, region, center) {
     const left = Math.max(0, Math.floor(region.x - region.w / 2));
@@ -151,14 +151,14 @@
   function measureBackgroundRegions(cfg, pixels, states = []) {
     const bounds = cfg.custom ? cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h })) :
       measureRegions(cfg, pixels);
-    if (!cfg.slots.some(heartOnly)) return bounds;
+    if (!cfg.slots.some((slot, i) => heartOnly(slot, states[i]))) return bounds;
     const mask = outerMask(pixels, cfg.w, cfg.h);
-    return bounds.map((region, index) => heartOnly(cfg.slots[index]) ?
+    return bounds.map((region, index) => heartOnly(cfg.slots[index], states[index]) ?
       componentBounds(mask, cfg.w, cfg.h, region, states[index]?.motif?.frame || cfg.slots[index]) : region);
   }
 
   function regions(cfg, source, states = []) {
-    if (cfg.custom && !cfg.slots.some(heartOnly)) return cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h }));
+    if (cfg.custom && !cfg.slots.some((slot, i) => heartOnly(slot, states[i]))) return cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h }));
     const frames = states.map(state => state.motif?.frame);
     let cached = regionCache.get(source);
     if (!cached || cached.cfg !== cfg || cached.frames.length !== frames.length || frames.some((frame, i) => frame !== cached.frames[i])) {

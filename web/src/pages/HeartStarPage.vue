@@ -9,7 +9,7 @@ const unlocked = ref(false)
 const checkingAccess = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=preset-defaults-24`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=preset-stars-28`
 const shortcutGuide = ref<HTMLDialogElement | null>(null)
 const shortcutGroups = [
   { title: '选择图案', items: [
