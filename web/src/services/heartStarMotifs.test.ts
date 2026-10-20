@@ -37,6 +37,29 @@ function setup() {
 }
 
 describe('heart-star built-in motifs', () => {
+  it('replaces only selected motifs in the independent 210×144 template using its own catalog and physical size', async () => {
+    const s = setup()
+    s.env.name = '爱心横版.png'
+    Object.assign(s.cfg, { w: 2100, h: 1440, widthMm: 210, heightMm: 144, motifSlots: [
+      { row: 0, column: 0, name: '组合', variant: '原款', box: [100, 100, 300, 300] },
+      { row: 2, column: 0, name: '爱心', variant: '小款', box: [100, 800, 200, 200] },
+    ] })
+    await s.feature.replace([0], 'combo')
+    expect(s.feature.active()).toBe(true)
+    expect(s.env.states[0].motif.placement).toEqual({ x: 100, y: 100, w: 300, h: 300 })
+    expect(s.env.states[0].motif.frame).toEqual({ x: 310, y: 175, w: 120, h: 150 })
+    expect(s.env.states[1].motif).toBeUndefined()
+    expect(s.feature.rows(210, 144)[0]).toMatchObject({ width: 30, height: 30 })
+  })
+  it('replaces an I ♥ ME group with I ♥ VE while keeping the photo transform and opening', async () => {
+    const s = setup()
+    ;(s.assets as any).ive = { ...s.assets.combo, name: '新组合 I ♥ VE', group: 'I ♥ VE 组合' }
+    await s.feature.replace([2], 'ive')
+    expect(s.env.states[2].motif?.assetId).toBe('ive')
+    expect(s.env.states[2].motif.frame).toEqual({ x: 210, y: 575, w: 120, h: 150 })
+    expect(s.env.states[2].size).toBe(.62)
+    expect(s.env.states[0].motif).toBeUndefined()
+  })
   it('replaces selected same-size motifs only, preserving photo transforms and original template geometry', async () => {
     const s = setup()
     await s.feature.replace([0], 'heart')
@@ -104,6 +127,74 @@ describe('heart-star built-in motifs', () => {
 })
 
 describe('heart-star catalog and overflow details', () => {
+  it('adds all three new heart patterns to both letter combinations without changing their photo openings', () => {
+    const scope: any = {}
+    new Function('globalThis', source('pattern-combos.js'))(scope)
+    expect(scope.HeartStarPatternCombos).toBeDefined()
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    new Function('globalThis', source('ive-motifs.js'))(scope)
+    Object.assign(assets, scope.HeartStarIVE.register(assets))
+    const extra = scope.HeartStarPatternCombos.register(assets)
+    expect(Object.keys(extra)).toHaveLength(6)
+    for (const letters of ['ime', 'ive']) for (const pattern of ['brown-polka', 'brown-stripe', 'pink-stripe']) {
+      const variant = extra[`${letters}-${pattern}`], original = assets[`${letters}-rose`]
+      expect(variant).toMatchObject({ group: original.group, variant: '原款', nativeW: original.nativeW,
+        nativeH: original.nativeH, frame: original.frame })
+      expect([...readFileSync(new URL(variant.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    }
+  })
+  it('registers pink vertical striped hearts in both sizes with existing selection geometry', () => {
+    const scope: any = {}
+    new Function('globalThis', source('pink-motifs.js'))(scope)
+    expect(scope.HeartStarPink).toBeDefined()
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const entries = scope.HeartStarPink.register(assets)
+    expect(Object.keys(entries)).toHaveLength(2)
+    for (const suffix of ['-small', '']) {
+      const original = assets[`rose-heart${suffix}`], variant = entries[`pink-stripe-heart${suffix}`]
+      expect(variant).toMatchObject({ type: 'heart', variant: original.variant, nativeW: original.nativeW,
+        nativeH: original.nativeH, frame: original.frame, baseName: '粉色条纹爱心' })
+      expect([...readFileSync(new URL(variant.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    }
+  })
+  it('adds brown polka and two-tone striped hearts in both sizes without altering existing materials', () => {
+    const scope: any = {}
+    new Function('globalThis', source('brown-motifs.js'))(scope)
+    expect(scope.HeartStarBrown).toBeDefined()
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const before = structuredClone(assets)
+    const extra = scope.HeartStarBrown.register(assets)
+    expect(Object.keys(extra)).toHaveLength(4)
+    for (const pattern of ['polka', 'stripe']) for (const [suffix, original] of [['-small', 'rose-heart-small'], ['', 'rose-heart']]) {
+      const material = extra[`brown-${pattern}-heart${suffix}`]
+      expect(material).toMatchObject({ type: 'heart', variant: assets[original!].variant,
+        nativeW: assets[original!].nativeW, nativeH: assets[original!].nativeH, frame: assets[original!].frame })
+      expect([...readFileSync(new URL(material.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    }
+    expect(assets).toEqual(before)
+  })
+  it('adds matching I ♥ VE materials without overwriting I ♥ ME or changing their dimensions', () => {
+    const global: any = {}
+    new Function('globalThis', source('motif-catalog.js'))(global)
+    new Function('globalThis', source('ive-motifs.js'))(global)
+    const assets = { ...JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!), ...global.HeartStarMotifCatalog.assets }
+    expect(global.HeartStarIVE).toBeDefined()
+    const entries = global.HeartStarIVE.register(assets)
+    const originals = Object.entries(assets).filter(([, a]: any) => a.group === 'I ♥ ME 组合')
+    expect(Object.keys(entries)).toHaveLength(originals.length)
+    for (const [id, original] of originals as [string, any][]) {
+      const variant = entries[id.replace(/^ime-/, 'ive-')]
+      expect(variant).toMatchObject({ group: 'I ♥ VE 组合', w: original.w, h: original.h,
+        nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+      expect(variant.name).toContain('I ♥ VE')
+      expect([...readFileSync(new URL(variant.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+      expect(assets[id]).toBe(original)
+    }
+    const start = toolHtml.indexOf('function buildCustomLayout(')
+    const build = new Function(`${toolHtml.slice(start, toolHtml.indexOf('\n}', start) + 2)};return buildCustomLayout`)()
+    const layout = build([{ id: 'r', groups: [{ id: 'g', assetId: 'ive-rose', count: 1 }] }], entries, 144, 210)
+    expect(layout.slots[0].backgroundPart).toBe('heart')
+  })
   it('adds all 18 material entries with valid local PNGs while preserving existing dimensions', () => {
     const global: any = {}
     new Function('globalThis', source('motif-catalog.js'))(global)

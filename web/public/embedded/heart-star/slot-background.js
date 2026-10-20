@@ -258,7 +258,7 @@
       scaleRange.value = String((first.scale ?? 1) * 100);
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
-        mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变；I ♥ ME 仅替换爱心，字母保持原色。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓；I ♥ ME 的字母保持原色。') :
+        mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变；I ♥ ME / I ♥ VE 仅替换爱心，字母保持原色。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓；I ♥ ME / I ♥ VE 的字母保持原色。') :
         mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';
     }
 
