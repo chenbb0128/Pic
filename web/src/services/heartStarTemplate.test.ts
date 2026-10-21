@@ -40,6 +40,30 @@ function setup() {
 }
 
 describe('heart-star template switching', () => {
+  it('does not carry deleted photos or empty placeholders to the next template', () => {
+    const { env, feature, images, imageB, revoked } = setup()
+    env.replacedPhotos.set(0, { image: null, url: null })
+    env.replacedPhotos.set(2, { image: null, url: null })
+    feature.loadTemplate()
+    images[0].onload()
+    expect(env.photos).toEqual([imageB])
+    expect([0, 1, 2].map(i => feature.slotPhoto(i))).toEqual([imageB, imageB, imageB])
+    expect(revoked).toEqual(['a'])
+  })
+
+  it('does not restore old photo sources after every photo has been deleted', () => {
+    const { env, feature, images, imageA, revoked } = setup()
+    env.photos = [imageA]
+    env.urls = ['a']
+    env.replacementUrls = new Set(['b'])
+    env.replacedPhotos = new Map([0, 1, 2, 3].map(i => [i, { image: null, url: null }]))
+    feature.loadTemplate()
+    images[0].onload()
+    expect(env.photos).toEqual([])
+    expect(feature.slotPhoto(0)).toBeNull()
+    expect(revoked).toEqual(['a', 'b'])
+  })
+
   it('carries uploaded photos to every position of the next template and selects all positions', () => {
     const { env, feature, imageA, imageB, images, revoked, controls } = setup()
     feature.loadTemplate()
@@ -127,6 +151,7 @@ describe('heart-star template switching', () => {
       widthInput: { value: '144' }, heightInput: { value: '210' },
       customSummary: { classList: { add() {}, remove() {} } }, download: {},
       releaseUnusedReplacementUrls() {}, loadCustomImage() {},
+      motifEditor: { reflow() {} },
     })
     env.document.createElement = () => ({ getContext: () => ({ drawImage() {} }) })
     const source = section('function customInitialState(', 'function loadCustomTemplate(')

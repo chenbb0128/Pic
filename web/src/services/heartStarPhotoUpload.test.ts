@@ -10,6 +10,7 @@ function setup(ids: number[]) {
     replacedPhotos: new Map(Array.from({ length: 4 }, (_, i) => [i, old])),
     replacementUrls: new Set(['old-url']), replacementRequest: 0, replacementBusy: false,
     photoUploadRequest: 0, photoUploadBusy: false, photoUploadTarget: null, photos: [], urls: [], ignorePhotoClick: false,
+    exportBusy: false, replacementTarget: null, replacePhotoFile: { value: '' }, filesEl: { value: '' },
     Image: class { constructor() { images.push(this) } },
     URL: { createObjectURL: (file: any) => `url-${file.name}`, revokeObjectURL: (url: string) => revoked.push(url) },
     selectedPhotoTarget: () => ({ template: env.sel.value, states: env.states,
@@ -18,15 +19,14 @@ function setup(ids: number[]) {
     finishPhotoDrag() {}, updatePhotoControls() {}, draw() {}, renderThumbs() {},
     currentSlots: () => states,
     say: (message: string) => messages.push(message),
-    releaseUnusedReplacementUrls: () => {
-      const used = new Set([...env.replacedPhotos.values()].map((item: any) => item.url))
-      for (const url of env.replacementUrls) if (!used.has(url)) env.URL.revokeObjectURL(url)
-    },
   }
-  const source = toolHtml.slice(toolHtml.indexOf('function setFiles('), toolHtml.indexOf('function renderThumbs('))
-  const upload = new Function('env', `with(env){${source};return setFiles}`)(env)
+  const source = toolHtml.slice(toolHtml.indexOf('function slotPhoto('), toolHtml.indexOf('function hasSlotPhotos(')) +
+    toolHtml.slice(toolHtml.indexOf('function releaseUnusedReplacementUrls('), toolHtml.indexOf('function selectedPhotoTarget(')) +
+    toolHtml.slice(toolHtml.indexOf('function setFiles('), toolHtml.indexOf('function renderThumbs('))
+  const feature = new Function('env', `with(env){${source};return {upload:setFiles,slotPhoto,
+    remove:typeof removeSelectedPhotos==='function'?removeSelectedPhotos:null}}`)(env)
   const file = (name: string) => ({ name, type: 'image/png' })
-  return { env, states, old, images, messages, revoked, upload, file }
+  return { env, states, old, images, messages, revoked, ...feature, file }
 }
 
 describe('heart-star selected photo upload', () => {
@@ -81,5 +81,63 @@ describe('heart-star selected photo upload', () => {
     s.images[0].onload()
     expect(s.env.replacedPhotos.get(1)?.image).toBe(s.images[0])
     expect([0, 2, 3].map(i => s.env.replacedPhotos.get(i))).toEqual([s.old, s.old, s.old])
+  })
+
+  it('removes only selected photos and preserves the motif, background, and transforms', () => {
+    const s = setup([1])
+    Object.assign(s.states[1]!, { motif: { id: 'heart' }, background: { type: 'color', color: '#ffccdd' } })
+    const before = structuredClone(s.states)
+    expect(s.remove).toBeTypeOf('function')
+    s.remove()
+    expect(s.slotPhoto(1)).toBeNull()
+    expect([0, 2, 3].map(i => s.slotPhoto(i))).toEqual([s.old.image, s.old.image, s.old.image])
+    expect(s.states).toEqual(before)
+    expect(s.revoked).toEqual([])
+  })
+
+  it('does not fall back to an old source after deletion and supports uploading again', () => {
+    const s = setup([1])
+    s.env.replacedPhotos.clear()
+    s.env.photos = [s.old.image]
+    s.env.urls = ['old-url']
+    s.env.replacementUrls.clear()
+    expect(s.remove).toBeTypeOf('function')
+    s.remove()
+    expect(s.slotPhoto(1)).toBeNull()
+    expect(s.slotPhoto(0)).toBe(s.old.image)
+    s.upload([s.file('new')])
+    s.images[0].onload()
+    expect(s.slotPhoto(1)).toBe(s.images[0])
+  })
+
+  it('releases a shared replacement source only after its last photo is removed', () => {
+    const s = setup([0, 1, 2])
+    expect(s.remove).toBeTypeOf('function')
+    s.remove()
+    expect(s.revoked).toEqual([])
+    s.env.selectedSlots = new Set([3])
+    s.remove()
+    expect(s.revoked).toEqual(['old-url'])
+    expect(s.env.replacementUrls.size).toBe(0)
+  })
+
+  it('ignores a file picker opened before the selected photos were deleted', () => {
+    const s = setup([1])
+    const target = s.env.selectedPhotoTarget()
+    s.remove()
+    s.upload([s.file('stale')], target)
+    expect(s.images).toHaveLength(0)
+    expect(s.slotPhoto(1)).toBeNull()
+  })
+
+  it.each(['text', 'exportBusy', 'replacementBusy', 'photoUploadBusy', 'empty'])('does not delete while unavailable: %s', reason => {
+    const s = setup([1])
+    if (reason === 'text') s.env.templates.heart.text = true
+    else if (reason === 'empty') s.env.selectedSlots.clear()
+    else s.env[reason] = true
+    expect(s.remove).toBeTypeOf('function')
+    s.remove()
+    expect(s.slotPhoto(1)).toBe(s.old.image)
+    expect(s.revoked).toEqual([])
   })
 })

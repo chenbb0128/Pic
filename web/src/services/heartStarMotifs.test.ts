@@ -7,9 +7,9 @@ function source(name: string) {
   const path = new URL(name, directory)
   return existsSync(path) ? readFileSync(path, 'utf8') : ''
 }
-function setup() {
+function setup(measureRegions?: (cfg: any, pixels: any) => any[]) {
   const draws: any[][] = [], messages: string[] = []
-  const paint = { drawImage: (...args: any[]) => draws.push(['image', ...args]), clearRect: (...args: number[]) => draws.push(['clear', ...args]) }
+  const paint = { drawImage: (...args: any[]) => draws.push(['image', ...args]), clearRect: (...args: number[]) => draws.push(['clear', ...args]), getImageData: () => ({ data: [] }) }
   const global: any = {}
   new Function('globalThis', 'document', source('template-motifs.js'))(global, { createElement: () => ({ getContext: () => paint }) })
   const cfg = { w: 1440, h: 2100, slots: [
@@ -29,7 +29,7 @@ function setup() {
   const env: any = { name: '模板爱心.png', cfg, states: [{ size: .62, imageDx: 8, background: { type: 'color' } }, { size: .8 }, { size: .62 }], selected: new Set([0]), base: { name: 'base' } }
   let load: (id: string) => Promise<any> = async id => ({ id })
   const feature = global.HeartStarMotifs.create({
-    getName: () => env.name, getTemplate: () => cfg, getStates: () => env.states,
+    getName: () => env.name, getTemplate: () => env.cfg, getStates: () => env.states, measureRegions,
     getSelection: () => env.selected, getSource: () => env.base, assets, slots,
     loadImage: (id: string) => load(id), redraw() {}, report: (text: string) => messages.push(text),
   })
@@ -109,6 +109,89 @@ describe('heart-star built-in motifs', () => {
     s.env.name = '模板混合.png'
     await s.feature.replace([0], 'heart')
     expect(s.env.states.some((state: any) => state.motif)).toBe(false)
+    expect(s.feature.selection()).toEqual([])
+  })
+
+  it.each([
+    ['模板混合.png', 40, 'star', 24, 8, 8, 'mint-star-small'],
+    ['模板粉色.png', 28, 'square', 12, 8, 8, 'pink-plaid-square-small'],
+    ['模板蓝色.png', 28, 'square', 12, 8, 8, 'blue-square-small'],
+    ['模板黄色.png', 28, 'square', 12, 8, 8, 'yellow-square-small'],
+    ['豹纹星星.png', 42, 'star', 30, 12, 0, 'leopard-star-small'],
+    ['波点爱心.png', 42, 'heart', 30, 12, 0, 'polka-heart-small'],
+    ['波点圆形.png', 42, 'circle', 30, 12, 0, 'polka-circle-small'],
+  ])('supports selected replacement and restore in %s without changing neighbors', async (name, count, type, small, large, combos, firstId) => {
+    const templateStart = toolHtml.indexOf('const templates=')
+    const templates = new Function(`${toolHtml.slice(templateStart, toolHtml.indexOf('const canvas=', templateStart))};return templates`)()
+    // Hand-set measured bounds prove the editor uses full artwork, not photo openings.
+    const bounds = templates[name].slots.map((p: any) => ({ x: p.x, y: p.y, w: 210, h: 220 }))
+    const s = setup(() => bounds)
+    s.env.name = name
+    s.env.cfg = templates[name]
+    Object.assign(s.assets, JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!))
+    s.env.base = { complete: true, naturalWidth: templates[name].w }
+    s.env.states = Array.from({ length: Number(count) }, () => ({ size: .62, imageDx: 8 }))
+    expect(s.feature.active()).toBe(true)
+    const catalog = s.feature.catalog()
+    expect(catalog).toHaveLength(Number(count))
+    expect(catalog.filter((p: any) => p.variant === '小款')).toHaveLength(Number(small))
+    expect(catalog.filter((p: any) => p.variant === '大款')).toHaveLength(Number(large))
+    expect(catalog.filter((p: any) => p.variant === '原款')).toHaveLength(Number(combos))
+    expect(catalog[0]).toMatchObject({ type, assetId: firstId, box: [bounds[0].x - 105, bounds[0].y - 110, 210, 220] })
+    const selectedAsset = 'star'
+    expect(s.feature.allowed((s.assets as any)[selectedAsset], [0])).toBe(true)
+    expect(s.feature.allowed({ ...(s.assets as any)[selectedAsset], variant: '大款' }, [0])).toBe(false)
+    expect(s.feature.allowed((s.assets as any)[firstId], [0])).toBe(true)
+    await s.feature.replace([0], selectedAsset)
+    expect(s.env.states[0].motif.assetId).toBe(selectedAsset)
+    expect(s.env.states[0].imageDx).toBe(8)
+    expect(s.env.states[1].motif).toBeUndefined()
+    s.feature.source(s.env.base)
+    expect(s.draws).toContainEqual(['clear', bounds[0].x - 105, bounds[0].y - 110, 210, 220])
+    s.feature.restore([0])
+    expect(s.feature.source(s.env.base)).toBe(s.env.base)
+  })
+
+  it.each(['小款', '大款'])('replaces %s circles and squares with hearts or stars while preserving other positions', async variant => {
+    const s = setup()
+    Object.assign(s.cfg, { motifSlots: [
+      { row: 0, column: 0, name: '圆形', variant, type: 'circle', box: [0, 0, 200, 200] },
+      { row: 0, column: 1, name: '方块', variant, type: 'square', box: [240, 0, 200, 200] },
+      { row: 1, column: 0, name: '组合', variant: '原款', box: [0, 500, 300, 300] },
+    ] })
+    s.assets.star.variant = variant
+    s.assets.heart.variant = variant
+    for (const assetId of ['heart', 'star'] as const) {
+      expect(s.feature.allowed(s.assets[assetId], [0, 1])).toBe(true)
+      expect(s.feature.allowed({ ...s.assets[assetId], variant: variant === '小款' ? '大款' : '小款' }, [0, 1])).toBe(false)
+      expect(s.feature.allowed(s.assets[assetId], [0, 2])).toBe(false)
+      await s.feature.replace([0, 1], assetId)
+      expect(s.env.states[0].motif).toMatchObject({ assetId, type: assetId, placement: { x: 0, y: 0, w: 200, h: 200 } })
+      expect(s.env.states[1].motif).toMatchObject({ assetId, type: assetId, placement: { x: 240, y: 0, w: 200, h: 200 } })
+      expect(s.env.states[0].imageDx).toBe(8)
+      expect(s.env.states[2].motif).toBeUndefined()
+    }
+    expect(s.feature.allowed(s.assets.combo, [0, 1])).toBe(false)
+  })
+
+  it('supports custom-layout replacements using placements and refuses text templates', async () => {
+    const s = setup()
+    s.env.name = '自定义排版.png'
+    s.env.cfg = { w: 2100, h: 1440, custom: true, slots: [{ type: 'heart', row: 0, column: 0 }],
+      placements: [{ assetId: 'heart', x: 50, y: 80, w: 200, h: 200 }] }
+    s.env.states = [{ imageDx: 8 }]
+    expect(s.feature.active()).toBe(true)
+    await s.feature.replace([0], 'star')
+    expect(s.env.states[0].motif).toMatchObject({ assetId: 'star', type: 'star', placement: { x: 50, y: 80, w: 200, h: 200 } })
+    s.env.cfg.placements = [{ assetId: 'heart', x: 300, y: 500, w: 200, h: 200 }]
+    s.feature.reflow()
+    expect(s.env.states[0].motif.placement).toEqual({ x: 300, y: 500, w: 200, h: 200 })
+    expect(s.env.states[0].imageDx).toBe(8)
+    s.env.cfg.placements = [{ assetId: 'combo', x: 300, y: 500, w: 300, h: 300 }]
+    s.feature.reflow()
+    expect(s.env.states[0].motif).toBeUndefined()
+    s.env.cfg = { text: true, slots: [{}] }
+    expect(s.feature.active()).toBe(false)
     expect(s.feature.selection()).toEqual([])
   })
 

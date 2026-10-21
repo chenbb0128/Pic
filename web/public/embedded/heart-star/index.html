@@ -148,7 +148,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
  <div class="field"><div class="label">模板内容尺寸 <span class="small">不含底部编号区</span></div><div class="print-size"><label>宽 <input id="outWidth" type="number" min="20" max="1000" step="1" value="144"> mm</label><span>×</span><label>高 <input id="outHeight" type="number" min="20" max="1000" step="1" value="210"> mm</label></div><div class="dpi-line"><label>打印精度 <select id="dpi"><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="500">500 DPI</option><option value="600" selected>600 DPI</option></select></label></div><div class="size-summary" aria-live="polite"><div><span class="size-summary-label">底部编号区</span><span class="size-summary-value" id="footerAreaSize">另加 3 mm 高</span></div><div><span class="size-summary-label">PNG 总尺寸<small id="footerSizeHint">含底部编号区</small></span><span class="size-summary-value" id="exportSize"></span></div><div><span class="size-summary-label">PNG 像素尺寸</span><span class="size-summary-value" id="exportPixels"></span></div></div></div>
  <div class="field"><label class="label" for="footerText">底部编号 <span class="small">开启后另加 3 mm</span></label><label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用底部编号</span></label><div class="footer-text-row"><input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号，正式下载后清空" aria-label="本次底部编号" required><button type="button" class="preview-tool" id="copyFooterText" title="复制底部编号" aria-label="复制底部编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div><output class="small footer-filename" id="exportFilename" for="footerText template numberingEnabled"></output></div>
  <div class="field"><div class="label">上传照片 <span class="small">仅替换选中图案</span></div><label class="upload" id="drop"><div class="icon">＋</div><strong>选择或拖入图片，替换所选</strong><span>JPG、PNG、WEBP 均可 · 支持多张</span><input id="files" type="file" accept="image/*" multiple></label><div class="thumbs" id="thumbs"></div></div>
- <div class="field"><div class="label"><span id="selectionTitle">选择图形</span> <span class="small" id="selectedCount">已选 1 个</span></div><label class="check multi-check"><input id="multiMode" type="checkbox"><span id="multiModeLabel">多选图案并统一控制</span></label><div class="selection-actions"><button type="button" class="btn" id="selectAll">全选</button><button type="button" class="btn" id="clearSelection">清空选择</button></div><select class="select" id="slotSelect"></select><div id="replacePhotoActions"><button type="button" class="btn copy-apply replace-photo" id="replacePhoto" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg><span>替换所选图片</span></button><input id="replacePhotoFile" type="file" accept="image/*" hidden></div><div class="small" id="slotInfo" style="margin-top:7px">开启多选后，可在预览中逐个点选图形</div></div>
+ <div class="field"><div class="label"><span id="selectionTitle">选择图形</span> <span class="small" id="selectedCount">已选 1 个</span></div><label class="check multi-check"><input id="multiMode" type="checkbox"><span id="multiModeLabel">多选图案并统一控制</span></label><div class="selection-actions"><button type="button" class="btn" id="selectAll">全选</button><button type="button" class="btn" id="clearSelection">清空选择</button></div><select class="select" id="slotSelect"></select><div id="replacePhotoActions"><button type="button" class="btn copy-apply replace-photo" id="replacePhoto" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg><span>替换所选图片</span></button><input id="replacePhotoFile" type="file" accept="image/*" hidden><button type="button" class="btn" id="removeSelectedPhoto" style="width:100%;height:36px;margin-top:8px;font-size:12px" title="仅删除所选位置的照片，保留图案轮廓和背景" disabled>删除所选照片</button></div><div class="small" id="slotInfo" style="margin-top:7px">开启多选后，可在预览中逐个点选图形</div></div>
  <div class="field"><div class="label"><span id="slotSizeLabel">裁剪形状大小</span> <span class="small">只影响选中的图形</span></div><div class="size-entry"><input id="sizeNumber" type="number" min="25" max="120" step="1" value="62"><span>%</span></div><div class="range-line"><input id="scale" type="range" min="25" max="120" value="62"><output id="scaleOut">62%</output></div></div>
  <div class="field"><div class="label"><span id="slotPositionLabel">裁剪形状位置</span> <span class="small">上下左右独立调整</span></div><div class="move-control"><div class="move-pad"><span></span><button type="button" data-move="0,-1" aria-label="上移">↑</button><span></span><button type="button" data-move="-1,0" aria-label="左移">←</button><button type="button" class="home" id="resetPosition" aria-label="重置位置">居中</button><button type="button" data-move="1,0" aria-label="右移">→</button><span></span><button type="button" data-move="0,1" aria-label="下移">↓</button><span></span></div><label class="step">步长 <select id="moveStep"><option value="1">1 px</option><option value="5" selected>5 px</option><option value="10">10 px</option></select></label></div><div class="small" id="offsetReadout" style="margin-top:8px">X 0 px　Y 0 px</div></div>
  <div class="field"><div class="label">裁剪形状 <span class="small">只影响选中的图形</span></div><label class="check clip-toggle"><input id="clip" type="checkbox"><span>启用裁剪</span></label><select class="select" id="clipShape"><option value="mixed" disabled>混合</option><option value="template" selected>跟随模板</option><option value="heart">爱心</option><option value="star">星星</option><option value="circle">圆形</option><option value="oval">椭圆</option><option value="roundRect">圆角方形</option><option value="square">正方形</option><option value="diamond">菱形</option><option value="hexagon">六边形</option></select></div>
@@ -157,8 +157,8 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <div class="label">替换图案背景 <span class="small">仅复用外轮廓 · 可多选</span></div>
   <select class="select" id="slotBackgroundMode" aria-label="图案背景类型"><option value="none">不启用（保留原效果）</option><option value="color">纯色背景</option><option value="image">图片背景</option><option value="mixed" disabled>混合背景</option></select>
   <div id="slotBackgroundColorRow" hidden style="margin-top:10px"><label class="small">背景颜色 <input id="slotBackgroundColor" type="color" value="#fff0f5" aria-label="图案背景颜色" style="width:56px;height:36px;vertical-align:middle;border:1px solid var(--line);border-radius:8px;background:#fff"></label></div>
+  <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%;margin-top:10px">上传背景图片</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
   <div id="slotBackgroundImageRow" hidden style="margin-top:10px">
-   <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%">上传背景，替换所选图案</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
    <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px">花纹大小 <input id="slotBackgroundScale" type="number" min="25" max="1000" step="1" value="100" aria-label="背景花纹缩放百分比" style="width:80px;min-height:36px"> %</label>
    <div class="range-line"><input id="slotBackgroundScaleRange" type="range" min="25" max="1000" step="1" value="100" aria-label="背景花纹缩放滑杆"></div>
    <div class="small" style="margin-top:6px;line-height:1.6">新图片作为完整背景，默认等比铺满外轮廓。可实时缩放、移动，超出轮廓自动裁掉；照片独立不变。</div>
@@ -169,10 +169,10 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <button type="button" class="btn" id="slotBackgroundClear" style="width:100%;height:36px;font-size:12px">恢复所选原图案</button>
  </div>
  <div class="field" id="heartMotifField" hidden>
-  <div class="label">更换内置图案 <span class="small">爱心 / 星星 · 同规格替换</span></div>
+  <div class="label">更换内置图案 <span class="small">各图片模板 · 同规格替换</span></div>
   <div class="selection-actions"><button type="button" class="btn" id="replaceHeartMotif">更换图案</button><button type="button" class="btn" id="restoreHeartMotif">恢复原图案</button></div>
   <p class="small" id="heartMotifSize" role="status" style="line-height:1.6"></p>
-  <p class="small" style="line-height:1.6">小款爱心可更换小款爱心或小款星星，大款爱心可更换大款爱心或大款星星。请先选中同规格图案；I ♥ ME / I ♥ VE 仍可整组互换。所选自定义背景会移除，照片保留。</p>
+  <p class="small" style="line-height:1.6">选中同规格图案后更换：小款换小款、大款换大款，爱心与星星可互换；圆形、方块除同类型外，也可换成爱心或星星。I ♥ ME / I ♥ VE 可整组互换。仅更换所选位置，自定义背景会移除，照片保留。</p>
   <details><summary style="cursor:pointer">查看本模板图案尺寸</summary><p class="small">按当前输出宽高计算，单位 mm；为完整图案尺寸，不是照片框尺寸。</p><div id="heartTemplateSizeTable" style="max-height:320px;overflow:auto"></div></details>
  </div>
  <div class="hint">先在预览中选择图案，再上传照片或背景；只替换选中位置，其他图案不变。多选可批量替换，点击“全选”后才替换全部。多张照片按选中位置的排版顺序循环填入。图片只在当前浏览器中处理。</div>
@@ -186,7 +186,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./preview-watermark.js?v=picture-preview-3"></script>
 <script src="./editor-interactions.js?v=editor-2"></script>
 <script src="./motif-catalog.js?v=motifs-1"></script>
-<script src="./template-motifs.js?v=same-variant-stars-5"></script>
+<script src="./template-motifs.js?v=circle-square-hearts-stars-7"></script>
 <script src="./ive-motifs.js?v=ive-1"></script>
 <script src="./brown-motifs.js?v=brown-2"></script>
 <script src="./pink-motifs.js?v=pink-stars-2"></script>
@@ -268,13 +268,13 @@ function drawCopy(x,y,w,h,size,content){const text=content.trim();if(!text)retur
 const photoScale=document.getElementById('photoScale'),photoScaleNumber=document.getElementById('photoScaleNumber'),photoOffsetX=document.getElementById('photoOffsetX'),photoOffsetY=document.getElementById('photoOffsetY'),photoDragMode=document.getElementById('photoDragMode');let photoDrag=null,ignorePhotoClick=false,photoFrameRequest=0;
 const replacePhoto=document.getElementById('replacePhoto'),replacePhotoFile=document.getElementById('replacePhotoFile'),replacedPhotos=new Map(),replacementUrls=new Set();
 let replacementRequest=0,replacementBusy=false,replacementTarget=null,photoUploadRequest=0,photoUploadBusy=false,photoUploadTarget=null;
-function slotPhoto(i){return replacedPhotos.get(i)?.image||(photos.length?photos[i%photos.length]:null)}
+function slotPhoto(i){return replacedPhotos.has(i)?replacedPhotos.get(i).image:(photos.length?photos[i%photos.length]:null)}
 function hasSlotPhotos(){return currentSlots().some((_,i)=>slotPhoto(i))}
 function clearReplacedPhotos(){replacementRequest++;replacementBusy=false;replacementTarget=null;replacePhotoFile.value='';replacedPhotos.clear();replacementUrls.forEach(url=>URL.revokeObjectURL(url));replacementUrls.clear()}
 function preserveTemplatePhotos(){
  if(replacedPhotos.size){
   const seen=new Set(),items=[];
-  states.forEach((_,i)=>{const item=replacedPhotos.get(i)||(photos.length?{image:photos[i%photos.length],url:urls[i%photos.length]}:null);if(item&&!seen.has(item.image)){seen.add(item.image);items.push(item)}});
+  states.forEach((_,i)=>{const item=replacedPhotos.get(i)||(photos.length?{image:photos[i%photos.length],url:urls[i%photos.length]}:null);if(item?.image&&!seen.has(item.image)){seen.add(item.image);items.push(item)}});
   const retained=new Set(items.map(item=>item.url));urls.forEach(url=>{if(!retained.has(url))URL.revokeObjectURL(url)});
   photos=items.map(item=>item.image);urls=items.map(item=>item.url);urls.forEach(url=>replacementUrls.delete(url));
  }
@@ -282,6 +282,14 @@ function preserveTemplatePhotos(){
  clearReplacedPhotos();photoUploadTarget=null;
 }
 function releaseUnusedReplacementUrls(){const used=new Set([...replacedPhotos.values()].map(item=>item.url));replacementUrls.forEach(url=>{if(!used.has(url)){URL.revokeObjectURL(url);replacementUrls.delete(url)}})}
+function removeSelectedPhotos(){
+ if(templates[sel.value].text||exportBusy||replacementBusy||photoUploadBusy)return;
+ const ids=[...selectedSlots].filter(i=>states[i]&&slotPhoto(i));if(!ids.length)return;
+ finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementTarget=null;photoUploadTarget=null;replacePhotoFile.value='';filesEl.value='';
+ // Keep an explicit empty photo so the original shared source cannot fill this slot again.
+ ids.forEach(i=>replacedPhotos.set(i,{image:null,url:null}));
+ releaseUnusedReplacementUrls();updatePhotoControls();draw();say(`已删除所选 ${ids.length} 张照片，图案轮廓和背景保持不变。`);
+}
 function selectedPhotoTarget(){return{template:sel.value,states,request:replacementRequest,ids:[...selectedSlots].filter(i=>states[i]).sort((a,b)=>a-b)}}
 function replaceSelectedPhoto(file,target=selectedPhotoTarget()){
  if(!file)return;
@@ -293,8 +301,9 @@ filesEl.addEventListener('cancel',()=>{photoUploadTarget=null;filesEl.value=''})
 replacePhoto.addEventListener('click',()=>{if(replacePhoto.disabled)return;replacementTarget=selectedPhotoTarget();replacePhotoFile.value='';replacePhotoFile.click()});
 replacePhotoFile.addEventListener('change',()=>{const file=replacePhotoFile.files[0],target=replacementTarget;replacementTarget=null;replacePhotoFile.value='';if(target)replaceSelectedPhoto(file,target)});
 replacePhotoFile.addEventListener('cancel',()=>{replacementTarget=null;replacePhotoFile.value=''});
+document.getElementById('removeSelectedPhoto').addEventListener('click',removeSelectedPhotos);
 function canEditPhoto(){return !templates[sel.value].text&&[...selectedSlots].some(i=>slotPhoto(i))}
-function updatePhotoControls(){const text=!!templates[sel.value].text,disabled=!canEditPhoto(),ids=[...selectedSlots].filter(i=>states[i]);document.getElementById('photoFrameField').hidden=text;document.getElementById('replacePhotoActions').hidden=text;replacePhoto.disabled=text||!ids.length||replacementBusy||photoUploadBusy;replacePhoto.setAttribute('aria-busy',String(replacementBusy));[photoScale,photoScaleNumber,photoOffsetX,photoOffsetY,photoDragMode,document.getElementById('photoMoveStep'),document.getElementById('resetPhoto'),...document.querySelectorAll('[data-photo-move]')].forEach(el=>el.disabled=disabled);if(text||!hasSlotPhotos())photoDragMode.checked=false;if(disabled)finishPhotoDrag();canvas.style.cursor=photoDragMode.checked&&!disabled?(photoDrag?'grabbing':'grab'):'pointer';canvas.style.touchAction=photoDragMode.checked&&!disabled?'none':'';photoOffsetX.min=String(-templates[sel.value].w);photoOffsetX.max=String(templates[sel.value].w);photoOffsetY.min=String(-templates[sel.value].h);photoOffsetY.max=String(templates[sel.value].h);if(!ids.length||text){photoScale.value='100';photoScaleNumber.value='';photoOffsetX.value='';photoOffsetY.value='';document.getElementById('photoScaleOut').value='—';document.getElementById('photoOffsetReadout').textContent='未选择图片';return}const zooms=ids.map(i=>(states[i].imageScale??1)*100),xs=ids.map(i=>states[i].imageDx||0),ys=ids.map(i=>states[i].imageDy||0),sameZoom=zooms.every(n=>Math.abs(n-zooms[0])<.01),sameX=xs.every(n=>n===xs[0]),sameY=ys.every(n=>n===ys[0]);photoScale.value=String(Math.round(zooms.reduce((a,b)=>a+b,0)/zooms.length));photoScaleNumber.value=sameZoom?String(Math.round(zooms[0])):'';photoScaleNumber.placeholder=sameZoom?'':'混合';document.getElementById('photoScaleOut').value=sameZoom?`${Math.round(zooms[0])}%`:'混合';photoOffsetX.value=sameX?String(xs[0]):'';photoOffsetY.value=sameY?String(ys[0]):'';photoOffsetX.placeholder=sameX?'':'混合';photoOffsetY.placeholder=sameY?'':'混合';document.getElementById('photoOffsetReadout').textContent=ids.length>1?`已选 ${ids.length} 张图片`:`X ${xs[0]>0?'+':''}${xs[0]} px　Y ${ys[0]>0?'+':''}${ys[0]} px`}
+function updatePhotoControls(){const text=!!templates[sel.value].text,disabled=!canEditPhoto(),ids=[...selectedSlots].filter(i=>states[i]);document.getElementById('photoFrameField').hidden=text;document.getElementById('replacePhotoActions').hidden=text;replacePhoto.disabled=text||!ids.length||replacementBusy||photoUploadBusy;document.getElementById('removeSelectedPhoto').disabled=disabled||exportBusy||replacementBusy||photoUploadBusy;replacePhoto.setAttribute('aria-busy',String(replacementBusy));[photoScale,photoScaleNumber,photoOffsetX,photoOffsetY,photoDragMode,document.getElementById('photoMoveStep'),document.getElementById('resetPhoto'),...document.querySelectorAll('[data-photo-move]')].forEach(el=>el.disabled=disabled);if(text||!hasSlotPhotos())photoDragMode.checked=false;if(disabled)finishPhotoDrag();canvas.style.cursor=photoDragMode.checked&&!disabled?(photoDrag?'grabbing':'grab'):'pointer';canvas.style.touchAction=photoDragMode.checked&&!disabled?'none':'';photoOffsetX.min=String(-templates[sel.value].w);photoOffsetX.max=String(templates[sel.value].w);photoOffsetY.min=String(-templates[sel.value].h);photoOffsetY.max=String(templates[sel.value].h);if(!ids.length||text){photoScale.value='100';photoScaleNumber.value='';photoOffsetX.value='';photoOffsetY.value='';document.getElementById('photoScaleOut').value='—';document.getElementById('photoOffsetReadout').textContent='未选择图片';return}const zooms=ids.map(i=>(states[i].imageScale??1)*100),xs=ids.map(i=>states[i].imageDx||0),ys=ids.map(i=>states[i].imageDy||0),sameZoom=zooms.every(n=>Math.abs(n-zooms[0])<.01),sameX=xs.every(n=>n===xs[0]),sameY=ys.every(n=>n===ys[0]);photoScale.value=String(Math.round(zooms.reduce((a,b)=>a+b,0)/zooms.length));photoScaleNumber.value=sameZoom?String(Math.round(zooms[0])):'';photoScaleNumber.placeholder=sameZoom?'':'混合';document.getElementById('photoScaleOut').value=sameZoom?`${Math.round(zooms[0])}%`:'混合';photoOffsetX.value=sameX?String(xs[0]):'';photoOffsetY.value=sameY?String(ys[0]):'';photoOffsetX.placeholder=sameX?'':'混合';photoOffsetY.placeholder=sameY?'':'混合';document.getElementById('photoOffsetReadout').textContent=ids.length>1?`已选 ${ids.length} 张图片`:`X ${xs[0]>0?'+':''}${xs[0]} px　Y ${ys[0]>0?'+':''}${ys[0]} px`}
 function setPhotoScale(value){if(!canEditPhoto())return;const percent=Math.max(25,Math.min(400,Math.round(Number(value)||100)));selectedSlots.forEach(i=>states[i].imageScale=percent/100);updatePhotoControls();requestPhotoDraw()}
 function setPhotoOffset(axis,value,relative=false){if(!canEditPhoto())return;const key=axis==='x'?'imageDx':'imageDy',limit=axis==='x'?templates[sel.value].w:templates[sel.value].h,number=Number(value)||0;selectedSlots.forEach(i=>states[i][key]=Math.round(Math.max(-limit,Math.min(limit,(relative?(states[i][key]||0):0)+number))));updatePhotoControls();draw()}
 function resetSelectedPhoto(){if(!canEditPhoto())return;selectedSlots.forEach(i=>Object.assign(states[i],{imageScale:1,imageDx:0,imageDy:0}));updatePhotoControls();draw()}
@@ -352,7 +361,7 @@ function draw(showSelection=true,fullResolution=false){
  ctx.clearRect(0,0,canvas.width,canvas.height);
  const d=renderConfig(fullResolution);ctx.save();ctx.beginPath();ctx.rect(0,0,d.pxW,d.contentPxH);ctx.clip();ctx.scale(d.pxW/cfg.w,d.contentPxH/cfg.h);
  if(cfg.contentOffsetX)ctx.translate(cfg.contentOffsetX,0);
- const templateImage=cfg.custom?cfg.background:motifEditor.source(base);
+ const templateImage=motifEditor.source(cfg.custom?cfg.background:base);
  if(!cfg.text)HeartStarBackground.drawTemplate(ctx,cfg,templateImage,states);
  cfg.slots.forEach((p,i)=>{
   const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=slotPhoto(i),f=cfg.text?p:HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
@@ -524,7 +533,7 @@ function filterCustomPicker(predicate=()=>true,sizeLabel=nativeSizeLabel){
 let motifTableKey='';
 function updateMotifControls(){
  const field=document.getElementById('heartMotifField');field.hidden=!motifEditor.active();if(field.hidden)return;
- const ids=motifEditor.selection(),variants=new Set(ids.map(id=>motifEditor.catalog()[id].variant)),waiting=motifEditor.busy()||exportBusy||!base.complete||!base.naturalWidth;
+ const cfg=templates[sel.value],ids=motifEditor.selection(),variants=new Set(ids.map(id=>motifEditor.catalog()[id].variant)),waiting=motifEditor.busy()||exportBusy||(cfg.custom?customBusy||customDirty||!cfg.background:!base.complete||!base.naturalWidth);
  document.getElementById('replaceHeartMotif').disabled=waiting||!ids.length||variants.size!==1;
  document.getElementById('restoreHeartMotif').disabled=waiting||!ids.some(id=>states[id].motif||states[id].background);
  const rows=motifEditor.rows(Number(widthInput.value),Number(heightInput.value)),chosen=rows.filter(row=>ids.includes(row.index)),sizes=[...new Set(chosen.map(row=>`${row.width.toFixed(2)} × ${row.height.toFixed(2)} mm`))];
@@ -535,10 +544,10 @@ function updateMotifControls(){
  grouped.forEach(row=>{const tr=document.createElement('tr');[row.label,row.size,String(row.count)].forEach(text=>{const td=document.createElement('td');td.textContent=text;td.style.cssText='padding:5px 4px;border-bottom:1px solid var(--line)';tr.append(td)});table.append(tr)});document.getElementById('heartTemplateSizeTable').replaceChildren(table);
 }
 function openHeartMotifPicker(){
- const ids=motifEditor.selection(),variant=motifEditor.catalog()[ids[0]]?.variant;if(exportBusy||motifEditor.busy()||!base.complete||!base.naturalWidth||!ids.length||!ids.every(id=>motifEditor.catalog()[id].variant===variant))return;
+ const cfg=templates[sel.value],ids=motifEditor.selection(),variant=motifEditor.catalog()[ids[0]]?.variant;if(exportBusy||motifEditor.busy()||(cfg.custom?customBusy||customDirty||!cfg.background:!base.complete||!base.naturalWidth)||!ids.length||!ids.every(id=>motifEditor.catalog()[id].variant===variant))return;
  const snapshotStates=states,snapshotBase=base;
  customPickerTarget={trigger:document.getElementById('replaceHeartMotif'),onSelect:id=>{if(states!==snapshotStates||base!==snapshotBase||exportBusy||!motifEditor.active())return;customPicker.close();motifEditor.replace(ids,id)}};
- customPicker.querySelector('#customPickerTitle').textContent=`更换${variant==='原款'?'字母完整组合 · I ♥ ME / I ♥ VE':variant+'爱心 / 星星图案'}`;
+ customPicker.querySelector('#customPickerTitle').textContent=`更换${variant==='原款'?'字母完整组合 · I ♥ ME / I ♥ VE':variant+'图案'}`;
  filterCustomPicker(asset=>motifEditor.allowed(asset,ids),asset=>{const p=motifEditor.placement(ids[0],asset),cfg=templates[sel.value];return `替换后 ${(p.w/cfg.w*Number(widthInput.value)).toFixed(2)} × ${(p.h/cfg.h*Number(heightInput.value)).toFixed(2)} mm`});
  customPicker.querySelectorAll('[data-asset]').forEach(button=>button.setAttribute('aria-pressed',String(ids.every(id=>states[id].motif?.assetId===button.dataset.asset))));customPicker.showModal();
 }
@@ -570,7 +579,7 @@ async function applyCustomLayout(selectAll=false){
   const loaded=new Map(ids.map((id,i)=>[id,images[i]])),background=document.createElement('canvas');background.width=layout.w;background.height=layout.h;const context=background.getContext('2d');layout.placements.forEach(p=>context.drawImage(loaded.get(p.assetId),p.x,p.y,p.w,p.h));
   const cfg=templates[CUSTOM_TEMPLATE],previous=new Map(cfg.slots.map((p,i)=>[p.key,{state:states[i],replacement:replacedPhotos.get(i)}])),selectionKeys=new Set([...selectedSlots].map(i=>cfg.slots[i]?.key));finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementBusy=false;replacementTarget=null;replacePhotoFile.value='';replacedPhotos.clear();
   states=layout.slots.map((p,i)=>{const old=previous.get(p.key);if(old?.replacement)replacedPhotos.set(i,old.replacement);return old?.state||customInitialState()});releaseUnusedReplacementUrls();
-  Object.assign(cfg,layout,{background,savedStates:states});selectedSlots=new Set(layout.slots.flatMap((p,i)=>selectAll===true||selectionKeys.has(p.key)?[i]:[]));if(!selectedSlots.size)selectedSlots.add(0);selectedSlot=[...selectedSlots][0];multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;
+  Object.assign(cfg,layout,{background,savedStates:states});motifEditor.reflow();selectedSlots=new Set(layout.slots.flatMap((p,i)=>selectAll===true||selectionKeys.has(p.key)?[i]:[]));if(!selectedSlots.size)selectedSlots.add(0);selectedSlot=[...selectedSlots][0];multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;
   customDirty=false;customBusy=false;document.getElementById('empty').hidden=true;canvas.hidden=false;customSummary.textContent=`已排好 ${customRows.length} 排 · ${layout.slots.length} 个图案 · ${Number(widthInput.value)} × ${Number(heightInput.value)} mm`;buildSlotSelect();updateControls();draw();
  }catch(error){if(request===customRequest&&sel.value===CUSTOM_TEMPLATE){customBusy=false;customDirty=true;customSummary.classList.add('error');customSummary.textContent=error.message;draw()}}
  finally{if(request===customRequest)document.getElementById('applyCustom').disabled=false}
@@ -583,7 +592,7 @@ document.getElementById('applyCustom').addEventListener('click',applyCustomLayou
 [widthInput,heightInput].forEach(input=>input.addEventListener('input',()=>{if(sel.value===CUSTOM_TEMPLATE)markCustomDirty()}));
 prepareCustomPicker();renderCustomRows();
 const slotBackgrounds=HeartStarBackground.create({getStates:()=>states,getSelection:()=>selectedSlots,getTemplate:()=>templates[sel.value],redraw:requestPhotoDraw,report:say});
-const motifEditor=HeartStarMotifs.create({getName:()=>sel.value,getTemplate:()=>templates[sel.value],getStates:()=>states,getSelection:()=>selectedSlots,getSource:()=>base,assets:customAssets,slots:HeartStarMotifCatalog.slots,loadImage:loadCustomImage,redraw:requestPhotoDraw,report:say});
+const motifEditor=HeartStarMotifs.create({getName:()=>sel.value,getTemplate:()=>templates[sel.value],getStates:()=>states,getSelection:()=>selectedSlots,getSource:()=>templates[sel.value].custom?templates[sel.value].background:base,measureRegions:HeartStarBackground.measureRegions,assets:customAssets,slots:HeartStarMotifCatalog.slots,loadImage:loadCustomImage,redraw:requestPhotoDraw,report:say});
 document.getElementById('replaceHeartMotif').addEventListener('click',openHeartMotifPicker);
 document.getElementById('restoreHeartMotif').addEventListener('click',()=>{if(!exportBusy&&!motifEditor.busy())motifEditor.restore(motifEditor.selection())});
 HeartStarInteractions.createSections([...document.querySelectorAll('.panel > .field')]);
