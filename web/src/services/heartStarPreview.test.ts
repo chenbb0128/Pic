@@ -22,6 +22,7 @@ function setup() {
     pngFilename: () => 'test.png', resizePreview() {}, sel: { value: 'test' },
     templates: { test: { w: 1400, h: 2048, slots: [] } }, base: { complete: true, naturalWidth: 1400 },
     slotBackgrounds: { update() {}, busy: () => false, hasAny: () => true },
+    backgroundDrag: { update() {} },
     motifEditor: { source: (base: any) => base, busy: () => false }, updateMotifControls() {},
     HeartStarBackground: { drawTemplate() {}, frame: (cfg: any, _source: any, states: any[], i: number) => states[i]?.motif?.frame || cfg.slots[i] },
     ctx: { clearRect() {}, save() {}, beginPath() {}, clip() {}, restore() {},

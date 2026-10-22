@@ -335,5 +335,86 @@
     return { update, busy, hasAny: () => getStates().some(has) };
   }
 
-  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, outerMask };
+  function createDrag({ canvas, mode, photoMode, getBoard, redraw, onModeChange }) {
+    let drag = null, ownsCursor = false;
+    const imageIds = board => [...board.selected].filter(id => {
+      const bg = board.states[id]?.background;
+      return bg?.type === 'image' && bg.image?.naturalWidth;
+    });
+    function finish(event) {
+      if (!drag || (event && event.pointerId !== drag.pointer)) return;
+      const pointer = drag.pointer;
+      drag = null;
+      if (canvas.hasPointerCapture(pointer)) canvas.releasePointerCapture(pointer);
+      if (mode.checked) canvas.style.cursor = 'grab';
+    }
+    function valid(board) {
+      return mode.checked && board.ready && board.token === drag.token &&
+        drag.selection.length === board.selected.size && drag.selection.every(id => board.selected.has(id)) &&
+        drag.items.every(item => board.states[item.id]?.background === item.background);
+    }
+    function update() {
+      const board = getBoard();
+      mode.disabled = !board.ready || !imageIds(board).length;
+      if (mode.disabled) mode.checked = false;
+      if (drag && !valid(board)) finish();
+      if (mode.checked) {
+        ownsCursor = true;
+        canvas.style.cursor = drag ? 'grabbing' : 'grab';
+        canvas.style.touchAction = 'none';
+      } else if (ownsCursor) {
+        ownsCursor = false;
+        if (!photoMode.checked) { canvas.style.cursor = 'pointer'; canvas.style.touchAction = ''; }
+      }
+    }
+    mode.addEventListener('change', () => {
+      finish();
+      if (mode.checked) photoMode.checked = false;
+      onModeChange();
+      update();
+    });
+    photoMode.addEventListener('change', () => {
+      if (photoMode.checked) { mode.checked = false; finish(); }
+      update();
+    });
+    canvas.addEventListener('pointerdown', event => {
+      if (drag || !mode.checked || event.button !== 0 || event.isPrimary === false) return;
+      const board = getBoard();
+      if (!board.ready) return;
+      const bounds = canvas.getBoundingClientRect(), height = bounds.height * board.contentRatio;
+      if (!bounds.width || !height || event.clientX < bounds.left || event.clientX > bounds.left + bounds.width ||
+          event.clientY < bounds.top || event.clientY >= bounds.top + height) return;
+      const x = (event.clientX - bounds.left) / bounds.width * board.width - (board.offsetX || 0);
+      const y = (event.clientY - bounds.top) / height * board.height;
+      const ids = imageIds(board);
+      if (!ids.some(id => {
+        const slot = board.slots[id];
+        return slot && Math.abs(x - slot.x) <= slot.w / 2 && Math.abs(y - slot.y) <= slot.h / 2;
+      })) return;
+      drag = { pointer: event.pointerId, token: board.token, selection: [...board.selected],
+        x: event.clientX, y: event.clientY, ratioX: board.width / bounds.width, ratioY: board.height / height,
+        items: ids.map(id => ({ id, background: board.states[id].background,
+          dx: board.states[id].background.dx || 0, dy: board.states[id].background.dy || 0 })) };
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      update();
+    });
+    canvas.addEventListener('pointermove', event => {
+      if (!drag || event.pointerId !== drag.pointer) return;
+      if (!valid(getBoard())) { finish(); return; }
+      const dx = (event.clientX - drag.x) * drag.ratioX, dy = (event.clientY - drag.y) * drag.ratioY;
+      for (const item of drag.items) {
+        item.background.dx = Math.max(-10000, Math.min(10000, Math.round(item.dx + dx)));
+        item.background.dy = Math.max(-10000, Math.min(10000, Math.round(item.dy + dy)));
+      }
+      event.preventDefault();
+      redraw();
+    });
+    for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(name, finish);
+    // Drag-mode clicks must not toggle the selected pattern after releasing the pointer.
+    canvas.addEventListener('click', event => { if (mode.checked) event.stopImmediatePropagation(); }, true);
+    return { update, dragging: () => !!drag };
+  }
+
+  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
 })();
