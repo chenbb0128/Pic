@@ -14,6 +14,7 @@ import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanva
 import { formatBytes } from '../services/pngExporter'
 import { imageContour } from '../services/imageContour'
 import { drawPreviewWatermark } from '../services/studioWatermark'
+import { drawStudioFooter, numberedPaper } from '../services/studioNumbering'
 
 interface StudioAsset extends LocalImage {
   widthMm: number
@@ -64,6 +65,8 @@ interface StudioBoard {
   customWidth: number
   customHeight: number
   dpi: number
+  numberingEnabled: boolean
+  footerText: string
   mode: LayoutMode
   grouping: SmartGrouping
   gapXmm: number
@@ -80,6 +83,8 @@ interface StudioBoard {
 
 interface BoardScene {
   paper: PaperSize
+  numberingEnabled: boolean
+  footerText: string
   assets: StudioAsset[]
   placements: Placement[]
 }
@@ -89,6 +94,9 @@ const orientation = ref<Orientation>('landscape')
 const customWidth = ref(293)
 const customHeight = ref(210)
 const dpi = ref(300)
+const numberingEnabled = ref(true)
+const footerText = ref('')
+let clearingDownloadedFooter = false
 const mode = ref<LayoutMode>('custom')
 const grouping = ref<SmartGrouping>('free')
 const groupingOptions = [{ value: 'free', label: '尽量填满' }, { value: 'rows', label: '同类按行' }, { value: 'columns', label: '同类按列' }] as const
@@ -127,7 +135,7 @@ let assetDragHandle: HTMLElement | null = null
 let assetScrollFrame: number | null = null
 const selectedPlacementIndex = ref<number | null>(null)
 const status = ref('添加图片并设置尺寸后，点击「排版」生成排版；后续修改不会自动重排。')
-const generated = ref<{ url: string; name: string; size: number } | null>(null)
+const generated = ref<{ url: string; name: string; size: number; footer?: { boardIndex: number; text: string } } | null>(null)
 const orderCopied = ref(false)
 const manualCopy = ref(false)
 // The active board lives in the editor refs; inactive boards hold independent snapshots.
@@ -154,7 +162,8 @@ const paperOptions = [
 ]
 
 const paper = computed(() => orientedPaperSize(preset.value, orientation.value, customWidth.value, customHeight.value))
-const dpiInfo = computed(() => exportSize(paper.value, dpi.value))
+const outputPaper = computed(() => numberedPaper(paper.value, numberingEnabled.value))
+const dpiInfo = computed(() => exportSize(outputPaper.value, dpi.value))
 const dpiError = computed(() => {
   if (!Number.isInteger(dpi.value) || dpi.value <= 0) return '请输入大于 0 的整数 DPI。'
   if (!dpiInfo.value.allowed) return '当前纸张和 DPI 超过 1 亿像素导出上限，请降低 DPI。'
@@ -246,13 +255,14 @@ const overflow = computed(() => countMode.value
   ? remainingAssets.value.reduce((sum, asset) => sum + asset.quantity, 0)
   : layoutOverflow.value)
 const previewWidth = 1200
-const previewHeight = computed(() => Math.round(previewWidth * paper.value.heightMm / paper.value.widthMm))
+const previewHeight = computed(() => Math.round(previewWidth * outputPaper.value.heightMm / outputPaper.value.widthMm))
 const selectedCount = computed(() => assets.value.filter((asset) => asset.selected && !asset.lockedGroupId).length)
 
 function snapshotBoard(): StudioBoard {
   return {
     preset: preset.value, orientation: orientation.value,
     customWidth: customWidth.value, customHeight: customHeight.value, dpi: dpi.value,
+    numberingEnabled: numberingEnabled.value, footerText: footerText.value,
     mode: mode.value, grouping: grouping.value, gapXmm: gapXmm.value, gapYmm: gapYmm.value,
     autoGap: autoGap.value, useContours: useContours.value,
     assets: assets.value.map((asset) => ({ ...asset })),
@@ -270,6 +280,8 @@ const overviewBoards = computed(() => boards.value.flatMap((saved, index) => {
     index,
     preset: board.preset,
     dpi: board.dpi,
+    numberingEnabled: board.numberingEnabled,
+    footerText: board.footerText,
     paper: orientedPaperSize(board.preset, board.orientation, board.customWidth, board.customHeight),
     assets: board.placedAssets,
     placements: [...flattenGroups(board.groups), ...board.manualPlacements],
@@ -280,9 +292,10 @@ function renderOverviewBoard(index: number): void {
   const canvas = overviewCanvases.get(index)
   const scene = overviewBoards.value.find((board) => board.index === index)
   if (!canvas || !scene) return
-  const scale = 400 / Math.max(scene.paper.widthMm, scene.paper.heightMm)
-  canvas.width = Math.max(1, Math.round(scene.paper.widthMm * scale))
-  canvas.height = Math.max(1, Math.round(scene.paper.heightMm * scale))
+  const output = numberedPaper(scene.paper, scene.numberingEnabled)
+  const scale = 400 / Math.max(output.widthMm, output.heightMm)
+  canvas.width = Math.max(1, Math.round(output.widthMm * scale))
+  canvas.height = Math.max(1, Math.round(output.heightMm * scale))
   const context = canvas.getContext('2d')
   if (context) {
     render(context, canvas.width, canvas.height, false, scene)
@@ -314,6 +327,8 @@ function selectBoard(index: number): void {
     customWidth.value = saved.customWidth
     customHeight.value = saved.customHeight
     dpi.value = saved.dpi
+    numberingEnabled.value = saved.numberingEnabled
+    footerText.value = saved.footerText
     mode.value = saved.mode
     grouping.value = saved.grouping
     gapXmm.value = normalizePatternGap(saved.gapXmm)
@@ -353,7 +368,7 @@ function createRemainingBoard(): void {
     ? { ...asset, quantity: Math.max(0, asset.quantity - moved.get(asset.id)!) } : asset)
   layoutPending.value = pending
   const nextBoard: StudioBoard = { ...snapshotBoard(), assets: remaining, groups: [], manualPlacements: nextLayout.placements,
-    placedAssets: remaining.map(asset => ({ ...asset })), layoutPending: false, layoutOverflow: nextLayout.overflow }
+    placedAssets: remaining.map(asset => ({ ...asset })), layoutPending: false, layoutOverflow: nextLayout.overflow, footerText: '' }
   boards.value = [...boards.value, nextBoard]
   selectBoard(boards.value.length - 1)
   controlsOpen.value = false
@@ -688,10 +703,11 @@ function mergeAllGroups(): void {
 }
 
 function render(context: CanvasRenderingContext2D, width: number, height: number, guides: boolean,
-  scene: BoardScene = { paper: paper.value, assets: placedAssets.value, placements: placements.value }): void {
+  scene: BoardScene = { paper: paper.value, assets: placedAssets.value, placements: placements.value,
+    numberingEnabled: numberingEnabled.value, footerText: footerText.value }): void {
   context.clearRect(0, 0, width, height)
   const scaleX = width / scene.paper.widthMm
-  const scaleY = height / scene.paper.heightMm
+  const scaleY = height / numberedPaper(scene.paper, scene.numberingEnabled).heightMm
   const imageById = new Map(scene.assets.map((asset) => [asset.id, asset]))
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
@@ -737,6 +753,7 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
     context.strokeRect(x, y, w, h)
     context.restore()
   }
+  drawStudioFooter(context, width, height, scene.paper, scene.numberingEnabled, scene.footerText)
 }
 
 function renderPreview(): void {
@@ -756,9 +773,9 @@ function stampPreview(context: CanvasRenderingContext2D, width: number, height: 
 function createProofCanvas(withWatermark = watermarkEnabled.value): HTMLCanvasElement {
   if (!placements.value.length || exporting.value || uploading.value) throw new Error('请先排版，并等待图片处理完成后再预览。')
   const canvas = document.createElement('canvas')
-  const scale = 1600 / Math.max(paper.value.widthMm, paper.value.heightMm)
-  canvas.width = Math.max(1, Math.round(paper.value.widthMm * scale))
-  canvas.height = Math.max(1, Math.round(paper.value.heightMm * scale))
+  const scale = 1600 / Math.max(outputPaper.value.widthMm, outputPaper.value.heightMm)
+  canvas.width = Math.max(1, Math.round(outputPaper.value.widthMm * scale))
+  canvas.height = Math.max(1, Math.round(outputPaper.value.heightMm * scale))
   const context = canvas.getContext('2d')
   if (!context) throw new Error('浏览器无法创建预览图。')
   render(context, canvas.width, canvas.height, false)
@@ -777,7 +794,7 @@ function openPreviewDialog(): void {
   try {
     const canvas = createProofCanvas()
     previewImage.value = canvas.toDataURL('image/png')
-    previewTitle.value = `画板 ${activeBoardIndex.value + 1} · ${preset.value === 'custom' ? '自定义' : preset.value} · ${paper.value.widthMm} × ${paper.value.heightMm} mm`
+    previewTitle.value = `画板 ${activeBoardIndex.value + 1} · ${preset.value === 'custom' ? '自定义' : preset.value} · ${outputPaper.value.widthMm} × ${outputPaper.value.heightMm} mm${numberingEnabled.value ? '（含 3mm 编号区）' : ''}`
     canvas.width = canvas.height = 0
     previewDialog.value.showModal()
   } catch (error) { status.value = error instanceof Error ? error.message : '预览图生成失败。' }
@@ -831,6 +848,10 @@ watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () 
 watch([assets, exporting, uploading, controlsOpen], cancelAssetDrag, { flush: 'sync' })
 watch([paper, placements, placedAssets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
+watch([numberingEnabled, footerText], () => {
+  if (!clearingDownloadedFooter) clearGenerated()
+  void nextTick(renderPreview)
+}, { flush: 'sync' })
 watch([selectedPlacementIndex, selectedPlacementIndices, boxSelection], () => { void nextTick(renderPreview) })
 watch([watermarkEnabled, watermarkText, watermarkOpacity], () => {
   void nextTick(() => { renderPreview(); if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index)) })
@@ -857,7 +878,7 @@ function pointMm(event: PointerEvent, canvas: HTMLCanvasElement): { xMm: number;
   const rect = canvas.getBoundingClientRect()
   return {
     xMm: (event.clientX - rect.left) / rect.width * paper.value.widthMm,
-    yMm: (event.clientY - rect.top) / rect.height * paper.value.heightMm,
+    yMm: (event.clientY - rect.top) / rect.height * outputPaper.value.heightMm,
   }
 }
 
@@ -885,6 +906,7 @@ function onPointerDown(event: PointerEvent): void {
   const canvas = preview.value
   if (!adjusting.value || !canvas || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
   const point = pointMm(event, canvas)
+  if (point.yMm >= paper.value.heightMm) return
   if (adjustTool.value === 'select') {
     const previousIndices = event.shiftKey ? [...selectedPlacementIndices.value] : []
     selectedPlacementIndex.value = null
@@ -1012,8 +1034,10 @@ async function generate(): Promise<void> {
   }
   if (paperMarginError.value) { status.value = paperMarginError.value; return }
   if (patternSpacingError.value) { status.value = patternSpacingError.value; return }
+  if (numberingEnabled.value && !footerText.value.trim()) { status.value = '请先输入当前画板的底部编号，或关闭编号后再导出。'; return }
   const size = dpiInfo.value
   if (dpiError.value) { status.value = dpiError.value; return }
+  const scene = overviewBoards.value.find(board => board.index === activeBoardIndex.value)!
   exporting.value = true
   status.value = '正在生成高清透明 PNG…'
   clearGenerated()
@@ -1024,8 +1048,8 @@ async function generate(): Promise<void> {
     let blob: Blob
     if (size.width * size.height > DIRECT_CANVAS_MAX_PIXELS) {
       exportProgress.value = 0
-      blob = await tiledCanvasPng(size.width, size.height, dpi.value,
-        (context, width, height) => render(context, width, height, false),
+      blob = await tiledCanvasPng(size.width, size.height, scene.dpi,
+        (context, width, height) => render(context, width, height, false, scene),
         (completed, total) => { exportProgress.value = Math.round(completed / total * 100) })
     } else {
       canvas = document.createElement('canvas')
@@ -1033,12 +1057,13 @@ async function generate(): Promise<void> {
       canvas.height = size.height
       const context = canvas.getContext('2d', { alpha: true })
       if (!context) throw new Error('浏览器无法创建画布。')
-      render(context, size.width, size.height, false)
-      blob = await canvasPng(canvas, dpi.value)
+      render(context, size.width, size.height, false, scene)
+      blob = await canvasPng(canvas, scene.dpi)
     }
     const url = URL.createObjectURL(blob)
-    const name = boardPngName(preset.value, paper.value, activeBoardIndex.value)
-    generated.value = { url, name, size: blob.size }
+    const name = boardPngName(scene.preset, scene.paper, scene.index)
+    generated.value = { url, name, size: blob.size,
+      footer: scene.numberingEnabled ? { boardIndex: scene.index, text: scene.footerText } : undefined }
     status.value = `已生成 ${size.width} × ${size.height}px · ${formatBytes(blob.size)}${overflow.value ? ` · ${overflow.value} 个未排入` : ''}`
   } catch (error) {
     status.value = error instanceof Error ? error.message : '生成失败，请降低 DPI 后重试。'
@@ -1059,7 +1084,11 @@ async function exportAllBoards(): Promise<void> {
   const scenes = overviewBoards.value.filter((board) => board.placements.length > 0)
   if (!scenes.length) { status.value = '没有可导出的图案，请先添加图片并排版。'; return }
   for (const scene of scenes) {
-    if (!Number.isInteger(scene.dpi) || scene.dpi <= 0 || !exportSize(scene.paper, scene.dpi).allowed) {
+    if (scene.numberingEnabled && !scene.footerText.trim()) {
+      status.value = `请先输入画板 ${scene.index + 1} 的底部编号，或关闭该画板编号后再导出。`
+      return
+    }
+    if (!Number.isInteger(scene.dpi) || scene.dpi <= 0 || !exportSize(numberedPaper(scene.paper, scene.numberingEnabled), scene.dpi).allowed) {
       status.value = `画板 ${scene.index + 1} 的 DPI 无效或超过 1 亿像素上限，请调整后再导出。`
       return
     }
@@ -1084,7 +1113,7 @@ async function exportAllBoards(): Promise<void> {
       exportProgress.value = null
       await nextTick()
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
-      const size = exportSize(scene.paper, scene.dpi)
+      const size = exportSize(numberedPaper(scene.paper, scene.numberingEnabled), scene.dpi)
       let canvas: HTMLCanvasElement | null = null
       let blob: Blob
       try {
@@ -1108,6 +1137,7 @@ async function exportAllBoards(): Promise<void> {
       const url = URL.createObjectURL(blob)
       try {
         downloadBlob(url, boardPngName(scene.preset, scene.paper, scene.index, date))
+        if (scene.numberingEnabled) clearDownloadedNumber(scene.index, scene.footerText)
       } finally {
         // Leave enough time for the browser to consume each download, then release its memory.
         setTimeout(() => URL.revokeObjectURL(url), 60_000)
@@ -1132,11 +1162,30 @@ async function copyOrDownload(): Promise<void> {
     status.value = orderCopied.value ? '下单文案已复制，再点一次即可下载图片。' : '浏览器未允许复制，请长按下方文案手动复制。'
     return
   }
-  downloadBlob(generated.value.url, generated.value.name)
+  downloadOnly()
 }
 
 function downloadOnly(): void {
-  if (generated.value) downloadBlob(generated.value.url, generated.value.name)
+  const image = generated.value
+  if (!image) return
+  downloadBlob(image.url, image.name)
+  if (image.footer) clearDownloadedNumber(image.footer.boardIndex, image.footer.text)
+}
+
+function clearDownloadedNumber(index: number, text: string): void {
+  if (index === activeBoardIndex.value) {
+    if (footerText.value !== text) return
+    // Clearing the input must not revoke the completed PNG; it remains downloadable.
+    clearingDownloadedFooter = true
+    try { footerText.value = '' } finally { clearingDownloadedFooter = false }
+  } else {
+    boards.value = boards.value.map((board, i) => i === index && board?.footerText === text ? { ...board, footerText: '' } : board)
+  }
+}
+
+async function copyFooterNumber(): Promise<void> {
+  if (!footerText.value.trim()) { status.value = '请先输入底部编号。'; return }
+  status.value = await copyText(footerText.value) ? '底部编号已复制。' : '复制失败，请选中编号后手动复制。'
 }
 </script>
 
@@ -1167,9 +1216,18 @@ function downloadOnly(): void {
       <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
         <summary class="studio-section-summary">DPI</summary>
         <div class="grid grid-cols-5 gap-1">
-          <button v-for="value in dpiChoices" :key="value" type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': dpi === value }" :disabled="!exportSize(paper, value).allowed" :title="exportSize(paper, value).allowed ? `${value} DPI` : '超出 1 亿像素导出上限'" @click="dpi = value">{{ value }}</button>
+          <button v-for="value in dpiChoices" :key="value" type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': dpi === value }" :disabled="!exportSize(outputPaper, value).allowed" :title="exportSize(outputPaper, value).allowed ? `${value} DPI` : '超出 1 亿像素导出上限'" @click="dpi = value">{{ value }}</button>
         </div>
         <p id="dpi-feedback" class="mt-1 text-[11px]" :class="dpiError ? 'text-amber-300' : 'text-[#a9bbe1]'" aria-live="polite">{{ dpiError || `输出：${dpiInfo.width} × ${dpiInfo.height} px` }}</p>
+      </details>
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+        <summary class="studio-section-summary">底部编号</summary>
+        <label class="flex min-h-9 items-center gap-2 text-xs text-[#c8bbff]"><input v-model="numberingEnabled" type="checkbox" aria-label="启用底部编号" :disabled="exporting || uploading" />启用当前画板编号</label>
+        <div class="mt-1 flex gap-2">
+          <input v-model="footerText" type="text" aria-label="底部编号" :required="numberingEnabled" maxlength="200" placeholder="输入订单号或客户编号" class="studio-input min-w-0 flex-1 disabled:opacity-40" :disabled="!numberingEnabled || exporting || uploading" />
+          <button type="button" class="studio-choice shrink-0 px-3 text-xs disabled:opacity-40" :disabled="!numberingEnabled || !footerText.trim() || exporting || uploading" @click="copyFooterNumber">复制编号</button>
+        </div>
+        <p class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">{{ numberingEnabled ? `底部另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加底部高度。' }}各画板独立设置。</p>
       </details>
       <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
         <summary class="studio-section-summary">管理模式</summary>
@@ -1304,12 +1362,14 @@ function downloadOnly(): void {
             </div>
             <div class="mt-3 flex items-center justify-between gap-2 text-sm"><strong>画板 {{ board.index + 1 }}</strong><span v-if="board.index === activeBoardIndex" class="text-xs text-violet-600">当前画板</span></div>
             <p class="mt-1 text-xs text-slate-500">{{ board.preset }} · {{ board.paper.widthMm }} × {{ board.paper.heightMm }} mm · 已排 {{ board.placements.length }} 个</p>
+            <p v-if="board.numberingEnabled" class="mt-1 break-all text-xs text-violet-600">编号：{{ board.footerText || '待填写' }} · 底部另加 3mm</p>
           </button>
         </div>
       </section>
       <div :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-3">
       <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
         <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
+        <span v-if="numberingEnabled" class="rounded-full bg-violet-100 px-3 py-1.5 text-violet-800">含编号输出 {{ outputPaper.widthMm }} × {{ outputPaper.heightMm }} mm</span>
         <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
         <span v-if="layoutPending" class="rounded-full bg-violet-100 px-3 py-1.5 text-violet-800" role="status">设置有更新，点击「排版」后应用</span>
         <span v-if="overflow" class="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">{{ overflow }} 个未排入</span>

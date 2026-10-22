@@ -12,6 +12,231 @@ const renderer = createRenderer<object, object>({
 })
 
 describe('overflow artboards', () => {
+  function footerContext() {
+    return { clearRect() {}, save() {}, restore() {}, rotate() {}, translate: vi.fn(), drawImage: vi.fn(),
+      beginPath() {}, rect: vi.fn(), clip() {}, measureText: () => ({ width: 50 }), fillText: vi.fn(),
+      fillRect() {}, strokeRect() {}, setLineDash() {} }
+  }
+
+  it('底部编号：默认启用，显示独立输入、复制和含编号的输出尺寸', async () => {
+    const app = createSSRApp(Workspace)
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    expect(html.match(/<input[^>]*aria-label="启用底部编号"[^>]*>/)?.[0]).toContain('checked')
+    expect(html).toMatch(/<input[^>]*aria-label="底部编号"[^>]*required/)
+    expect(html).toContain('复制编号')
+    expect(html).toContain('293 × 213 mm')
+    expect(html).toContain('底部另加 3mm')
+  })
+
+  it('底部编号：复制编号和下单文案均不清空，分块导出绘制编号，编码失败保留输入', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    const context = footerContext()
+    const output: number[][] = []
+    const png = vi.spyOn(studioImage, 'tiledCanvasPng').mockImplementation(async (width, height, _dpi, draw) => {
+      output.push([width, height]); draw(context as unknown as CanvasRenderingContext2D, width, height)
+      return new Blob(['png'])
+    })
+    const download = vi.spyOn(studioImage, 'downloadBlob').mockImplementation(() => {})
+    try {
+      state.assets = [{ ...asset('one', 1), ratioLocked: false }]
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerText = '订单A'
+      state.preset = 'A4'
+      state.dpi = 1000
+      await nextTick()
+      await state.copyFooterNumber()
+      expect(written).toEqual(['订单A'])
+      expect(state.footerText).toBe('订单A')
+      await state.generate()
+      expect(output).toEqual([[11535, 8386]])
+      expect(context.fillText.mock.lastCall![0]).toBe('订单A')
+      await state.copyOrDownload()
+      expect(state.footerText).toBe('订单A')
+      expect(state.orderCopied).toBe(true)
+      expect(download).not.toHaveBeenCalled()
+      state.downloadOnly()
+      await nextTick()
+      expect(state.footerText).toBe('')
+      expect(state.generated).not.toBeNull()
+      state.footerText = '订单B'
+      png.mockRejectedValueOnce(new Error('编码失败'))
+      await state.generate()
+      expect(state.status).toContain('编码失败')
+      expect(state.footerText).toBe('订单B')
+      expect(state.generated).toBeNull()
+    } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('底部编号：每个画板独立保存，增加输出高度但不触发重排，新建画板不复制编号', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    try {
+      state.assets = [asset('one', 5)]
+      state.resetLayout()
+      await nextTick()
+      const before = JSON.stringify(state.placements)
+      state.numberingEnabled = true
+      state.footerText = '订单A'
+      await nextTick()
+      expect(state.paper).toEqual({ widthMm: 108, heightMm: 108 })
+      expect(state.outputPaper).toEqual({ widthMm: 108, heightMm: 111 })
+      expect(state.previewHeight).toBe(1233)
+      expect(state.dpiInfo.height).toBe(1311)
+      expect(state.layoutPending).toBe(false)
+      expect(JSON.stringify(state.placements)).toBe(before)
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.numberingEnabled).toBe(true)
+      expect(state.footerText).toBe('')
+      state.footerText = '订单B'
+      state.numberingEnabled = false
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.footerText).toBe('订单A')
+      expect(state.numberingEnabled).toBe(true)
+      expect(JSON.stringify(state.placements)).toBe(before)
+      state.selectBoard(1)
+      await nextTick()
+      expect(state.footerText).toBe('订单B')
+      expect(state.outputPaper.heightMm).toBe(108)
+    } finally { cleanup() }
+  })
+
+  it('底部编号：主预览、总览、弹窗和坐标使用完整高度，编号区域不参与框选', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = footerContext()
+    const canvas = { width: 1080, height: 1110, getContext: () => context,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 111 }),
+      setPointerCapture() {}, hasPointerCapture: () => false }
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [{ ...asset('one', 1, 20), ratioLocked: false }]
+      state.resetLayout()
+      await nextTick()
+      state.numberingEnabled = true
+      state.footerText = '订单A'
+      state.watermarkEnabled = false
+      state.preview = canvas
+      await nextTick()
+      state.renderPreview()
+      expect(context.fillText).toHaveBeenLastCalledWith('订单A', 10, 1095)
+      expect(context.drawImage).toHaveBeenLastCalledWith(state.assets[0].image, -100, -100, 200, 200)
+      const thumbnail = { width: 0, height: 0, getContext: () => context }
+      state.setOverviewCanvas(0, thumbnail)
+      expect([thumbnail.width, thumbnail.height]).toEqual([389, 400])
+      expect(context.fillText).toHaveBeenLastCalledWith('订单A', 389 / 108, 109.5 * 400 / 111)
+      const proof = state.createProofCanvas()
+      expect([proof.width, proof.height]).toEqual([1557, 1600])
+      expect(context.fillText).toHaveBeenLastCalledWith('订单A', 1557 / 108, 109.5 * 1600 / 111)
+      expect(state.pointMm({ clientX: 10, clientY: 100 }, canvas)).toEqual({ xMm: 10, yMm: 100 })
+      state.adjusting = true
+      state.adjustTool = 'select'
+      state.onPointerDown({ button: 0, clientX: 10, clientY: 110, pointerId: 1, preventDefault() {} })
+      expect(state.boxSelection).toBeNull()
+    } finally { state.preview = null; cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('底部编号：空编号阻止正式生成和批量下载，但允许预览', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = footerContext()
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [asset('one', 5)]
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerText = '   '
+      await state.generate()
+      expect(state.generated).toBeNull()
+      expect(state.status).toContain('编号')
+      expect(state.createProofCanvas()).toBeTruthy()
+      state.createRemainingBoard()
+      state.numberingEnabled = false
+      await state.exportAllBoards()
+      expect(state.status).toContain('画板 1')
+      expect(state.status).toContain('编号')
+      expect(state.exporting).toBe(false)
+    } finally { cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('底部编号：生成和水印下载保留编号，正式下载后清空且成品可重复下载', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = footerContext()
+    const sizes: number[][] = []
+    const png = vi.spyOn(studioImage, 'canvasPng').mockImplementation(async canvas => {
+      sizes.push([canvas.width, canvas.height]); return new Blob(['png'])
+    })
+    const download = vi.spyOn(studioImage, 'downloadBlob').mockImplementation(() => {})
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [{ ...asset('one', 1), ratioLocked: false }]
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerText = '订单A'
+      state.dpi = 254
+      await nextTick()
+      await state.generate()
+      expect(sizes[0]).toEqual([1080, 1110])
+      expect(state.footerText).toBe('订单A')
+      expect(state.generated).not.toBeNull()
+      const url = state.generated.url
+      await state.downloadWatermarkedPreview()
+      expect(state.footerText).toBe('订单A')
+      download.mockImplementationOnce(() => { throw new Error('下载失败') })
+      expect(() => state.downloadOnly()).toThrow('下载失败')
+      expect(state.footerText).toBe('订单A')
+      state.orderCopied = true
+      await state.copyOrDownload()
+      await nextTick()
+      expect(state.footerText).toBe('')
+      expect(state.generated.url).toBe(url)
+      state.downloadOnly()
+      expect(download).toHaveBeenLastCalledWith(url, state.generated.name)
+      state.footerText = '订单B'
+      await nextTick()
+      expect(state.generated).toBeNull()
+    } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('底部编号：批量下载按各画板编号和高度绘制，只清空下载成功的画板', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = footerContext()
+    const output: { width: number; height: number; text: string }[] = []
+    const png = vi.spyOn(studioImage, 'canvasPng').mockImplementation(async canvas => {
+      output.push({ width: canvas.width, height: canvas.height, text: context.fillText.mock.lastCall![0] })
+      return new Blob(['png'])
+    })
+    const download = vi.spyOn(studioImage, 'downloadBlob').mockImplementation(() => {})
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [{ ...asset('one', 5), ratioLocked: false }]
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerText = '订单A'
+      state.dpi = 254
+      state.createRemainingBoard()
+      state.footerText = '订单B'
+      state.dpi = 127
+      await nextTick()
+      download.mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw new Error('下载失败') })
+      await state.exportAllBoards()
+      expect(output).toEqual([{ width: 1080, height: 1110, text: '订单A' }, { width: 540, height: 555, text: '订单B' }])
+      expect(state.boards[0].footerText).toBe('')
+      expect(state.footerText).toBe('订单B')
+      expect(state.status).toContain('1/2')
+      state.boards = state.boards.map((board: any) => board ? { ...board, footerText: '订单A2' } : board)
+      await state.exportAllBoards()
+      expect(state.footerText).toBe('')
+      expect(state.boards[0].footerText).toBe('')
+      expect(state.activeBoardIndex).toBe(1)
+    } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
+  })
+
   it('preview tools: appends Shift-box selections and clears only canvas selection with Esc outside editors and dialogs', () => {
     const { state, asset, cleanup } = mountWorkspace()
     const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
@@ -773,6 +998,7 @@ describe('overflow artboards', () => {
     app.provide(ssrContextKey, {})
     const vm = app.mount({})
     const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
+    state.numberingEnabled = false
     state.useContours = false
     state.preset = 'custom'
     state.customWidth = 108
