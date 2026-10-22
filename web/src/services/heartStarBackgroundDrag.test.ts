@@ -43,6 +43,19 @@ function setup() {
 }
 
 describe('heart-star background dragging', () => {
+  it('moves backgrounds using landscape content width and rejects starts in the right numbering strip', () => {
+    const s = setup()
+    s.board.contentWidthRatio = .8
+    s.enable()
+    s.fire(s.canvas, 'pointerdown', { clientX: 55.2 })
+    s.fire(s.canvas, 'pointermove', { clientX: 71.2 })
+    expect(s.states[0].background.dx).toBe(103)
+    s.fire(s.canvas, 'pointerup')
+    s.board.slots[0] = { x: 950, y: 200, w: 500, h: 200 }
+    s.fire(s.canvas, 'pointerdown', { clientX: 210 })
+    expect(s.drag.dragging()).toBe(false)
+  })
+
   it('moves only the selected background in template coordinates, excluding the footer', () => {
     const s = setup()
     expect(s.drag).toBeDefined()

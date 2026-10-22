@@ -7,7 +7,7 @@ function section(start: string, end: string) {
 }
 
 function setup() {
-  const downloads: string[] = [], messages: string[] = [], paintedText: string[] = [], metadata: number[] = []
+  const downloads: string[] = [], messages: string[] = [], paintedText: string[] = [], metadata: number[] = [], geometry: any[] = []
   const env: any = {
     widthInput: { value: '144' }, heightInput: { value: '210' }, dpiInput: { value: '600' },
     footerHeightMm: 3, numberingEnabled: { checked: true }, footerText: { value: '订单001', focus() {} },
@@ -22,7 +22,8 @@ function setup() {
       download: '', click() { downloads.push(this.download) },
     }) },
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} }, setTimeout() {},
-    ctx: { save() {}, beginPath() {}, rect() {}, clip() {}, restore() {},
+    ctx: { save() {}, beginPath() {}, rect: (...args: number[]) => geometry.push(['rect', ...args]), clip() {}, restore() {},
+      translate: (...args: number[]) => geometry.push(['translate', ...args]), rotate: (angle: number) => geometry.push(['rotate', angle]),
       measureText: () => ({ width: 20 }), fillText: (text: string) => paintedText.push(text) },
   }
   const source = section('function localDateLabel(', 'async function copyFooterLabel(') +
@@ -30,10 +31,37 @@ function setup() {
     section('async function exportPng(', 'const customAssets=')
   const feature = new Function('env', `with(env){${source};return {outputConfig,renderConfig,drawFooter,pngFilename,exportPng}}`)(env)
   env.outputConfig = feature.outputConfig
-  return { env, feature, downloads, messages, paintedText, metadata }
+  return { env, feature, downloads, messages, paintedText, metadata, geometry }
 }
 
 describe('heart-star numbering and DPI export', () => {
+  it('adds a 3 mm strip on the right for landscape output without shrinking the artwork', async () => {
+    const { env, feature, downloads, geometry, paintedText } = setup()
+    env.widthInput.value = '210'
+    env.heightInput.value = '144'
+    const d = feature.outputConfig()
+    expect(d).toMatchObject({ totalW: 213, totalH: 144, pxW: 5031, pxH: 3402,
+      contentPxW: 4961, contentPxH: 3402, footerPxW: 70, footerPxH: 0, footerSide: 'right' })
+    expect(feature.renderConfig()).toMatchObject({ pxW: 1600, pxH: 1082, contentPxW: 1578,
+      contentPxH: 1082, footerPxW: 22, footerPxH: 0 })
+    feature.drawFooter(d)
+    expect(geometry).toEqual([['rect', 4961, 0, 70, 3402], ['translate', 4996, 0], ['rotate', Math.PI / 2]])
+    expect(paintedText).toEqual(['订单001'])
+    await feature.exportPng()
+    expect(downloads).toEqual(['订单001_heart_213x144mm_600dpi.png'])
+  })
+
+  it('does not add width or height to landscape output when numbering is disabled', () => {
+    const { env, feature, geometry } = setup()
+    env.widthInput.value = '210'
+    env.heightInput.value = '144'
+    env.numberingEnabled.checked = false
+    expect(feature.outputConfig()).toMatchObject({ totalW: 210, totalH: 144, pxW: 4961, pxH: 3402,
+      contentPxW: 4961, contentPxH: 3402, footerPxW: 0, footerPxH: 0 })
+    feature.drawFooter(feature.outputConfig())
+    expect(geometry).toEqual([])
+  })
+
   it('accepts 500 DPI and keeps the configured physical size and PNG density', async () => {
     const { env, feature, metadata, downloads } = setup()
     env.dpiInput.value = '500'

@@ -8,7 +8,7 @@ function section(start: string, end: string) {
 function setup() {
   const controls = new Map<string, any>()
   const scheduled: (() => void)[] = [], paints: any[] = [], snapshots: any[] = [], downloads: string[] = []
-  const output = { w: 144, h: 210, totalH: 213, dpi: 600, pxW: 3402, pxH: 5031, contentPxH: 4961, footerPxH: 70 }
+  const output = { w: 144, h: 210, totalW: 144, totalH: 213, dpi: 600, pxW: 3402, pxH: 5031, contentPxW: 3402, contentPxH: 4961, footerPxW: 0, footerPxH: 70 }
   const env: any = {
     outputConfig: () => output,
     canvas: { width: 0, height: 0, getBoundingClientRect: () => ({ left: 0, top: 0, width: 1082, height: 1600 }),
@@ -43,10 +43,75 @@ function setup() {
     section('function picturePreviewSnapshot(', 'function resizePreview(') +
     section('function selectionBoard(', 'HeartStarInteractions.createSelection(')
   const feature = new Function('env', `with(env){${source};return {renderConfig,draw,requestPhotoDraw,slotFrame,slotAtCanvas,exportPng,picturePreviewSnapshot,selectionBoard}}`)(env)
-  return { env, feature, output, scheduled, paints, snapshots, downloads }
+  return { env, feature, output, scheduled, paints, snapshots, downloads, controls }
 }
 
 describe('heart-star lightweight preview', () => {
+  it('keeps landscape drawing and hit testing inside the content, excluding the right numbering strip', () => {
+    const { env, feature, output, paints } = setup()
+    Object.assign(output, { w: 210, h: 144, totalW: 213, totalH: 144, pxW: 5031, pxH: 3402,
+      contentPxW: 4961, contentPxH: 3402, footerPxW: 70, footerPxH: 0 })
+    env.templates.test = { w: 2100, h: 1440, slots: [{ x: 1050, y: 720, w: 200, h: 200 }] }
+    env.states = [{ size: 1, dx: 0, dy: 0 }]
+    env.selectedSlots = new Set()
+    env.slotPhoto = () => null
+    env.HeartStarBackground.has = () => false
+    const scales: number[][] = []
+    env.ctx.scale = (...args: number[]) => scales.push(args)
+    feature.draw(false)
+    feature.draw(false, true)
+    expect(paints).toEqual([[0, 0, 1578, 1082], [0, 0, 4961, 3402]])
+    expect(scales).toEqual([[1578 / 2100, 1082 / 1440], [4961 / 2100, 3402 / 1440]])
+    const r = env.canvas.getBoundingClientRect()
+    expect(feature.slotAtCanvas({ clientX: r.width * 1578 / 1600 / 2, clientY: r.height / 2 }))
+      .toMatchObject({ index: 0, x: 1050, y: 720 })
+    expect(feature.slotAtCanvas({ clientX: r.width - 1, clientY: r.height / 2 }).footer).toBe(true)
+    expect(feature.selectionBoard()).toMatchObject({ contentWidthRatio: 1578 / 1600, contentRatio: 1 })
+  })
+
+  it('reports landscape total width and right-side numbering in the size summary', () => {
+    const { feature, output, controls } = setup()
+    Object.assign(output, { w: 210, h: 144, totalW: 213, totalH: 144, pxW: 5031, pxH: 3402,
+      contentPxW: 4961, contentPxH: 3402, footerPxW: 70, footerPxH: 0, footerSide: 'right' })
+    feature.draw(false)
+    expect(controls.get('exportSize').textContent).toBe('213 × 144 mm')
+    expect(controls.get('footerAreaLabel').textContent).toBe('右侧编号区')
+    expect(controls.get('footerAreaSize').textContent).toBe('另加 3 mm 宽')
+    expect(controls.get('footerSizeHint').textContent).toBe('含右侧编号区')
+  })
+
+  it('drags photos using the content width rather than the full width including the right strip', () => {
+    const { env, feature, output } = setup()
+    Object.assign(output, { w: 210, h: 144, totalW: 213, totalH: 144, pxW: 5031, pxH: 3402,
+      contentPxW: 4961, contentPxH: 3402, footerPxW: 70, footerPxH: 0 })
+    env.templates.test = { w: 2100, h: 1440, slots: [{ x: 1050, y: 720, w: 200, h: 200 }] }
+    env.states = [{ size: 1, dx: 0, dy: 0 }]
+    Object.assign(env, { selectedSlots: new Set([0]), photoDrag: null, photoDragMode: { checked: true },
+      canEditPhoto: () => true, slotPhoto: () => ({}), slotAtCanvas: feature.slotAtCanvas,
+      renderConfig: feature.renderConfig, updatePhotoControls() {}, draw() {}, requestPhotoDraw() {} })
+    env.canvas.setPointerCapture = () => {}
+    const drag = new Function('env', `with(env){${section('function startPhotoDrag(', 'function finishPhotoDrag(')};return {startPhotoDrag,movePhotoDrag}}`)(env)
+    const r = env.canvas.getBoundingClientRect(), contentWidth = r.width * 1578 / 1600
+    const start = { button: 0, isPrimary: true, pointerId: 1, clientX: contentWidth / 2, clientY: r.height / 2, preventDefault() {} }
+    drag.startPhotoDrag(start)
+    drag.movePhotoDrag({ ...start, clientX: start.clientX + contentWidth / 21, clientY: start.clientY + r.height / 144 })
+    expect(env.states[0]).toMatchObject({ imageDx: 100, imageDy: 10 })
+  })
+
+  it('measures photo-only selection using the current replacement artwork, not the original template', () => {
+    const { env, feature } = setup()
+    const replacement = { width: 1400, height: 2048 }
+    let measured: any
+    env.templates.test.slots = [{ x: 30, y: 40, w: 20, h: 20 }]
+    env.motifEditor.source = () => replacement
+    env.HeartStarBackground.frame = (_cfg: any, source: any) => {
+      measured = source
+      return { x: 35, y: 45, w: 40, h: 40 }
+    }
+    expect(feature.slotFrame(0)).toEqual({ x: 35, y: 45, w: 40, h: 40 })
+    expect(measured).toBe(replacement)
+  })
+
   it('centers heart artwork and keeps photo frames and selection in the same coordinates at preview and export resolution', () => {
     const { env, feature } = setup()
     const templates = new Function(`${section('const templates=', 'const canvas=')};return templates`)()

@@ -29,7 +29,8 @@
       if (event.button !== 0 || event.isPrimary === false || isPhotoDrag() || !board?.ready) return;
       const bounds = canvas.getBoundingClientRect();
       const contentBottom = bounds.top + bounds.height * board.contentRatio;
-      if (event.clientY >= contentBottom) return;
+      const contentRight = bounds.left + bounds.width * (board.contentWidthRatio ?? 1);
+      if (event.clientY >= contentBottom || event.clientX >= contentRight) return;
       onStart();
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, shift: event.shiftKey, token: board.token, moved: false };
       canvas.setPointerCapture(event.pointerId);
@@ -50,12 +51,13 @@
       const current = clear(), board = getBoard();
       if (!current.moved || !board?.ready || current.token !== board.token) return;
       const bounds = canvas.getBoundingClientRect(), contentHeight = bounds.height * board.contentRatio;
+      const contentWidth = bounds.width * (board.contentWidthRatio ?? 1);
       const left = Math.min(current.x, event.clientX), right = Math.max(current.x, event.clientX);
       const top = Math.min(current.y, event.clientY), bottom = Math.max(current.y, event.clientY);
       const indices = [];
       board.slots.forEach((slot, index) => {
         const state = board.states[index] || {};
-        const x = bounds.left + (slot.x + (state.dx || 0)) / board.width * bounds.width;
+        const x = bounds.left + (slot.x + (state.dx || 0)) / board.width * contentWidth;
         const y = bounds.top + (slot.y + (state.dy || 0)) / board.height * contentHeight;
         if (x >= left && x <= right && y >= top && y <= bottom) indices.push(index);
       });

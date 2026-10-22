@@ -59,6 +59,15 @@ function setup() {
 }
 
 describe('heart-star editor interactions', () => {
+  it('maps marquee selection to landscape content width and ignores the right numbering strip', () => {
+    const s = setup()
+    s.board.contentWidthRatio = .8
+    s.drag([300, 540], [320, 560])
+    expect(s.selected).toEqual([1])
+    s.drag([550, 100], [110, 55])
+    expect(s.commits).toEqual([[1]])
+  })
+
   it('selects moved pattern centers using preview coordinates, including a reverse drag', () => {
     const s = setup()
     s.drag([370, 600], [110, 55])

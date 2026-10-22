@@ -2,16 +2,24 @@
 (() => {
   const regionCache = new WeakMap();
   const layerCache = new WeakMap();
+  const photoLayerCache = new WeakMap();
   const outlineCache = new WeakMap();
+  const photoOnly = state => ['transparent', 'outline'].includes(state?.background?.type);
   function has(state) {
     const bg = state?.background;
-    return !!bg && (bg.type === 'color' ? /^#[0-9a-f]{6}$/i.test(bg.color) :
+    return photoOnly(state) || !!bg && (bg.type === 'color' ? /^#[0-9a-f]{6}$/i.test(bg.color) :
       bg.type === 'image' && bg.image?.naturalWidth > 0 && bg.image?.naturalHeight > 0);
   }
 
   function apply(states, ids, patch) {
     for (const id of ids) {
-      if (states[id]) states[id].background = { ...states[id].background, ...patch };
+      const state = states[id];
+      if (!state) continue;
+      const background = { ...state.background, ...patch };
+      // Start at the original artwork's full size without changing the saved
+      // crop size; subsequent size/Alt-wheel adjustments still work normally.
+      if (photoOnly({ background }) && !photoOnly(state)) background.photoBaseSize = state.size || 1;
+      state.background = background;
     }
   }
 
@@ -148,17 +156,19 @@
     return { x: (minX + maxX + 1) / 2, y: (minY + maxY + 1) / 2, w: maxX - minX + 1, h: maxY - minY + 1 };
   }
 
-  function measureBackgroundRegions(cfg, pixels, states = []) {
-    const bounds = cfg.custom ? cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h })) :
-      measureRegions(cfg, pixels);
+  function artworkRegions(cfg, pixels) {
+    return cfg.custom ? cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h })) : measureRegions(cfg, pixels);
+  }
+
+  function measureBackgroundRegions(cfg, pixels, states = [], bounds = artworkRegions(cfg, pixels)) {
     if (!cfg.slots.some((slot, i) => heartOnly(slot, states[i]))) return bounds;
     const mask = outerMask(pixels, cfg.w, cfg.h);
     return bounds.map((region, index) => heartOnly(cfg.slots[index], states[index]) ?
       componentBounds(mask, cfg.w, cfg.h, region, states[index]?.motif?.frame || cfg.slots[index]) : region);
   }
 
-  function regions(cfg, source, states = []) {
-    if (cfg.custom && !cfg.slots.some((slot, i) => heartOnly(slot, states[i]))) return cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h }));
+  function regions(cfg, source, states = [], whole = false) {
+    if (cfg.custom && (whole || !cfg.slots.some((slot, i) => heartOnly(slot, states[i])))) return artworkRegions(cfg);
     const frames = states.map(state => state.motif?.frame);
     let cached = regionCache.get(source);
     if (!cached || cached.cfg !== cfg || cached.frames.length !== frames.length || frames.some((frame, i) => frame !== cached.frames[i])) {
@@ -166,25 +176,35 @@
       canvas.width = cfg.w; canvas.height = cfg.h;
       const context = canvas.getContext('2d', { willReadFrequently: true });
       context.drawImage(source, 0, 0, cfg.w, cfg.h);
-      cached = { cfg, frames, bounds: measureBackgroundRegions(cfg, context.getImageData(0, 0, cfg.w, cfg.h).data, states) };
+      const pixels = context.getImageData(0, 0, cfg.w, cfg.h).data;
+      const wholeBounds = artworkRegions(cfg, pixels);
+      cached = { cfg, frames, wholeBounds, bounds: measureBackgroundRegions(cfg, pixels, states, wholeBounds) };
       regionCache.set(source, cached);
     }
-    return cached.bounds;
+    return whole ? cached.wholeBounds : cached.bounds;
   }
 
   function frame(cfg, source, states, index) {
+    const state = states[index];
+    if (photoOnly(state)) {
+      const region = regions(cfg, source, states, state.background.type === 'transparent')[index];
+      const size = state.background.photoBaseSize || state.size || 1;
+      return { ...region, w: region.w / size, h: region.h / size };
+    }
     return states[index]?.motif?.frame || cfg.slots[index];
   }
 
   function drawTemplate(ctx, cfg, source, states) {
     if (!states.some(has)) { ctx.drawImage(source, 0, 0, cfg.w, cfg.h); return; }
     const bounds = regions(cfg, source, states);
+    const complete = states.some(photoOnly) ? regions(cfg, source, states, true) : bounds;
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, 0, cfg.w, cfg.h);
     states.forEach((state, index) => {
       if (!has(state) || !bounds[index]) return;
-      const p = bounds[index];
+      // Photo-only modes remove the whole group, not just its central heart.
+      const p = photoOnly(state) ? complete[index] : bounds[index];
       ctx.rect(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h);
     });
     ctx.clip('evenodd');
@@ -193,7 +213,7 @@
   }
 
   function draw(ctx, state, x, y, w, h, source) {
-    if (!has(state)) return;
+    if (!has(state) || photoOnly(state)) return;
     const bg = state.background;
     const transform = ctx.getTransform(), density = Math.max(.1, Math.abs(transform.a), Math.abs(transform.d));
     const pixelW = Math.ceil(w * density), pixelH = Math.ceil(h * density);
@@ -224,6 +244,40 @@
     ctx.drawImage(layer, x - w / 2, y - h / 2, w, h);
   }
 
+  function drawPhoto(ctx, cfg, source, states, index, image) {
+    const state = states[index];
+    if (!photoOnly(state) || !image) return;
+    const bg = state.background, mask = bg.type === 'outline';
+    const region = regions(cfg, source, states, !mask)[index];
+    const size = (state.size || 1) / (bg.photoBaseSize || state.size || 1);
+    const w = region.w * size, h = region.h * size;
+    const x = region.x + (state.dx || 0), y = region.y + (state.dy || 0);
+    const ratio = (mask ? Math.max : Math.min)(w / image.width, h / image.height) * (state.imageScale ?? 1);
+    const dw = image.width * ratio, dh = image.height * ratio;
+    const dx = state.imageDx || 0, dy = state.imageDy || 0;
+    if (!mask) {
+      // Draw the original alpha directly: no silhouette, fill, or forced crop.
+      ctx.drawImage(image, x + dx - dw / 2, y + dy - dh / 2, dw, dh);
+      return;
+    }
+    const transform = ctx.getTransform(), density = Math.max(.1, Math.abs(transform.a), Math.abs(transform.d));
+    const pixelW = Math.ceil(w * density), pixelH = Math.ceil(h * density);
+    const key = [source, image, region.x, region.y, region.w, region.h, w, h, pixelW, pixelH, dw, dh, dx, dy];
+    let cached = photoLayerCache.get(state);
+    if (!cached || !key.every((value, i) => value === cached.key[i])) {
+      const layer = cached?.layer || document.createElement('canvas');
+      layer.width = pixelW; layer.height = pixelH;
+      const paint = layer.getContext('2d');
+      paint.scale(pixelW / w, pixelH / h);
+      paint.drawImage(image, w / 2 + dx - dw / 2, h / 2 + dy - dh / 2, dw, dh);
+      paint.globalCompositeOperation = 'destination-in';
+      paint.drawImage(outline(source), region.x - region.w / 2, region.y - region.h / 2, region.w, region.h, 0, 0, w, h);
+      cached = { layer, key };
+      photoLayerCache.set(state, cached);
+    }
+    ctx.drawImage(cached.layer, x - w / 2, y - h / 2, w, h);
+  }
+
   function create({ getStates, getSelection, getTemplate, redraw, report }) {
     const el = id => document.getElementById(id);
     const field = el('slotBackgroundField'), mode = el('slotBackgroundMode'), color = el('slotBackgroundColor');
@@ -244,6 +298,11 @@
       const values = selected.map(id => states[id].background || { type: 'none' });
       const first = values[0] || { type: 'none' };
       mode.value = values.every(bg => bg.type === first.type) ? first.type : 'mixed';
+      const onlyPhotos = selected.length > 0 && selected.every(id => photoOnly(states[id]));
+      el('slotSizeLabel').textContent = text ? '文案大小' : onlyPhotos ? '图片占位大小' : '裁剪形状大小';
+      el('slotPositionLabel').textContent = text ? '文案位置' : onlyPhotos ? '图片占位位置' : '裁剪形状位置';
+      el('clipShape').disabled = disabled || onlyPhotos;
+      upload.hidden = ['transparent', 'outline'].includes(mode.value);
       el('slotBackgroundColorRow').hidden = mode.value !== 'color';
       el('slotBackgroundImageRow').hidden = mode.value !== 'image';
       color.value = first.color || '#fff0f5';
@@ -258,6 +317,8 @@
       scaleRange.value = String((first.scale ?? 1) * 100);
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
+        mode.value === 'transparent' ? '已移除所选整组底图和字母，只保留原占位大小与位置。请从上方“上传照片”放入抠图，等比完整显示并保留透明边缘，不受“启用裁剪”影响；可缩放、移动。' :
+        mode.value === 'outline' ? '已移除所选原花纹和字母，仅复用爱心、星星等外轮廓裁剪照片，不画边框。请从上方“上传照片”放入图片，可缩放、移动；不受其他裁剪形状影响。' :
         mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变；I ♥ ME / I ♥ VE 仅替换爱心，字母保持原色。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓；I ♥ ME / I ♥ VE 的字母保持原色。') :
         mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';
     }
@@ -332,7 +393,7 @@
       });
     }
     reset.addEventListener('click', () => change({ scale: 1, dx: 0, dy: 0 }));
-    return { update, busy, hasAny: () => getStates().some(has) };
+    return { update, busy, hasAny: () => getStates().some(state => has(state) && !photoOnly(state)) };
   }
 
   function createDrag({ canvas, mode, photoMode, getBoard, redraw, onModeChange }) {
@@ -382,9 +443,10 @@
       const board = getBoard();
       if (!board.ready) return;
       const bounds = canvas.getBoundingClientRect(), height = bounds.height * board.contentRatio;
-      if (!bounds.width || !height || event.clientX < bounds.left || event.clientX > bounds.left + bounds.width ||
+      const width = bounds.width * (board.contentWidthRatio ?? 1);
+      if (!width || !height || event.clientX < bounds.left || event.clientX >= bounds.left + width ||
           event.clientY < bounds.top || event.clientY >= bounds.top + height) return;
-      const x = (event.clientX - bounds.left) / bounds.width * board.width - (board.offsetX || 0);
+      const x = (event.clientX - bounds.left) / width * board.width - (board.offsetX || 0);
       const y = (event.clientY - bounds.top) / height * board.height;
       const ids = imageIds(board);
       if (!ids.some(id => {
@@ -392,7 +454,7 @@
         return slot && Math.abs(x - slot.x) <= slot.w / 2 && Math.abs(y - slot.y) <= slot.h / 2;
       })) return;
       drag = { pointer: event.pointerId, token: board.token, selection: [...board.selected],
-        x: event.clientX, y: event.clientY, ratioX: board.width / bounds.width, ratioY: board.height / height,
+        x: event.clientX, y: event.clientY, ratioX: board.width / width, ratioY: board.height / height,
         items: ids.map(id => ({ id, background: board.states[id].background,
           dx: board.states[id].background.dx || 0, dy: board.states[id].background.dy || 0 })) };
       canvas.setPointerCapture(event.pointerId);
@@ -416,5 +478,5 @@
     return { update, dragging: () => !!drag };
   }
 
-  globalThis.HeartStarBackground = { has, apply, draw, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
+  globalThis.HeartStarBackground = { has, photoOnly, apply, draw, drawPhoto, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
 })();
