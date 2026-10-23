@@ -1,0 +1,64 @@
+name: pic-local
+
+x-api-env: &api-env
+  GO_TEMPLATE_APP_NAME: pic-api
+  GO_TEMPLATE_DATABASE_ENABLED: "true"
+  GO_TEMPLATE_DATABASE_DSN: "pic:${PIC_MYSQL_PASSWORD:?Set PIC_MYSQL_PASSWORD in .env}@tcp(mysql:3306)/pic?charset=utf8mb4&parseTime=true&loc=UTC"
+  GO_TEMPLATE_HTTP_ADDR: ":8080"
+  GO_TEMPLATE_HTTP_MAX_BODY_BYTES: "28311552"
+  GO_TEMPLATE_HTTP_READ_TIMEOUT: 120s
+  GO_TEMPLATE_HTTP_WRITE_TIMEOUT: 120s
+  GO_TEMPLATE_REDIS_ENABLED: "false"
+  GO_TEMPLATE_WORKER_ENABLED: "false"
+  PIC_LIBRARY_ENABLED: "true"
+  PIC_USERNAME: "${PIC_USERNAME:-staff}"
+  PIC_PASSWORD: "${PIC_PASSWORD:?Set PIC_PASSWORD in .env}"
+  PIC_SESSION_KEY: "${PIC_SESSION_KEY:?Set PIC_SESSION_KEY in .env}"
+  PIC_ORIGIN: "${PIC_ORIGIN:-http://127.0.0.1:5173}"
+  PIC_COOKIE_SECURE: "false"
+  PIC_DATA_DIR: /data/assets
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: pic
+      MYSQL_USER: pic
+      MYSQL_PASSWORD: "${PIC_MYSQL_PASSWORD:?Set PIC_MYSQL_PASSWORD in .env}"
+      MYSQL_ROOT_PASSWORD: "${PIC_MYSQL_ROOT_PASSWORD:?Set PIC_MYSQL_ROOT_PASSWORD in .env}"
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - pic_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h localhost -u root --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+  migrate:
+    build:
+      context: ./server
+      dockerfile: deployments/Dockerfile
+      args:
+        TARGET: migrate
+    command: ["-dir", "/app/database/migrations", "-command", "up"]
+    environment: *api-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+  api:
+    build:
+      context: ./server
+      dockerfile: deployments/Dockerfile
+    environment: *api-env
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - pic_assets:/data/assets
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pic_mysql:
+  pic_assets:

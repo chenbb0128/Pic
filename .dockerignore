@@ -11,4 +11,8 @@ web/dist
 .vscode
 *.swp
 *.log
+.env
+.env.*
+server/storage/
+server/bin/
 

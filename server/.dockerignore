@@ -1,0 +1,13 @@
+.git
+.env
+.env.*
+bin/
+*.exe
+storage/*
+!storage/.gitkeep
+.cache
+.tmp
+bin
+coverage.out
+*.test
+.env

@@ -1,0 +1,256 @@
+openapi: 3.0.3
+info:
+  title: go-template API
+  version: 0.1.0
+  description: |
+    go-template 基础框架 API 契约。当前只描述基础设施接口；业务接口暂不接入。
+servers:
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Health
+    description: 进程活性与依赖就绪检查
+  - name: Observability
+    description: 可观测性端点
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: 活性检查
+      description: 只检查 API 进程是否存活，不访问 MySQL、Redis 或外部依赖。
+      operationId: getHealth
+      parameters:
+        - $ref: '#/components/parameters/RequestIDHeader'
+      responses:
+        '200':
+          description: API 进程存活
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              examples:
+                ok:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      status: ok
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /ready:
+    get:
+      tags: [Health]
+      summary: 就绪检查
+      description: 检查已启用的依赖是否可用，例如 MySQL、Redis。依赖未启用时只返回 ready。
+      operationId: getReady
+      parameters:
+        - $ref: '#/components/parameters/RequestIDHeader'
+      responses:
+        '200':
+          description: API 可接收业务流量
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+              examples:
+                ready:
+                  value:
+                    code: 0
+                    message: success
+                    data:
+                      status: ready
+        '503':
+          description: 依赖不可用
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/RequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                dependencyUnavailable:
+                  value:
+                    code: 50001
+                    message: 服务暂不可用
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /metrics:
+    get:
+      tags: [Observability]
+      summary: Prometheus 指标
+      description: 当 `observability.metrics.enabled=true` 时启用。该端点不使用统一 JSON envelope。
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Prometheus/OpenMetrics 文本指标
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP go_template_http_requests_total Total number of HTTP requests handled by the API.
+                # TYPE go_template_http_requests_total counter
+                go_template_http_requests_total{method="GET",route="/health",status="200"} 1
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  parameters:
+    RequestIDHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: 客户端可传入请求 ID；缺失或格式不合法时服务端会生成新的 ID。
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      example: req-123.test
+
+  headers:
+    RequestID:
+      description: 当前请求 ID。
+      schema:
+        type: string
+      example: req-123.test
+
+  responses:
+    BadRequest:
+      description: 请求不合法
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: 10001
+            message: 请求不合法
+    NotFound:
+      description: 资源不存在
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: 10005
+            message: 资源不存在
+    MethodNotAllowed:
+      description: 请求方法不允许
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: 10006
+            message: 请求方法不允许
+    InternalError:
+      description: 内部服务器错误
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/RequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            code: 50000
+            message: 内部服务器错误
+
+  schemas:
+    SuccessResponse:
+      type: object
+      required: [code, message, data]
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: 业务响应码。成功固定为 0。
+          example: 0
+        message:
+          type: string
+          example: success
+        data:
+          description: 响应数据。
+      additionalProperties: false
+
+    HealthResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/HealthData'
+
+    ReadyResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              $ref: '#/components/schemas/ReadyData'
+
+    HealthData:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+      additionalProperties: false
+
+    ReadyData:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready]
+      additionalProperties: false
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          format: int32
+          description: 业务错误码。
+          enum: [10001, 10002, 10003, 10004, 10005, 10006, 10007, 20001, 50000, 50001]
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValidationDetail'
+      additionalProperties: false
+
+    ValidationDetail:
+      type: object
+      required: [field, reason]
+      properties:
+        field:
+          type: string
+          example: username
+        reason:
+          type: string
+          example: 必填
+      additionalProperties: false

@@ -125,6 +125,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 @media(max-width:600px){.watermark-controls{gap:6px}.watermark-controls input[type=text]{width:150px;flex:1}.watermark-controls button{margin-left:0}.watermark-controls input[type=range]{width:65px}}
 </style></head>
 <body>
+<link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
 <header class="top"><div class="brand">✦</div><div><h1>爱心星星自动排版</h1><p>图片自动对准图案中心，排好后直接导出高清 PNG</p></div></header>
 <main class="app">
 <section class="panel">
@@ -184,16 +185,20 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </main>
 <dialog class="preview-dialog" id="previewDialog" aria-labelledby="previewTitle"></dialog>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
-<script src="./slot-background.js?v=photo-fit-22"></script>
+<script src="./slot-background.js?v=cloud-source-23"></script>
 <script src="./preview-watermark.js?v=picture-preview-3"></script>
 <script src="./editor-interactions.js?v=right-numbering-3"></script>
 <script src="./motif-catalog.js?v=motifs-1"></script>
-<script src="./template-motifs.js?v=photo-types-8"></script>
+<script src="./template-motifs.js?v=cloud-catalog-9"></script>
 <script src="./ive-motifs.js?v=ive-1"></script>
 <script src="./brown-motifs.js?v=brown-2"></script>
 <script src="./pink-motifs.js?v=pink-stars-2"></script>
 <script src="./pattern-combos.js?v=patterns-1"></script>
 <script src="./heart-preset.js?v=preset-stars-3"></script>
+<script src="./cloud-snapshot.js?v=cloud-1"></script>
+<script src="./cloud-editor.js?v=cloud-1"></script>
+<script src="./cloud-state.js?v=cloud-2"></script>
+<script src="./cloud-library.js?v=cloud-3"></script>
 <script>
 const templateSources={"模板混合.png":"./assets/2561b63dada0b6cad889.png","模板爱心.png":"./assets/24f04555370fa8156a2f.png","模板粉色.png":"./assets/55541387191da454ff80.png","模板蓝色.png":"./assets/6cc0d5693e698afad67e.png","模板黄色.png":"./assets/d4b5365aef3e80d8bdd3.png","波点圆形.png":"./assets/7cbd4eac0cf3fa069115.png","波点爱心.png":"./assets/2fa2bc82b6db18b98fcc.png","豹纹星星.png":"./assets/0e00c7263d8ef3613332.png"};
 const templates={
@@ -354,7 +359,7 @@ function roundRectPath(c,x,y,w,h,r){r=Math.max(0,Math.min(r,w/2,h/2));c.beginPat
 function polygonPath(c,x,y,w,h,n,offset=0){c.beginPath();for(let i=0;i<n;i++){const a=offset+i*Math.PI*2/n,px=x+Math.cos(a)*w/2,py=y+Math.sin(a)*h/2;i?c.lineTo(px,py):c.moveTo(px,py)}c.closePath()}
 function slotShape(p,i){const s=states[i]?.shape||'template';return s==='template'?(states[i]?.motif?.type||p.type):s}
 function clipPath(c,type,x,y,w,h){if(type==='heart')return heartPath(c,x,y,w,h);if(type==='star')return starPath(c,x,y,w,h);if(type==='rect')return roundRectPath(c,x-w/2,y-h/2,w,h,0);if(type==='circle')return circlePath(c,x,y,Math.min(w,h),Math.min(w,h));if(type==='oval')return circlePath(c,x,y,w,h);if(type==='roundRect')return roundRectPath(c,x-w/2,y-h/2,w,h,Math.min(w,h)*.18);if(type==='square'){const s=Math.min(w,h);return roundRectPath(c,x-s/2,y-s/2,s,s,0)}if(type==='diamond')return polygonPath(c,x,y,w,h,4,-Math.PI/2);if(type==='hexagon')return polygonPath(c,x,y,w,h,6,-Math.PI/6);return circlePath(c,x,y,w,h)}
-function draw(showSelection=true,fullResolution=false){
+function draw(showSelection=true,fullResolution=false,includePhotos=true){
  if(photoFrameRequest){cancelAnimationFrame(photoFrameRequest);photoFrameRequest=0}
  const cfg=templates[sel.value];
  slotBackgrounds.update();
@@ -366,7 +371,7 @@ function draw(showSelection=true,fullResolution=false){
  const templateImage=motifEditor.source(cfg.custom?cfg.background:base);
  if(!cfg.text){HeartStarBackground.drawTemplate(ctx,cfg,templateImage,states);if(!clip.checked)HeartStarBackground.photoAreas(cfg,templateImage,states)}
  cfg.slots.forEach((p,i)=>{
-  const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=slotPhoto(i),fit=!cfg.text&&!clip.checked&&!HeartStarBackground.photoOnly(st),f=cfg.text?p:fit?HeartStarBackground.photoFrame(cfg,templateImage,states,i,im):HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
+  const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=includePhotos?slotPhoto(i):null,fit=!cfg.text&&!clip.checked&&!HeartStarBackground.photoOnly(st),f=cfg.text?p:fit?HeartStarBackground.photoFrame(cfg,templateImage,states,i,im):HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
   if(cfg.text)drawCopy(x,y,w,h,st.size,st.text??DEFAULT_COPY);
   else {
    if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage,states)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}
@@ -377,6 +382,7 @@ function draw(showSelection=true,fullResolution=false){
  ctx.restore();drawFooter(d);updatePhotoControls();backgroundDrag.update();
  download.disabled=exportBusy||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
  watermarkDownload.disabled=download.disabled;
+ sharedLibrary?.changed();
 }
 function chooseAtCanvas(e){const hit=slotAtCanvas(e);if(hit.footer){footerText.focus();footerText.select();return}const cfg=templates[sel.value],best=hit.index;if(multiMode){if(selectedSlots.has(best)){if(selectedSlots.size>1)selectedSlots.delete(best)}else selectedSlots.add(best)}else selectedSlots=new Set([best]);selectedSlot=selectedSlots.has(best)?best:[...selectedSlots][0];if(cfg.text)showCopyTab('edit');updateControls();draw()}
 function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
@@ -608,4 +614,67 @@ function selectionBoard(){const cfg=templates[sel.value],d=renderConfig(),ready=
 HeartStarInteractions.createSelection({canvas,surface:previewPanel,getBoard:selectionBoard,isPhotoDrag:()=>photoDragMode.checked||backgroundDragMode.checked,onStart:()=>{ignorePhotoClick=false},onSelection:(ids,append)=>{selectedSlots=append?new Set([...selectedSlots,...ids]):new Set(ids);if(!selectedSlots.has(selectedSlot))selectedSlot=[...selectedSlots].sort((a,b)=>a-b)[0]??0;multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;ignorePhotoClick=true;if(templates[sel.value].text)showCopyTab('edit');updateControls();requestPhotoDraw()},canResize:()=>selectionBoard().ready&&!templates[sel.value].text&&!!selectedSlots.size,onResize:delta=>{HeartStarInteractions.resizeSelection(states,selectedSlots,delta);updateControls();requestPhotoDraw()}});
 
 sel.addEventListener('change',loadTemplate);slotSelect.addEventListener('change',()=>{selectedSlot=Number(slotSelect.value);selectedSlots=new Set([selectedSlot]);multiMode=false;document.getElementById('multiMode').checked=false;updateControls();draw()});document.getElementById('multiMode').addEventListener('change',e=>{multiMode=e.target.checked;if(!selectedSlots.size)selectedSlots.add(selectedSlot);if(!multiMode){selectedSlot=[...selectedSlots].sort((a,b)=>a-b)[0];selectedSlots=new Set([selectedSlot])}updateControls();draw()});document.getElementById('selectAll').addEventListener('click',()=>{multiMode=true;document.getElementById('multiMode').checked=true;selectedSlots=new Set(currentSlots().map((_,i)=>i));selectedSlot=0;updateControls();draw()});document.getElementById('clearSelection').addEventListener('click',()=>{selectedSlots.clear();updateControls();draw()});canvas.addEventListener('click',event=>{if(ignorePhotoClick){ignorePhotoClick=false;return}chooseAtCanvas(event)});filesEl.addEventListener('change',e=>setFiles(e.target.files));scale.addEventListener('input',()=>setSelectedSize(scale.value));sizeNumber.addEventListener('change',()=>setSelectedSize(sizeNumber.value));sizeNumber.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();setSelectedSize(sizeNumber.value);sizeNumber.blur()}});clip.addEventListener('change',draw);clipShape.addEventListener('change',()=>setSelectedShape(clipShape.value));document.querySelectorAll('[data-move]').forEach(b=>b.addEventListener('click',()=>{const [mx,my]=b.dataset.move.split(',').map(Number),step=Number(document.getElementById('moveStep').value);copyChange(()=>selectedSlots.forEach(i=>{const st=states[i];st.dx=Math.max(-200,Math.min(200,st.dx+mx*step));st.dy=Math.max(-200,Math.min(200,st.dy+my*step))}),'move-'+[...selectedSlots].join(','));updateControls();draw()}));document.getElementById('resetPosition').addEventListener('click',()=>{copyChange(()=>selectedSlots.forEach(i=>states[i]={...states[i],size:templates[sel.value].text?1:.62,dx:0,dy:0,shape:'template'}));updateControls();draw()});[widthInput,heightInput,dpiInput].forEach(e=>e.addEventListener('input',()=>{if(updateCanvasSize())draw()}));drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag')});drop.addEventListener('dragleave',()=>drop.classList.remove('drag'));drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');setFiles(e.dataTransfer.files)});document.getElementById('clear').addEventListener('click',()=>{photoUploadRequest++;photoUploadBusy=false;clearReplacedPhotos();photos=[];urls.forEach(URL.revokeObjectURL);urls=[];thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];filesEl.value='';document.getElementById('thumbs').replaceChildren();say('图片已清空。');draw()});download.addEventListener('click',exportPng);loadTemplate();
+function getCloudSnapshot(){
+ const cfg=templates[sel.value];
+ return HeartStarCloudEditor.capture({name:sel.value,cfg,base,states,photoAt:slotPhoto,catalog:motifEditor.catalog(),customRows,
+  copy:cfg.text?copySnapshot():null,settings:{width:Number(widthInput.value),height:Number(heightInput.value),dpi:Number(dpiInput.value),
+   clip:clip.checked,numberingEnabled:numberingEnabled.checked,footerText:footerText.value,
+   watermarkEnabled:document.getElementById('watermarkEnabled').checked,watermarkText:document.getElementById('watermarkText').value,
+   watermarkOpacity:Number(document.getElementById('watermarkOpacity').value),selected:[...selectedSlots]}});
+}
+function applyCloudSnapshot(data){
+ HeartStarCloudEditor.validate(data,customAssets);
+ // Commit only after every image and layout parameter has been validated.
+ const source=data.template.image,cfg={...data.template},settings=data.settings;
+ delete cfg.image;delete cfg.name;
+ const key=cfg.text?copyTextTemplate:cfg.custom?CUSTOM_TEMPLATE:'共享排版.png';
+ customRequest++;clearTimeout(customTimer);customBusy=false;customDirty=false;clearTimeout(fontInputTimer);fontRequest++;fontBusy=false;
+ finishPhotoDrag();photoDragMode.checked=false;backgroundDragMode.checked=false;ignorePhotoClick=false;
+ photoUploadRequest++;photoUploadBusy=false;photoUploadTarget=null;clearReplacedPhotos();
+ urls.forEach(URL.revokeObjectURL);urls=[];photos=[];thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];
+ states=data.states;data.photos.forEach((image,i)=>replacedPhotos.set(i,{image,url:image?.src||null}));
+ if(cfg.custom){cfg.background=source;cfg.savedStates=states;customRows=data.customRows;
+  const ids=customRows.flatMap(row=>[row.id,...row.groups.map(g=>g.id)]).map(id=>Number(String(id).replace(/^c/,''))).filter(Number.isFinite);
+  customId=Math.max(customId,...ids);renderCustomRows();
+ }
+ templates[key]=cfg;
+ if(![...sel.options].some(option=>option.value===key)){const option=document.createElement('option');option.value=key;option.textContent='共享排版（已恢复）';sel.append(option)}
+ sel.value=key;if(!cfg.text){base=source;if(!cfg.custom)templateSources[key]=source.src}
+ widthInput.value=String(settings.width);heightInput.value=String(settings.height);dpiInput.value=String(settings.dpi);
+ clip.checked=!!settings.clip;numberingEnabled.checked=!!settings.numberingEnabled;footerText.value=settings.footerText||'';
+ footerText.disabled=!numberingEnabled.checked;footerText.required=numberingEnabled.checked;document.getElementById('copyFooterText').disabled=!numberingEnabled.checked;
+ for(const [id,value] of [['watermarkEnabled',settings.watermarkEnabled],['watermarkText',settings.watermarkText],['watermarkOpacity',settings.watermarkOpacity]]){
+  const control=document.getElementById(id);if(value!==undefined){if(control.type==='checkbox')control.checked=value;else control.value=String(value);control.dispatchEvent(new Event('input'))}
+ }
+ selectedSlots=new Set((settings.selected||states.map((_,i)=>i)).filter(i=>Number.isInteger(i)&&i>=0&&i<states.length));selectedSlot=[...selectedSlots][0]||0;
+ multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;
+ document.getElementById('thumbs').replaceChildren();filesEl.value='';updateTemplateFields();
+ document.getElementById('empty').hidden=true;canvas.hidden=false;
+ if(cfg.text){copyUndoStack.length=0;copyRedoStack.length=0;restoreCopySnapshot({...data.copy,states,selected:[...selectedSlots],selectedSlot,multiMode})}
+ buildSlotSelect();updateControls();updateCanvasSize();draw();
+}
+function getCloudPreview(kind){
+ try{
+  draw(false,false,kind!=='template');
+  const proof=HeartStarWatermark.preview(canvas),preview=document.createElement('canvas'),ratio=Math.min(1,320/Math.max(proof.width,proof.height));
+  preview.width=Math.max(1,Math.round(proof.width*ratio));preview.height=Math.max(1,Math.round(proof.height*ratio));
+  preview.getContext('2d').drawImage(proof,0,0,preview.width,preview.height);return preview;
+ }finally{draw()}
+}
+async function getCloudResult(){
+ const d=outputConfig();
+ if(!d)throw new Error('请输入有效的宽度、高度和打印精度。');
+ if(d.pxW*d.pxH>40000000)throw new Error('高清结果超过 4000 万像素，请减小尺寸或 DPI 后保存作品。');
+ let pending;
+ try{
+  draw(false,true);
+  pending=new Promise((resolve,reject)=>canvas.toBlob(blob=>blob?resolve(blob):reject(new Error('高清结果生成失败，当前编辑已保留')),'image/png'));
+ }finally{draw()}
+ const blob=await addDpiMetadata(await pending,d.dpi);
+ if(blob.size>25*1024*1024)throw new Error('高清结果超过 25 MB，请减小尺寸或 DPI 后保存作品。');
+ return blob;
+}
+var sharedLibrary=HeartStarCloud.mount({getSnapshot:getCloudSnapshot,applySnapshot:applyCloudSnapshot,getPreview:getCloudPreview,getResult:getCloudResult,canSave:()=>selectionBoard().ready&&!fontBusy,
+ pendingEdit:()=>templates[sel.value].text&&copyDraftDirty?'文案尚未应用，请先点击“应用”再保存。':'',
+ setBusy:busy=>{document.querySelector('.app').inert=busy},report:say});
 </script></body></html>

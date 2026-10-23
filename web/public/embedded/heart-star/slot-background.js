@@ -497,6 +497,9 @@
       const selected = selection.selected;
       if (!picked.type.startsWith('image/')) { report('请选择有效的背景图片。', true); return; }
       const target = getStates(), token = ++request, image = new Image(), url = URL.createObjectURL(picked);
+      // The display URL is released after decode; retain the original bytes for
+      // an explicit shared save without keeping a live blob URL indefinitely.
+      image.picSourceBlob = picked;
       pending = { states: target };
       update();
       redraw();

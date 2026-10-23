@@ -37,6 +37,21 @@ function setup(measureRegions?: (cfg: any, pixels: any) => any[]) {
 }
 
 describe('heart-star built-in motifs', () => {
+  it('rebuilds a restored custom catalog from current placements and keeps replacements after row changes', async () => {
+    const s = setup()
+    s.env.name = '自定义排版.png'
+    Object.assign(s.cfg, { custom: true, slots: [{ row: 0, column: 0 }, { row: 1, column: 0 }],
+      placements: [{ assetId: 'heart', x: 10, y: 20, w: 200, h: 200 }, { assetId: 'star', x: 10, y: 300, w: 200, h: 200 }],
+      motifSlots: [{ assetId: 'old', variant: '小款', box: [0, 0, 10, 10] }] })
+    s.env.states = [{ size: .62 }, { size: .62 }]
+    expect(s.feature.catalog().map((meta: any) => meta.assetId)).toEqual(['heart', 'star'])
+    await s.feature.replace([0], 'star')
+    s.cfg.slots = [{ row: 0, column: 0 }, { row: 1, column: 0 }] as any
+    ;(s.cfg as any).placements = [{ assetId: 'star', x: 30, y: 40, w: 200, h: 200 }, { assetId: 'heart', x: 30, y: 400, w: 200, h: 200 }]
+    s.env.states.reverse()
+    s.feature.reflow()
+    expect(s.env.states[1].motif).toMatchObject({ assetId: 'star', originalAssetId: 'heart', placement: { x: 30, y: 400 } })
+  })
   it('replaces only selected motifs in the independent 210×144 template using its own catalog and physical size', async () => {
     const s = setup()
     s.env.name = '爱心横版.png'

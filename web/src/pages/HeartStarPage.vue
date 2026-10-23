@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { inject, onBeforeUnmount, onMounted, ref } from 'vue'
+import { matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
 import { clearHeartStarAccess, hasHeartStarAccess, rememberHeartStarAccess } from '../services/heartStarAccess'
+import { canLeaveHeartStar, heartStarNeedsSave } from '../services/heartStarLeave'
 
 // MVP entry guard only. Static tool files are not protected server-side.
 const ACCESS_PASSWORD = '87654321'
@@ -9,7 +11,13 @@ const unlocked = ref(false)
 const checkingAccess = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=photo-fit-41`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=cloud-library-3`
+const editorFrame = ref<HTMLIFrameElement | null>(null)
+function onBeforeUnload(event: BeforeUnloadEvent): void {
+  if (heartStarNeedsSave(editorFrame.value)) { event.preventDefault(); event.returnValue = '' }
+}
+if (inject(matchedRouteKey, undefined)) onBeforeRouteLeave(() => canLeaveHeartStar(editorFrame.value, message => window.confirm(message)))
+onBeforeUnmount(() => { if (typeof window !== 'undefined') window.removeEventListener?.('beforeunload', onBeforeUnload) })
 const shortcutGuide = ref<HTMLDialogElement | null>(null)
 const shortcutGroups = [
   { title: '选择图案', items: [
@@ -42,6 +50,7 @@ function onShortcutBackdrop(event: MouseEvent): void {
 }
 
 onMounted(async () => {
+  if (typeof window !== 'undefined') window.addEventListener?.('beforeunload', onBeforeUnload)
   checkingAccess.value = true
   unlocked.value = await hasHeartStarAccess(ACCESS_PASSWORD)
   checkingAccess.value = false
@@ -86,7 +95,7 @@ function lock(): void {
         <p id="heart-star-access-feedback" class="mt-2 min-h-5 text-xs text-rose-600" role="status">{{ error }}</p>
         <button type="submit" class="mt-3 min-h-12 w-full rounded-xl bg-pink-600 px-4 text-sm font-bold text-white hover:bg-pink-700">解锁使用</button>
       </form>
-      <p class="mt-5 text-xs leading-6 text-slate-500">仅此工具需要密码，其他功能照常使用。同一浏览器解锁后记住 30 天，密码更新后需重新解锁；图片在当前浏览器处理。</p>
+      <p class="mt-5 text-xs leading-6 text-slate-500">仅此工具需要密码，其他功能照常使用。同一浏览器解锁后记住 30 天，密码更新后需重新解锁；图片默认在本机处理，使用共享保存时会上传到门店服务器。</p>
     </div>
   </section>
   <section v-else class="flex h-[calc(100dvh-64px)] min-h-[420px] w-full min-w-0 flex-1 flex-col bg-[#faf8f9] lg:h-auto lg:min-h-0">
@@ -101,7 +110,7 @@ function lock(): void {
       </div>
     </div>
     <p v-if="loading" class="shrink-0 px-4 py-2 text-xs text-pink-700" role="status">正在载入模板工具…</p>
-    <iframe :src="toolUrl" title="爱心星星排版工具" class="block min-h-0 w-full flex-1 border-0" sandbox="allow-scripts allow-same-origin allow-downloads allow-modals" allow="clipboard-write" @load="loading = false"></iframe>
+    <iframe ref="editorFrame" :src="toolUrl" title="爱心星星排版工具" class="block min-h-0 w-full flex-1 border-0" sandbox="allow-scripts allow-same-origin allow-downloads allow-modals" allow="clipboard-write" @load="loading = false"></iframe>
     <dialog id="heart-star-shortcut-guide" ref="shortcutGuide" aria-labelledby="heart-star-shortcut-title" aria-describedby="heart-star-shortcut-note" class="shortcut-dialog m-auto rounded-2xl border border-pink-100 bg-white p-5 text-slate-800 shadow-xl backdrop:bg-slate-900/45 sm:p-6" @click="onShortcutBackdrop">
       <div class="mb-2 flex items-center justify-between gap-4">
         <h2 id="heart-star-shortcut-title" class="text-lg font-bold">快捷键指南</h2>

@@ -25,7 +25,9 @@
     function catalog() {
       const cfg = getTemplate();
       if (cfg.text) return [];
-      if (cfg.motifSlots) return cfg.motifSlots;
+      // Custom layouts can change rows and paper size after a shared restore.
+      // Their saved catalog is only a snapshot; current placements are authoritative.
+      if (cfg.motifSlots && !cfg.custom) return cfg.motifSlots;
       if (getName() === '模板爱心.png') return slots;
       const base = getSource(), cached = catalogs.get(cfg);
       if (cached && cached.source === base && cached.slots === cfg.slots && cached.placements === cfg.placements) return cached.entries;

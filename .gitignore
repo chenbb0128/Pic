@@ -9,4 +9,8 @@ web/dist/
 *.swp
 .DS_Store
 Thumbs.db
+server/storage/*
+!server/storage/.gitkeep
+server/bin/
+server/*.exe
 
