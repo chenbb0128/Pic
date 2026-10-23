@@ -10,6 +10,7 @@ function setup() {
   const scheduled: (() => void)[] = [], paints: any[] = [], snapshots: any[] = [], downloads: string[] = []
   const output = { w: 144, h: 210, totalW: 144, totalH: 213, dpi: 600, pxW: 3402, pxH: 5031, contentPxW: 3402, contentPxH: 4961, footerPxW: 0, footerPxH: 70 }
   const env: any = {
+    sharedLibrary: undefined,
     outputConfig: () => output,
     canvas: { width: 0, height: 0, getBoundingClientRect: () => ({ left: 0, top: 0, width: 1082, height: 1600 }),
       toBlob(callback: (blob: Blob) => void) { snapshots.push([this.width, this.height]); callback(new Blob()) } },
