@@ -57,10 +57,12 @@
     const selection = () => active() ? [...getSelection()].filter(id => catalog()[id] && getStates()[id]) : [];
     function allowed(asset, ids = selection()) {
       if (!active() || !asset || !ids.length) return false;
+      if (new Set(ids.map(id => catalog()[id]?.variant)).size !== 1) return false;
       return ids.every(id => {
         if (!catalog()[id] || !getStates()[id]) return false;
         const meta = catalog()[id], variant = meta.variant, type = meta.type || getTemplate().slots[id].type || 'heart';
-        return variant === '原款' ? ['I ♥ ME 组合', 'I ♥ VE 组合'].includes(asset.group) :
+        return variant === '原款' ? ['I ♥ ME 组合', 'I ♥ VE 组合'].includes(asset.group) ||
+          (['小款', '大款'].includes(asset.variant) && ['heart', 'star'].includes(asset.type)) :
           asset.variant === variant && (['heart', 'star'].includes(asset.type) || asset.type === type);
       });
     }
@@ -69,7 +71,7 @@
 
     function placement(id, asset) {
       const [x, y, w, h] = catalog()[id].box, cfg = getTemplate(), width = cfg.widthMm || (cfg.custom ? cfg.w / 10 : 144), height = cfg.heightMm || (cfg.custom ? cfg.h / 10 : 210);
-      // Keep the original slot and fit same-variant artwork without enlarging it.
+      // Keep the original slot and fit replacement artwork without enlarging it.
       const factor = Math.min(1, w / cfg.w * width / asset.nativeW, h / cfg.h * height / asset.nativeH);
       const pw = asset.nativeW * factor / width * cfg.w, ph = asset.nativeH * factor / height * cfg.h;
       return { x: x + (w - pw) / 2, y: y + (h - ph) / 2, w: pw, h: ph };
@@ -98,7 +100,7 @@
     async function replace(ids, assetId) {
       const asset = assets[assetId], unique = [...new Set(ids)];
       if (!allowed(asset, unique)) {
-        report('请选择同规格图案；圆形、方块也可换成爱心或星星，字母组合仅整组替换。', true); return;
+        report('请先选中同规格图案；字母组合可整组换成字母组合、爱心或星星，其他图案保持同规格替换。', true); return;
       }
       const target = { states: getStates(), source: getSource(), request: ++request };
       pending = target; redraw();

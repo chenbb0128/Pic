@@ -556,7 +556,7 @@ function openHeartMotifPicker(){
  const cfg=templates[sel.value],ids=motifEditor.selection(),variant=motifEditor.catalog()[ids[0]]?.variant;if(exportBusy||motifEditor.busy()||(cfg.custom?customBusy||customDirty||!cfg.background:!base.complete||!base.naturalWidth)||!ids.length||!ids.every(id=>motifEditor.catalog()[id].variant===variant))return;
  const snapshotStates=states,snapshotBase=base;
  customPickerTarget={trigger:document.getElementById('replaceHeartMotif'),onSelect:id=>{if(states!==snapshotStates||base!==snapshotBase||exportBusy||!motifEditor.active())return;customPicker.close();motifEditor.replace(ids,id)}};
- customPicker.querySelector('#customPickerTitle').textContent=`更换${variant==='原款'?'字母完整组合 · I ♥ ME / I ♥ VE':variant+'图案'}`;
+ customPicker.querySelector('#customPickerTitle').textContent=`更换${variant==='原款'?'完整图案 · 字母组合 / 爱心 / 星星':variant+'图案'}`;
  filterCustomPicker(asset=>motifEditor.allowed(asset,ids),asset=>{const p=motifEditor.placement(ids[0],asset),cfg=templates[sel.value];return `替换后 ${(p.w/cfg.w*Number(widthInput.value)).toFixed(2)} × ${(p.h/cfg.h*Number(heightInput.value)).toFixed(2)} mm`});
  customPicker.querySelectorAll('[data-asset]').forEach(button=>button.setAttribute('aria-pressed',String(ids.every(id=>states[id].motif?.assetId===button.dataset.asset))));customPicker.showModal();
 }

@@ -94,6 +94,45 @@ describe('heart-star built-in motifs', () => {
     expect(s.cfg.slots[2].w).toBe(150)
   })
 
+  it.each([
+    ['heart', '小款', 20, 16], ['heart', '大款', 40, 32],
+    ['star', '小款', 20, 16], ['star', '大款', 40, 32],
+  ] as const)('replaces selected letter groups with a centered %s %s without retaining letters', async (type, variant, nativeW, nativeH) => {
+    const s = setup()
+    Object.assign(s.cfg, { motifSlots: [
+      { variant: '原款', assetId: 'ime-original', box: [0, 0, 300, 300] },
+      { variant: '小款', box: [340, 0, 200, 200] },
+      { variant: '原款', assetId: 'ive-original', box: [0, 500, 300, 300] },
+    ] })
+    const asset = s.assets[type]
+    Object.assign(asset, { variant, nativeW, nativeH, frame: { x: .5, y: .5, w: .6, h: .6 } })
+    expect(s.feature.allowed(asset, [0, 2])).toBe(true)
+    expect(s.feature.allowed(s.assets.combo, [0, 2])).toBe(true)
+    expect(s.feature.allowed({ ...asset, type: 'circle' }, [0, 2])).toBe(false)
+    expect(s.feature.allowed({ ...asset, type: 'square' }, [0, 2])).toBe(false)
+    await s.feature.replace([0, 2], type)
+    const w = Math.min(nativeW * 10, 300), h = w * nativeH / nativeW
+    for (const [id, y] of [[0, 0], [2, 500]] as const) {
+      const motif = s.env.states[id].motif
+      expect(motif).toMatchObject({ assetId: type, type, backgroundPart: 'whole' })
+      const expected = { placement: { x: (300 - w) / 2, y: y + (300 - h) / 2, w, h },
+        frame: { x: 150, y: y + 150, w: w * .6, h: h * .6 } }
+      for (const key of ['placement', 'frame'] as const) {
+        for (const field of ['x', 'y', 'w', 'h'] as const) expect(motif[key][field]).toBeCloseTo(expected[key][field])
+      }
+    }
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8 })
+    expect(s.env.states[0].background).toBeUndefined()
+    expect(s.env.states[1]).toEqual({ size: .8 })
+    s.feature.source(s.env.base)
+    expect(s.draws.filter(call => call[0] === 'clear')).toEqual([
+      ['clear', 0, 0, 300, 300], ['clear', 0, 500, 300, 300],
+    ])
+    s.feature.restore([0, 2])
+    expect(s.feature.source(s.env.base)).toBe(s.env.base)
+    expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8 })
+  })
+
   it.each(['小款', '大款'])('allows only matching %s hearts and stars, fitting the existing position', async variant => {
     const s = setup()
     Object.assign(s.cfg, { motifSlots: [
