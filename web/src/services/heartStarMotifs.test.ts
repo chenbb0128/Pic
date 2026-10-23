@@ -287,6 +287,34 @@ describe('heart-star built-in motifs', () => {
 })
 
 describe('heart-star catalog and overflow details', () => {
+  it.each([
+    ['heart', '-small', 'rose-heart-small', '大红波点爱心'],
+    ['heart', '', 'rose-heart', '大红波点爱心'],
+    ['star', '-small', 'mint-star-small', '大红波点星星'],
+    ['star', '', 'mint-star', '大红波点星星'],
+  ])('offers a usable red polka %s%s with the existing silhouette geometry', async (type, suffix, originalId, label) => {
+    const scope: any = {}
+    new Function('globalThis', source('red-motifs.js'))(scope)
+    expect(scope.HeartStarRed).toBeDefined()
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const before = structuredClone(assets), entries = scope.HeartStarRed.register(assets)
+    expect(Object.keys(entries)).toHaveLength(4)
+    const id = `red-polka-${type}${suffix}`, asset = entries[id], original = assets[originalId!]
+    expect(asset).toMatchObject({ type, baseName: label, variant: original.variant,
+      nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+    expect([...readFileSync(new URL(asset.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect(assets).toEqual(before)
+    const s = setup()
+    Object.assign(s.assets, entries)
+    await s.feature.replace([2], id)
+    expect(s.env.states[2].motif).toMatchObject({ assetId: id, type, backgroundPart: 'whole' })
+    expect(s.env.states[2].size).toBe(.62)
+    const start = toolHtml.indexOf('function buildCustomLayout(')
+    const build = new Function(`${toolHtml.slice(start, toolHtml.indexOf('\n}', start) + 2)};return buildCustomLayout`)()
+    const layout = build([{ id: 'r', groups: [{ id: 'g', assetId: id, count: 2 }] }], entries, 144, 210)
+    expect(layout.slots).toHaveLength(2)
+    expect(layout.placements[0]).toMatchObject({ assetId: id, w: original.nativeW * 10, h: original.nativeH * 10 })
+  })
   it('adds all three new heart patterns to both letter combinations without changing their photo openings', () => {
     const scope: any = {}
     new Function('globalThis', source('pattern-combos.js'))(scope)
