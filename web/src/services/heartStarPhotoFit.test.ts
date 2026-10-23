@@ -30,6 +30,81 @@ function checkInside(frame: any, source: ReturnType<typeof image>) {
 }
 
 describe('heart-star predefined photo placement', () => {
+  it('locates the star body center instead of limiting photos to the artwork bounding-box center', () => {
+    const { api, reads } = setup(), source = image([
+      '....#....', '....#....', '....#....', ...Array(6).fill('#########'),
+    ])
+    const cfg = { w: 9, h: 9, custom: true, slots: [{ x: 4.5, y: 4.5, w: 9, h: 9, type: 'star' }],
+      placements: [{ x: 0, y: 0, w: 9, h: 9 }] }
+    const states = [{ size: .62, dx: 0, dy: 0 }], initial = api.photoFrame(cfg, source, states, 0)
+    expect(initial.x).toBe(4.5)
+    expect(initial.y).toBe(6)
+    expect(initial.w * .62).toBeCloseTo(5.64)
+    expect(initial.h * .62).toBeCloseTo(5.64)
+    checkInside({ ...initial, w: initial.w * .62, h: initial.h * .62 }, source)
+    const photo = image(['##', '##', '##', '##']), calls: any[] = []
+    const fitted = api.photoFrame(cfg, source, states, 0, photo)
+    expect(fitted.y).toBe(6)
+    api.drawFittedPhoto({ drawImage: (...args: any[]) => calls.push(args) }, cfg, source, states, 0, photo)
+    expect(calls[0].slice(1)).toEqual([expect.closeTo(3.09), expect.closeTo(3.18), expect.closeTo(2.82), expect.closeTo(5.64)])
+    expect(api.photoFrame(cfg, source, states, 0)).toEqual(initial)
+    expect(reads()).toBe(2) // One template read plus one photo read, even after refitting.
+    const heartCfg = { ...cfg, slots: [{ ...cfg.slots[0]!, type: 'heart' }] }
+    expect(api.photoFrame(heartCfg, source, states, 0).y).toBeCloseTo(4.14)
+    const squareCfg = { ...cfg, slots: [{ ...cfg.slots[0]!, type: 'square' }] }
+    expect(api.photoFrame(squareCfg, source, states, 0).y).toBe(4.5)
+  })
+
+  it('shows the largest centered safe square for a star before upload, not a square cut from the widest rectangle', () => {
+    const { api, reads } = setup(), source = image([
+      '....#####....', '....#####....', '..#########..', ...Array(7).fill('#############'),
+      '..#########..', '....#####....', '....#####....',
+    ])
+    const cfg = { w: 13, h: 13, custom: true, slots: [{ x: 6.5, y: 6.5, w: 13, h: 13, type: 'star' }],
+      placements: [{ x: 0, y: 0, w: 13, h: 13 }] }
+    const states = [{ size: .62 }], f = api.photoFrame(cfg, source, states, 0)
+    expect(f).toMatchObject({ x: 6.5, y: 6.5 })
+    expect(f.w * .62).toBeCloseTo(8.46)
+    expect(f.h * .62).toBeCloseTo(8.46)
+    checkInside({ ...f, w: f.w * .62, h: f.h * .62 }, source)
+    expect(api.photoAreas(cfg, source, states)[0]).toMatchObject({ w: expect.closeTo(8.46), h: expect.closeTo(8.46) })
+    expect(api.photoFrame(cfg, source, states, 0)).toEqual(f)
+    expect(reads()).toBe(1)
+  })
+
+  it('fits portrait and landscape star photos using the best centered safe range for their visible aspect ratio', () => {
+    const { api, reads } = setup(), source = image([
+      '....#####....', '....#####....', '....#####....',
+      ...Array(7).fill('#############'),
+      '....#####....', '....#####....', '....#####....',
+    ])
+    const cfg = { w: 13, h: 13, custom: true, slots: [{ x: 6.5, y: 6.5, w: 13, h: 13, type: 'star' }],
+      placements: [{ x: 0, y: 0, w: 13, h: 13 }] }
+    const states = [{ size: .62 }], portrait = image(Array(6).fill('##')), landscape = image(['######', '######'])
+    const calls: any[] = [], ctx = { drawImage: (...args: any[]) => calls.push(args) }
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, portrait)
+    expect(calls[0].slice(1)).toEqual([expect.closeTo(6.5 - 12.22 / 6), expect.closeTo(.39), expect.closeTo(12.22 / 3), expect.closeTo(12.22)])
+    const tall = api.photoFrame(cfg, source, states, 0, portrait)
+    expect(tall.h * .62).toBeCloseTo(12.22)
+    expect(tall.w * .62).toBeCloseTo(12.22 / 3)
+    checkInside({ ...tall, w: tall.w * .62, h: tall.h * .62 }, source)
+    const before = reads()
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, portrait)
+    expect(reads()).toBe(before)
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, landscape)
+    expect(reads()).toBe(before + 1) // Only the new photo, never the template again.
+    expect(calls[2].slice(1)).toEqual([expect.closeTo(.39), expect.closeTo(6.5 - 12.22 / 6), expect.closeTo(12.22), expect.closeTo(12.22 / 3)])
+    const wide = api.photoFrame(cfg, source, states, 0, landscape)
+    expect(wide.w * .62).toBeCloseTo(12.22)
+    expect(wide.h * .62).toBeCloseTo(12.22 / 3)
+    checkInside({ ...wide, w: wide.w * .62, h: wide.h * .62 }, source)
+    const padded = image(Array(6).fill('.....##.....'))
+    expect(api.photoFrame(cfg, source, states, 0, padded)).toEqual(tall)
+    // Heart behavior stays independent of the uploaded photo's aspect ratio.
+    const heartCfg = { ...cfg, slots: [{ ...cfg.slots[0]!, type: 'heart' }] }
+    expect(api.photoFrame(heartCfg, source, states, 0, portrait)).toEqual(api.photoFrame(heartCfg, source, states, 0))
+  })
+
   it('leaves a six-pixel safety inset around a full-size photo area instead of touching its edges', () => {
     const { api } = setup(), source = image(Array(200).fill('#'.repeat(200)))
     const cfg = { w: 200, h: 200, custom: true, slots: [{ x: 100, y: 100, w: 200, h: 200 }], placements: [{ x: 0, y: 0, w: 200, h: 200 }] }
@@ -199,6 +274,47 @@ describe('heart-star predefined photo placement', () => {
     const photos = calls.filter(call => call[0] === photo)
     expect(photos).toHaveLength(2)
     expect(photos[0]!.slice(1)).toEqual([expect.closeTo(2.65), expect.closeTo(.3), expect.closeTo(4.7), expect.closeTo(9.4)])
+    expect(photos[1]).toEqual(photos[0])
+  })
+
+  it('uses the same aspect-aware star frame for selection, hit testing and PNG drawing', () => {
+    const { api } = setup(), source = image([
+      ...Array(3).fill('....#####....'), ...Array(7).fill('#############'), ...Array(3).fill('....#####....'),
+    ]), photo = image(Array(6).fill('##'))
+    const cfg = { w: 13, h: 13, custom: true, background: source, slots: [{ x: 6.5, y: 6.5, w: 13, h: 13, type: 'star' }],
+      placements: [{ x: 0, y: 0, w: 13, h: 13 }] }
+    const calls: any[] = [], borders: number[][] = []
+    let currentPhoto: typeof photo | null = null
+    const env = { photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
+      states: [{ size: .62, dx: 0, dy: 0, imageScale: 1 }], slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false },
+      updateMotifControls() {}, updateCanvasSize: () => true, canvas: { width: 13, height: 13 },
+      ctx: { clearRect() {}, save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, scale() {}, setLineDash() {},
+        strokeRect: (...args: number[]) => borders.push(args), drawImage: (...args: any[]) => calls.push(args) },
+      renderConfig: () => ({ contentPxW: 13, contentPxH: 13 }), motifEditor: { source: () => source, busy: () => false },
+      HeartStarBackground: api, slotPhoto: () => currentPhoto, selectedSlots: new Set([0]), clip: { checked: false },
+      drawFooter() {}, updatePhotoControls() {}, backgroundDrag: { update() {} }, download: {}, watermarkDownload: {},
+      hasSlotPhotos: () => true, customDirty: false, customBusy: false, exportBusy: false, photoUploadBusy: false, replacementBusy: false,
+    }
+    const code = toolHtml.slice(toolHtml.indexOf('function draw(showSelection'), toolHtml.indexOf('function chooseAtCanvas(')) +
+      toolHtml.slice(toolHtml.indexOf('function slotFrame('), toolHtml.indexOf('function slotAtCanvas('))
+    const feature = new Function('env', `with(env){${code};return {draw,slotFrame}}`)(env)
+    const emptyFrame = feature.slotFrame(0)
+    expect(emptyFrame.w * .62).toBeCloseTo(6.58)
+    expect(emptyFrame.h * .62).toBeCloseTo(6.58)
+    feature.draw(true)
+    expect(borders[0]![2]).toBeCloseTo(6.58 * 1.06)
+    expect(borders[0]![3]).toBeCloseTo(6.58 * 1.06)
+    currentPhoto = photo
+    const hit = feature.slotFrame(0)
+    expect(hit.h * .62).toBeCloseTo(12.22)
+    expect(hit.w * .62).toBeCloseTo(12.22 / 3)
+    feature.draw(true)
+    feature.draw(false, true)
+    expect(borders[1]![2]).toBeCloseTo(12.22 / 3 * 1.06)
+    expect(borders[1]![3]).toBeCloseTo(12.22 * 1.06)
+    const photos = calls.filter(call => call[0] === photo)
+    expect(photos).toHaveLength(2)
+    expect(photos[0]![4]).toBeCloseTo(12.22)
     expect(photos[1]).toEqual(photos[0])
   })
 })

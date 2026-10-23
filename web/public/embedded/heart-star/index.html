@@ -184,7 +184,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </main>
 <dialog class="preview-dialog" id="previewDialog" aria-labelledby="previewTitle"></dialog>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
-<script src="./slot-background.js?v=photo-fit-19"></script>
+<script src="./slot-background.js?v=photo-fit-22"></script>
 <script src="./preview-watermark.js?v=picture-preview-3"></script>
 <script src="./editor-interactions.js?v=right-numbering-3"></script>
 <script src="./motif-catalog.js?v=motifs-1"></script>
@@ -309,7 +309,7 @@ function updatePhotoControls(){const text=!!templates[sel.value].text,disabled=!
 function setPhotoScale(value){if(!canEditPhoto())return;const percent=Math.max(25,Math.min(400,Math.round(Number(value)||100)));selectedSlots.forEach(i=>states[i].imageScale=percent/100);updatePhotoControls();requestPhotoDraw()}
 function setPhotoOffset(axis,value,relative=false){if(!canEditPhoto())return;const key=axis==='x'?'imageDx':'imageDy',limit=axis==='x'?templates[sel.value].w:templates[sel.value].h,number=Number(value)||0;selectedSlots.forEach(i=>states[i][key]=Math.round(Math.max(-limit,Math.min(limit,(relative?(states[i][key]||0):0)+number))));updatePhotoControls();draw()}
 function resetSelectedPhoto(){if(!canEditPhoto())return;selectedSlots.forEach(i=>Object.assign(states[i],{imageScale:1,imageDx:0,imageDy:0}));updatePhotoControls();draw()}
-function slotFrame(i){const cfg=templates[sel.value],source=cfg.text?null:motifEditor.source(cfg.custom?cfg.background:base),frame=cfg.text?cfg.slots[i]:(!clip.checked&&!HeartStarBackground.photoOnly(states[i])?HeartStarBackground.photoFrame(cfg,source,states,i):HeartStarBackground.frame(cfg,source,states,i));return cfg.contentOffsetX?{...frame,x:frame.x+cfg.contentOffsetX}:frame}
+function slotFrame(i){const cfg=templates[sel.value],source=cfg.text?null:motifEditor.source(cfg.custom?cfg.background:base),frame=cfg.text?cfg.slots[i]:(!clip.checked&&!HeartStarBackground.photoOnly(states[i])?HeartStarBackground.photoFrame(cfg,source,states,i,slotPhoto(i)):HeartStarBackground.frame(cfg,source,states,i));return cfg.contentOffsetX?{...frame,x:frame.x+cfg.contentOffsetX}:frame}
 function slotAtCanvas(event){const r=canvas.getBoundingClientRect(),cfg=templates[sel.value],d=renderConfig(),contentWidth=r.width*(d?d.contentPxW/d.pxW:1),contentHeight=r.height*(d?d.contentPxH/d.pxH:1),x=(event.clientX-r.left)/contentWidth*cfg.w,y=(event.clientY-r.top)/contentHeight*cfg.h;if(x>=cfg.w||y>=cfg.h)return{index:-1,x,y,footer:true};let best=0,score=Infinity;currentSlots().forEach((_,i)=>{const p=slotFrame(i),st=states[i],distance=((x-p.x-(st?.dx||0))/p.w)**2+((y-p.y-(st?.dy||0))/p.h)**2;if(distance<score){best=i;score=distance}});return{index:best,x,y}}
 function requestPhotoDraw(){if(photoFrameRequest)return;photoFrameRequest=requestAnimationFrame(()=>{photoFrameRequest=0;draw()})}
 function startPhotoDrag(event){if(photoDrag||event.isPrimary===false||!photoDragMode.checked||!canEditPhoto()||event.button!==0)return;const hit=slotAtCanvas(event);if(hit.footer||!slotPhoto(hit.index))return;const p=slotFrame(hit.index),st=states[hit.index];if(Math.abs(hit.x-p.x-st.dx)>p.w*st.size/2||Math.abs(hit.y-p.y-st.dy)>p.h*st.size/2)return;if(!selectedSlots.has(hit.index)){if(multiMode)selectedSlots.add(hit.index);else selectedSlots=new Set([hit.index]);selectedSlot=hit.index;updateControls()}const r=canvas.getBoundingClientRect(),cfg=templates[sel.value],d=renderConfig();photoDrag={pointer:event.pointerId,x:event.clientX,y:event.clientY,ratioX:cfg.w/(r.width*d.contentPxW/d.pxW),ratioY:cfg.h/(r.height*d.contentPxH/d.pxH),items:[...selectedSlots].map(i=>({i,dx:states[i].imageDx||0,dy:states[i].imageDy||0}))};ignorePhotoClick=true;canvas.setPointerCapture(event.pointerId);event.preventDefault();updatePhotoControls();draw()}
@@ -366,7 +366,7 @@ function draw(showSelection=true,fullResolution=false){
  const templateImage=motifEditor.source(cfg.custom?cfg.background:base);
  if(!cfg.text){HeartStarBackground.drawTemplate(ctx,cfg,templateImage,states);if(!clip.checked)HeartStarBackground.photoAreas(cfg,templateImage,states)}
  cfg.slots.forEach((p,i)=>{
-  const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=slotPhoto(i),fit=!cfg.text&&!clip.checked&&!HeartStarBackground.photoOnly(st),f=cfg.text?p:fit?HeartStarBackground.photoFrame(cfg,templateImage,states,i):HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
+  const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=slotPhoto(i),fit=!cfg.text&&!clip.checked&&!HeartStarBackground.photoOnly(st),f=cfg.text?p:fit?HeartStarBackground.photoFrame(cfg,templateImage,states,i,im):HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
   if(cfg.text)drawCopy(x,y,w,h,st.size,st.text??DEFAULT_COPY);
   else {
    if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage,states)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}

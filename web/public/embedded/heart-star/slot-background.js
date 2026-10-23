@@ -196,13 +196,14 @@
     return states[index]?.motif?.frame || cfg.slots[index];
   }
 
-  function safePhotoArea(mask, width, height, region, center) {
+  function safePhotoArea(mask, width, height, region, center, choices, locateStarCenter = false) {
     const left = Math.max(0, Math.floor(region.x - region.w / 2)), right = Math.min(width, Math.ceil(region.x + region.w / 2));
     const top = Math.max(0, Math.floor(region.y - region.h / 2)), bottom = Math.min(height, Math.ceil(region.y + region.h / 2));
     const columns = right - left, heights = new Uint32Array(columns), stack = [];
     let best = null, area = 0;
-    // Keep the chosen visual center fixed. A wider area above it must not pull the
-    // photo upwards; only consider centered rectangles inside the silhouette.
+    const candidates = choices ? new Map() : null;
+    // Star centers are located once from their central body. All later fits,
+    // and every non-star fit, stay symmetric around the chosen visual center.
     for (let y = top; y < bottom; y++) {
       for (let x = 0; x < columns; x++) heights[x] = mask[(y * width + left + x) * 4 + 3] >= 128 ? heights[x] + 1 : 0;
       stack.length = 0;
@@ -210,18 +211,40 @@
         const h = x === columns ? 0 : heights[x];
         while (stack.length && heights[stack[stack.length - 1]] > h) {
           const rectH = heights[stack.pop()], start = stack.length ? stack[stack.length - 1] + 1 : 0;
-          const rectW = 2 * Math.min(center.x - left - start, left + x - center.x);
-          const centeredH = 2 * Math.min(center.y - (y + 1 - rectH), y + 1 - center.y);
+          let rectW = 2 * Math.min(center.x - left - start, left + x - center.x);
+          let centeredH = 2 * Math.min(center.y - (y + 1 - rectH), y + 1 - center.y), centerY = center.y;
+          if (locateStarCenter) {
+            // Keep horizontal alignment, but allow the square's center to move
+            // vertically into the star body instead of being held by its tips.
+            rectW = centeredH = Math.min(rectW, rectH);
+            centerY = Math.max(y + 1 - rectH + centeredH / 2, Math.min(center.y, y + 1 - centeredH / 2));
+          }
           if (rectW <= 0 || centeredH <= 0) continue;
+          if (candidates && centeredH > (candidates.get(rectW) || 0)) candidates.set(rectW, centeredH);
           const value = rectW * centeredH;
-          if (value > area) {
+          if (value > area || (locateStarCenter && value === area && best && Math.abs(centerY - center.y) < Math.abs(best.y - center.y))) {
             // Inset each edge by 6 template pixels; keep tiny motifs usable.
-            best = { x: center.x, y: center.y, w: rectW - 2 * Math.min(6, rectW * .03),
+            best = { x: center.x, y: centerY, w: rectW - 2 * Math.min(6, rectW * .03),
               h: centeredH - 2 * Math.min(6, centeredH * .03) }; area = value;
           }
         }
         stack.push(x);
       }
+    }
+    if (candidates) {
+      // Keep only non-dominated centered rectangles. Cache this small frontier
+      // once per template, not another pixel scan for every photo or draw.
+      let tallest = 0, squareSide = 0;
+      for (const [w, h] of [...candidates].sort((a, b) => b[0] - a[0])) {
+        if (h <= tallest) continue;
+        choices.push({ x: center.x, y: center.y, w: w - 2 * Math.min(6, w * .03), h: h - 2 * Math.min(6, h * .03) });
+        const candidate = choices[choices.length - 1];
+        squareSide = Math.max(squareSide, Math.min(candidate.w, candidate.h));
+        tallest = h;
+      }
+      // Before upload, show the largest centered safe square rather than the
+      // widest area-maximizing rectangle. Uploaded stars still use all choices.
+      best = { x: center.x, y: center.y, w: squareSide, h: squareSide };
     }
     return best || { x: center.x, y: center.y, w: 0, h: 0 };
   }
@@ -235,23 +258,47 @@
       const paint = surface.getContext('2d', { willReadFrequently: true }); paint.drawImage(source, 0, 0, cfg.w, cfg.h);
       const pixels = paint.getImageData(0, 0, cfg.w, cfg.h).data, mask = outerMask(pixels, cfg.w, cfg.h);
       const bounds = measureBackgroundRegions(cfg, pixels, states);
-      cached = { cfg, slots: cfg.slots, placements: cfg.placements, photoTypes: cfg.photoTypes, frames,
+      const choices = [], fitted = bounds.map(() => new WeakMap());
+      cached = { cfg, slots: cfg.slots, placements: cfg.placements, photoTypes: cfg.photoTypes, frames, choices, fitted,
         areas: bounds.map((region, index) => {
-          const heart = (states[index]?.motif?.type || cfg.photoTypes?.[index] || cfg.slots[index].type) === 'heart' || heartOnly(cfg.slots[index], states[index]);
+          const type = states[index]?.motif?.type || cfg.photoTypes?.[index] || cfg.slots[index].type;
+          const heart = type === 'heart' || heartOnly(cfg.slots[index], states[index]);
           // Hearts are top-heavy: lift photos by 4% of the heart alone, never
           // the I / ME / VE group. Recalculate safety around this visual center.
-          const center = { x: region.x, y: region.y - (heart ? region.h * .04 : 0) };
-          return safePhotoArea(mask, cfg.w, cfg.h, region, center);
+          let center = { x: region.x, y: region.y - (heart ? region.h * .04 : 0) };
+          if (type === 'star' && !heart) {
+            const body = safePhotoArea(mask, cfg.w, cfg.h, region, center, null, true);
+            center = { x: body.x, y: body.y };
+            choices[index] = [];
+          }
+          return safePhotoArea(mask, cfg.w, cfg.h, region, center, choices[index]);
         }) };
       photoAreaCache.set(source, cached);
     }
     return cached.areas;
   }
 
-  function photoFrame(cfg, source, states, index) {
-    const area = photoAreas(cfg, source, states)[index];
+  function photoFrame(cfg, source, states, index, image) {
+    let area = photoAreas(cfg, source, states)[index];
+    const cached = photoAreaCache.get(source), choices = cached.choices[index];
+    if (image && choices?.length) {
+      if (cached.fitted[index].has(image)) return cached.fitted[index].get(image);
+      const bounds = visiblePhotoBounds(image);
+      if (bounds) {
+        let scale = Math.min(area.w / bounds.w, area.h / bounds.h);
+        for (const candidate of choices) {
+          const value = Math.min(candidate.w / bounds.w, candidate.h / bounds.h);
+          if (value > scale) { area = candidate; scale = value; }
+        }
+        // Use the visible photo's actual fitted extent for selection/hit frames,
+        // not unused space in the enclosing safe candidate rectangle.
+        area = { x: area.x, y: area.y, w: bounds.w * scale, h: bounds.h * scale };
+      }
+    }
     // Keep the existing 62% default and manual size controls as the baseline.
-    return { x: area.x, y: area.y, w: area.w / .62, h: area.h / .62 };
+    const result = { x: area.x, y: area.y, w: area.w / .62, h: area.h / .62 };
+    if (image && choices?.length) cached.fitted[index].set(image, result);
+    return result;
   }
 
   function visiblePhotoBounds(image) {
@@ -275,7 +322,7 @@
   function drawFittedPhoto(ctx, cfg, source, states, index, image) {
     const bounds = visiblePhotoBounds(image);
     if (!bounds) return;
-    const f = photoFrame(cfg, source, states, index), state = states[index], size = state.size ?? .62;
+    const f = photoFrame(cfg, source, states, index, image), state = states[index], size = state.size ?? .62;
     if (!f.w || !f.h) return;
     const ratio = Math.min(f.w * size / bounds.w, f.h * size / bounds.h) * (state.imageScale ?? 1);
     const x = f.x + (state.dx || 0) + (state.imageDx || 0), y = f.y + (state.dy || 0) + (state.imageDy || 0);
