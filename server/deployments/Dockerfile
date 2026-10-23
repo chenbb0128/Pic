@@ -5,6 +5,7 @@ FROM golang:${GO_VERSION}-bookworm AS build
 WORKDIR /src
 
 COPY go.mod go.sum ./
+ARG GOPROXY=https://proxy.golang.org,direct
 RUN go mod download
 
 COPY . .
