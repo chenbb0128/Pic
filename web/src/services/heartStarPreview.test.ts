@@ -19,7 +19,7 @@ function setup() {
     }, createElement: () => ({ download: '', click() { downloads.push(this.download) } }) },
     HeartStarWatermark: { preview(source: any) { return { width: source.width, height: source.height,
       toBlob(callback: (blob: Blob) => void) { snapshots.push(['watermark', source.width, source.height]); callback(new Blob()) } } } },
-    pngFilename: () => 'test.png', resizePreview() {}, sel: { value: 'test' },
+    pngFilename: () => 'test.png', resizePreview() {}, sel: { value: 'test' }, clip: { checked: true },
     templates: { test: { w: 1400, h: 2048, slots: [] } }, base: { complete: true, naturalWidth: 1400 },
     slotBackgrounds: { update() {}, busy: () => false, hasAny: () => true },
     backgroundDrag: { update() {} },

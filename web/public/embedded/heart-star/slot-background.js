@@ -4,6 +4,8 @@
   const layerCache = new WeakMap();
   const photoLayerCache = new WeakMap();
   const outlineCache = new WeakMap();
+  const photoAreaCache = new WeakMap();
+  const visiblePhotoCache = new WeakMap();
   const photoOnly = state => ['transparent', 'outline'].includes(state?.background?.type);
   function has(state) {
     const bg = state?.background;
@@ -192,6 +194,94 @@
       return { ...region, w: region.w / size, h: region.h / size };
     }
     return states[index]?.motif?.frame || cfg.slots[index];
+  }
+
+  function safePhotoArea(mask, width, height, region, center) {
+    const left = Math.max(0, Math.floor(region.x - region.w / 2)), right = Math.min(width, Math.ceil(region.x + region.w / 2));
+    const top = Math.max(0, Math.floor(region.y - region.h / 2)), bottom = Math.min(height, Math.ceil(region.y + region.h / 2));
+    const columns = right - left, heights = new Uint32Array(columns), stack = [];
+    let best = null, area = 0;
+    // Keep the chosen visual center fixed. A wider area above it must not pull the
+    // photo upwards; only consider centered rectangles inside the silhouette.
+    for (let y = top; y < bottom; y++) {
+      for (let x = 0; x < columns; x++) heights[x] = mask[(y * width + left + x) * 4 + 3] >= 128 ? heights[x] + 1 : 0;
+      stack.length = 0;
+      for (let x = 0; x <= columns; x++) {
+        const h = x === columns ? 0 : heights[x];
+        while (stack.length && heights[stack[stack.length - 1]] > h) {
+          const rectH = heights[stack.pop()], start = stack.length ? stack[stack.length - 1] + 1 : 0;
+          const rectW = 2 * Math.min(center.x - left - start, left + x - center.x);
+          const centeredH = 2 * Math.min(center.y - (y + 1 - rectH), y + 1 - center.y);
+          if (rectW <= 0 || centeredH <= 0) continue;
+          const value = rectW * centeredH;
+          if (value > area) {
+            // Inset each edge by 6 template pixels; keep tiny motifs usable.
+            best = { x: center.x, y: center.y, w: rectW - 2 * Math.min(6, rectW * .03),
+              h: centeredH - 2 * Math.min(6, centeredH * .03) }; area = value;
+          }
+        }
+        stack.push(x);
+      }
+    }
+    return best || { x: center.x, y: center.y, w: 0, h: 0 };
+  }
+
+  function photoAreas(cfg, source, states) {
+    const frames = states.map(state => state.motif?.frame);
+    let cached = photoAreaCache.get(source);
+    if (!cached || cached.cfg !== cfg || cached.slots !== cfg.slots || cached.placements !== cfg.placements || cached.photoTypes !== cfg.photoTypes ||
+        cached.frames.length !== frames.length || frames.some((frame, i) => frame !== cached.frames[i])) {
+      const surface = document.createElement('canvas'); surface.width = cfg.w; surface.height = cfg.h;
+      const paint = surface.getContext('2d', { willReadFrequently: true }); paint.drawImage(source, 0, 0, cfg.w, cfg.h);
+      const pixels = paint.getImageData(0, 0, cfg.w, cfg.h).data, mask = outerMask(pixels, cfg.w, cfg.h);
+      const bounds = measureBackgroundRegions(cfg, pixels, states);
+      cached = { cfg, slots: cfg.slots, placements: cfg.placements, photoTypes: cfg.photoTypes, frames,
+        areas: bounds.map((region, index) => {
+          const heart = (states[index]?.motif?.type || cfg.photoTypes?.[index] || cfg.slots[index].type) === 'heart' || heartOnly(cfg.slots[index], states[index]);
+          // Hearts are top-heavy: lift photos by 4% of the heart alone, never
+          // the I / ME / VE group. Recalculate safety around this visual center.
+          const center = { x: region.x, y: region.y - (heart ? region.h * .04 : 0) };
+          return safePhotoArea(mask, cfg.w, cfg.h, region, center);
+        }) };
+      photoAreaCache.set(source, cached);
+    }
+    return cached.areas;
+  }
+
+  function photoFrame(cfg, source, states, index) {
+    const area = photoAreas(cfg, source, states)[index];
+    // Keep the existing 62% default and manual size controls as the baseline.
+    return { x: area.x, y: area.y, w: area.w / .62, h: area.h / .62 };
+  }
+
+  function visiblePhotoBounds(image) {
+    if (visiblePhotoCache.has(image)) return visiblePhotoCache.get(image);
+    const width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
+    let bounds = { x: 0, y: 0, w: width, h: height };
+    try {
+      const surface = document.createElement('canvas'); surface.width = width; surface.height = height;
+      const paint = surface.getContext('2d', { willReadFrequently: true }); paint.drawImage(image, 0, 0);
+      const pixels = paint.getImageData(0, 0, width, height).data;
+      let left = width, top = height, right = -1, bottom = -1;
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (pixels[(y * width + x) * 4 + 3]) {
+        left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y);
+      }
+      bounds = right < 0 ? null : { x: left, y: top, w: right - left + 1, h: bottom - top + 1 };
+    } catch { /* Cross-origin images still fit using their complete dimensions. */ }
+    visiblePhotoCache.set(image, bounds);
+    return bounds;
+  }
+
+  function drawFittedPhoto(ctx, cfg, source, states, index, image) {
+    const bounds = visiblePhotoBounds(image);
+    if (!bounds) return;
+    const f = photoFrame(cfg, source, states, index), state = states[index], size = state.size ?? .62;
+    if (!f.w || !f.h) return;
+    const ratio = Math.min(f.w * size / bounds.w, f.h * size / bounds.h) * (state.imageScale ?? 1);
+    const x = f.x + (state.dx || 0) + (state.imageDx || 0), y = f.y + (state.dy || 0) + (state.imageDy || 0);
+    // Draw the FULL image with its original alpha, never a cropped source rect.
+    ctx.drawImage(image, x - (bounds.x + bounds.w / 2) * ratio, y - (bounds.y + bounds.h / 2) * ratio,
+      (image.naturalWidth || image.width) * ratio, (image.naturalHeight || image.height) * ratio);
   }
 
   function drawTemplate(ctx, cfg, source, states) {
@@ -478,5 +568,5 @@
     return { update, dragging: () => !!drag };
   }
 
-  globalThis.HeartStarBackground = { has, photoOnly, apply, draw, drawPhoto, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
+  globalThis.HeartStarBackground = { has, photoOnly, apply, draw, drawPhoto, drawFittedPhoto, photoFrame, photoAreas, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
 })();

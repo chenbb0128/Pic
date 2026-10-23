@@ -163,5 +163,8 @@
     return { active, selection, allowed, placement, replace, restore, source, rows, busy, catalog, reflow };
   }
 
-  globalThis.HeartStarMotifs = { create };
+  // Crop slots historically label some squares as hearts. Keep those legacy
+  // slots intact and expose the real artwork types for uncropped photo fitting.
+  const photoTypes = (name, assets) => originalRows[name]?.flat().map(id => assets[id].type);
+  globalThis.HeartStarMotifs = { create, photoTypes };
 })();

@@ -5,12 +5,18 @@ function setup(ids: number[]) {
   const old = { image: { name: 'old' }, url: 'old-url' }
   const states = Array.from({ length: 4 }, () => ({ imageScale: 2, imageDx: 7 }))
   const images: any[] = [], messages: string[] = [], revoked: string[] = []
+  const controls: Record<string, any> = {}
+  const control = (id: string) => controls[id] ||= { value: '', textContent: '', disabled: false }
   const env: any = {
     states, selectedSlots: new Set(ids), sel: { value: 'heart' }, templates: { heart: {} },
     replacedPhotos: new Map(Array.from({ length: 4 }, (_, i) => [i, old])),
     replacementUrls: new Set(['old-url']), replacementRequest: 0, replacementBusy: false,
     photoUploadRequest: 0, photoUploadBusy: false, photoUploadTarget: null, photos: [], urls: [], ignorePhotoClick: false,
     exportBusy: false, replacementTarget: null, replacePhotoFile: { value: '' }, filesEl: { value: '' },
+    clip: { checked: false }, HeartStarBackground: { photoOnly: (state: any) => ['transparent', 'outline'].includes(state?.background?.type) },
+    selectedSlot: ids[0] ?? 0, multiMode: ids.length > 1, updateCopyEditor() {},
+    document: { getElementById: control, querySelectorAll: () => [] },
+    slotSelect: control('slotSelect'), scale: control('scale'), sizeNumber: control('sizeNumber'), clipShape: control('clipShape'),
     Image: class { constructor() { images.push(this) } },
     URL: { createObjectURL: (file: any) => `url-${file.name}`, revokeObjectURL: (url: string) => revoked.push(url) },
     selectedPhotoTarget: () => ({ template: env.sel.value, states: env.states,
@@ -22,14 +28,48 @@ function setup(ids: number[]) {
   }
   const source = toolHtml.slice(toolHtml.indexOf('function slotPhoto('), toolHtml.indexOf('function hasSlotPhotos(')) +
     toolHtml.slice(toolHtml.indexOf('function releaseUnusedReplacementUrls('), toolHtml.indexOf('function selectedPhotoTarget(')) +
-    toolHtml.slice(toolHtml.indexOf('function setFiles('), toolHtml.indexOf('function renderThumbs('))
+    toolHtml.slice(toolHtml.indexOf('function setFiles('), toolHtml.indexOf('function renderThumbs(')) +
+    toolHtml.slice(toolHtml.indexOf('function updateControls('), toolHtml.indexOf('function setSelectedSize('))
   const feature = new Function('env', `with(env){${source};return {upload:setFiles,slotPhoto,
-    remove:typeof removeSelectedPhotos==='function'?removeSelectedPhotos:null}}`)(env)
+    updateControls,remove:typeof removeSelectedPhotos==='function'?removeSelectedPhotos:null}}`)(env)
   const file = (name: string) => ({ name, type: 'image/png' })
-  return { env, states, old, images, messages, revoked, ...feature, file }
+  return { env, states, old, images, messages, revoked, controls, ...feature, file }
 }
 
 describe('heart-star selected photo upload', () => {
+  it('automatically resets only uploaded positions to the preset uncropped photo area', () => {
+    const s = setup([1])
+    Object.assign(s.states[1]!, { size: 1.2, dx: 30, dy: -20, imageDy: 12, background: { type: 'color', color: '#ffccdd' } })
+    const before = structuredClone(s.states)
+    s.upload([s.file('fit')])
+    s.images[0].onload()
+    expect(s.states[1]).toMatchObject({ size: .62, dx: 0, dy: 0, imageScale: 1, imageDx: 0, imageDy: 0,
+      background: { type: 'color', color: '#ffccdd' } })
+    expect(s.states[0]).toEqual(before[0])
+    expect(s.states.slice(2)).toEqual(before.slice(2))
+  })
+
+  it('refreshes the placement size and offset controls after auto-fitting an uploaded photo', () => {
+    const s = setup([1])
+    Object.assign(s.states[1]!, { size: 1.2, dx: 30, dy: -20 })
+    s.updateControls()
+    expect(s.controls.sizeNumber.value).toBe('120')
+    s.upload([s.file('fit')])
+    s.images[0].onload()
+    expect(s.controls.sizeNumber.value).toBe('62')
+    expect(s.controls.offsetReadout.textContent).toBe('X 0 px　Y 0 px')
+  })
+
+  it.each(['transparent', 'outline', 'cropped'])('keeps the existing transforms in the separate %s mode', type => {
+    const s = setup([1])
+    if (type === 'cropped') s.env.clip.checked = true
+    else Object.assign(s.states[1]!, { background: { type } })
+    const before = structuredClone(s.states)
+    s.upload([s.file('unchanged')])
+    s.images[0].onload()
+    expect(s.states).toEqual(before)
+  })
+
   it('replaces only selected positions without resetting other photos or transforms', () => {
     const s = setup([1])
     s.upload([s.file('a')])
