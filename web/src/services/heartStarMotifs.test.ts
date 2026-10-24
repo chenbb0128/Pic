@@ -37,7 +37,185 @@ function setup(measureRegions?: (cfg: any, pixels: any) => any[]) {
 }
 
 describe('heart-star built-in motifs', () => {
-  it('limits only oversized small-heart asset dimensions to 20 mm without stretching or enlarging smaller artwork', () => {
+  it.each(['blue-square-small', 'blue-square', 'polka-circle-small', 'polka-circle'])('offers %s for mixed heart, star and letter selections without moving neighbors', async assetId => {
+    const s = setup()
+    const originalAssets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const asset = originalAssets[assetId]
+    Object.assign(s.assets, { [assetId]: asset })
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    s.env.states.push({ size: .5 })
+    const untouched = structuredClone(s.env.states[3])
+    expect(s.feature.allowed(asset, [0, 1, 2])).toBe(true)
+    await s.feature.replace([0, 1, 2], assetId)
+    for (const [i, maxW, maxH, centerX, centerY] of [[0, 200, 200, 100, 100], [1, 200, 200, 340, 100], [2, 300, 300, 150, 650]]) {
+      const motif = s.env.states[i!].motif, p = motif.placement
+      expect(motif.assetId).toBe(assetId)
+      expect(motif.type).toBe(asset.type)
+      expect(p.w).toBeLessThanOrEqual(maxW! + 1e-9)
+      expect(p.h).toBeLessThanOrEqual(maxH! + 1e-9)
+      expect(p.w / p.h).toBeCloseTo(asset.nativeW / asset.nativeH)
+      expect(p.x + p.w / 2).toBeCloseTo(centerX!)
+      expect(p.y + p.h / 2).toBeCloseTo(centerY!)
+      expect(motif.frame.w).toBeCloseTo(p.w * asset.frame.w)
+      expect(motif.frame.x).toBeCloseTo(p.x + p.w * asset.frame.x)
+    }
+    s.feature.source(s.env.base)
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8 })
+    expect(s.env.states[3]).toEqual(untouched)
+  })
+
+  it.each([
+    [19.5, 39, 100, 200], [10, 8, 100, 80], [19.5, 19.5, 195, 195],
+  ])('fits selected small hearts %s×%s without growing them during rendering or restore', async (nativeW, nativeH, wantW, wantH) => {
+    const s = setup()
+    Object.assign(s.assets.heart, { nativeW, nativeH })
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    await s.feature.replace([0], 'heart')
+    const motif = s.env.states[0].motif
+    expect(motif.placement.w).toBeCloseTo(wantW!)
+    expect(motif.placement.h).toBeCloseTo(wantH!)
+    s.feature.source(s.env.base)
+    expect(s.env.states[0].motif).toBe(motif)
+    s.env.states = structuredClone(s.env.states)
+    s.feature.source(s.env.base)
+    expect(s.feature.rows(144, 210)[0].width).toBeCloseTo(wantW! / 10)
+    expect(s.feature.rows(144, 210)[0].height).toBeCloseTo(wantH! / 10)
+  })
+
+  it('opens all motif choices for mixed-size selections in the preview controls', () => {
+    const s = setup(), controls = new Map<string, any>(), offered: string[] = []
+    s.env.selected = new Set([0, 2])
+    const element = () => ({ textContent: '', disabled: false, append() {} })
+    const document = { getElementById(id: string) {
+      if (!controls.has(id)) controls.set(id, { ...element(), replaceChildren() {} })
+      return controls.get(id)
+    }, createElement: () => ({ ...element(), style: {} }) }
+    let opened = false
+    const env = { document, motifEditor: s.feature, templates: { test: s.cfg }, sel: { value: 'test' },
+      base: { complete: true, naturalWidth: 1440 }, states: s.env.states, exportBusy: false,
+      widthInput: { value: '144' }, heightInput: { value: '210' },
+      customPicker: { querySelector: (id: string) => document.getElementById(id), querySelectorAll: () => [], showModal() { opened = true } },
+      filterCustomPicker(predicate: (asset: any) => boolean) { for (const [id, asset] of Object.entries(s.assets)) if (predicate(asset)) offered.push(id) },
+    }
+    const start = toolHtml.indexOf('function updateMotifControls(')
+    const code = toolHtml.slice(start, toolHtml.indexOf('function openCustomPicker(', start))
+    const ui = new Function('env', `with(env){let motifTableKey='',customPickerTarget=null;${code};return {updateMotifControls,openHeartMotifPicker}}`)(env)
+    ui.updateMotifControls()
+    expect(controls.get('replaceHeartMotif').disabled).toBe(false)
+    ui.openHeartMotifPicker()
+    expect(opened).toBe(true)
+    expect(offered).toEqual(['heart', 'star', 'combo'])
+  })
+
+  it('limits I/ME assets to 30 mm proportionally for custom layouts without enlarging smaller groups', () => {
+    const scope: any = {}
+    new Function('globalThis', source('template-motifs.js'))(scope)
+    const assets = {
+      tall: { group: 'I ♥ ME 组合', nativeW: 30, nativeH: 32 },
+      wide: { group: 'I ♥ ME 组合', nativeW: 36, nativeH: 30 },
+      small: { group: 'I ♥ ME 组合', nativeW: 29, nativeH: 28 },
+      heart: { type: 'heart', variant: '大款', nativeW: 32, nativeH: 31 },
+      ive: { group: 'I ♥ VE 组合', nativeW: 31, nativeH: 32 },
+    }
+    scope.HeartStarMotifs.limitIMe?.(assets)
+    expect(assets.tall).toMatchObject({ nativeW: 28.125, nativeH: 30 })
+    expect(assets.wide).toMatchObject({ nativeW: 30, nativeH: 25 })
+    expect(assets.small).toMatchObject({ nativeW: 29, nativeH: 28 })
+    expect(assets.heart).toMatchObject({ nativeW: 32, nativeH: 31 })
+    expect(assets.ive).toMatchObject({ nativeW: 31, nativeH: 32 })
+    const start = toolHtml.indexOf('function buildCustomLayout(')
+    const build = new Function(`${toolHtml.slice(start, toolHtml.indexOf('\n}', start) + 2)};return buildCustomLayout`)()
+    const cfg = build([{ id: 'r', groups: [{ id: 'g', assetId: 'tall', count: 1 }] }],
+      { tall: { ...assets.tall, frame: { x: .7, y: .25, w: .4, h: .5 } } }, 144, 210)
+    expect(cfg.placements[0]).toMatchObject({ w: 281.25, h: 300 })
+  })
+
+  it('initializes all small hearts at 19.5 mm width and I/ME patterns within 30 mm without altering other artwork', () => {
+    const scope: any = {}
+    for (const file of ['motif-catalog.js', 'ive-motifs.js', 'brown-motifs.js', 'pink-motifs.js',
+      'red-motifs.js', 'gold-leopard-motifs.js', 'yellow-motifs.js', 'sky-blue-motifs.js', 'light-blue-motifs.js', 'pattern-combos.js', 'template-motifs.js']) {
+      new Function('globalThis', source(file))(scope)
+    }
+    const start = toolHtml.indexOf('const customAssets=')
+    const initialize = toolHtml.slice(start, toolHtml.indexOf('\nObject.entries(templates)', start))
+    const originals = new Function(...Object.keys(scope),
+      `${initialize.slice(0, initialize.indexOf('HeartStarMotifs.limitSmallHearts'))};return customAssets`)(...Object.values(scope))
+    const assets = new Function(...Object.keys(scope), `${initialize};return customAssets`)(...Object.values(scope))
+    const groups = Object.values(assets).filter((asset: any) => asset.group === 'I ♥ ME 组合') as any[]
+    expect(groups.length).toBeGreaterThan(10)
+    groups.forEach(asset => {
+      expect(asset.nativeW).toBeLessThanOrEqual(30)
+      expect(asset.nativeH).toBeLessThanOrEqual(30)
+    })
+    const hearts = Object.entries(assets).filter(([, asset]: any) => asset.type === 'heart' && asset.variant === '小款') as [string, any][]
+    expect(hearts.length).toBeGreaterThan(20)
+    hearts.forEach(([id, asset]) => {
+      expect(asset.nativeW).toBe(19.5)
+      expect(asset.nativeH / asset.nativeW).toBeCloseTo(originals[id].nativeH / originals[id].nativeW)
+    })
+    for (const [id, asset] of Object.entries(assets) as [string, any][]) {
+      if (asset.group !== 'I ♥ ME 组合' && !(asset.type === 'heart' && asset.variant === '小款')) expect(asset).toEqual(originals[id])
+    }
+  })
+
+  it.each([[144, 210], [210, 144]])('fits original I/ME artwork and photo openings inside 30 mm on %s×%s paper', (widthMm, heightMm) => {
+    const s = setup()
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    Object.assign(s.cfg, { widthMm, heightMm, motifSlots: [
+      { assetId: 'heart', variant: '小款', type: 'heart', box: [0, 0, 190, 190] },
+      { assetId: 'star', variant: '小款', type: 'star', box: [240, 0, 200, 200] },
+      { assetId: 'combo', variant: '原款', type: 'heart', box: [0, 500, 320, 320] },
+    ] })
+    const rendered = s.feature.source(s.env.base)
+    const row = s.feature.rows(widthMm, heightMm)[2]
+    expect(row.width).toBeLessThanOrEqual(30)
+    expect(row.height).toBeLessThanOrEqual(30)
+    const motif = s.env.states[2].motif
+    expect(motif).toMatchObject({ assetId: 'combo', type: 'heart', backgroundPart: 'heart' })
+    expect(motif.placement.x + motif.placement.w / 2).toBeCloseTo(160)
+    expect(motif.placement.y + motif.placement.h / 2).toBeCloseTo(660)
+    const factor = motif.placement.w / 320
+    expect(motif.placement.h / 320).toBeCloseTo(factor)
+    expect(motif.frame.x).toBeCloseTo(motif.placement.x + 210 * factor)
+    expect(motif.frame.y).toBeCloseTo(motif.placement.y + 75 * factor)
+    expect(motif.frame.w).toBeCloseTo(150 * factor)
+    expect(s.env.states[2].size).toBe(.62)
+    expect(s.draws).toContainEqual(['clear', 0, 500, 320, 320])
+    expect(s.feature.source(s.env.base)).toBe(rendered)
+    s.feature.restore([2])
+    expect(s.feature.rows(widthMm, heightMm)[2].width).toBeLessThanOrEqual(30)
+  })
+
+  it('caps oversized I/ME replacements and saved artwork without losing photos, texture or edits', async () => {
+    const s = setup()
+    Object.assign(s.assets.combo, { nativeW: 40, nativeH: 32 })
+    s.cfg.slots[2] = { x: 280, y: 600, w: 160, h: 200 }
+    Object.assign(s.cfg, { motifSlots: [
+      { assetId: 'heart', variant: '小款', box: [0, 0, 190, 190] },
+      { assetId: 'star', variant: '小款', box: [240, 0, 200, 200] },
+      { assetId: 'combo', variant: '原款', box: [0, 500, 400, 400] },
+    ] })
+    await s.feature.replace([2], 'combo')
+    expect(s.env.states[2].motif.placement).toEqual({ x: 50, y: 580, w: 300, h: 240 })
+    expect(s.env.states[2].motif.frame).toEqual({ x: 260, y: 640, w: 120, h: 120 })
+    const savedImage = { name: 'saved-texture' }
+    Object.assign(s.env.states[2], { imageDx: 9, background: { type: 'image' }, motif: {
+      assetId: 'combo', image: savedImage, placement: { x: 0, y: 500, w: 400, h: 320 },
+      frame: { x: 280, y: 580, w: 160, h: 160 }, type: 'heart', backgroundPart: 'heart',
+    } })
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    const row = s.feature.rows(144, 210)[2]
+    expect(row.width).toBeCloseTo(29.8)
+    expect(row.height).toBeCloseTo(23.84)
+    expect(s.env.states[2].motif.image).toBe(savedImage)
+    expect(s.env.states[2].motif.frame.w).toBeCloseTo(119.2)
+    expect(s.env.states[2]).toMatchObject({ size: .62, imageDx: 9, background: { type: 'image' } })
+    const normalized = s.env.states[2].motif
+    s.feature.source(s.env.base)
+    expect(s.env.states[2].motif).toBe(normalized)
+  })
+
+  it('normalizes all small-heart asset widths to 19.5 mm, scaling height proportionally even for smaller artwork', () => {
     const scope: any = {}
     new Function('globalThis', source('template-motifs.js'))(scope)
     const assets = {
@@ -49,10 +227,12 @@ describe('heart-star built-in motifs', () => {
       combo: { type: 'heart', variant: '原款', nativeW: 30, nativeH: 31 },
     }
     scope.HeartStarMotifs.limitSmallHearts?.(assets)
-    expect(assets.tall.nativeW).toBeCloseTo(19.090909)
-    expect(assets.tall.nativeH).toBe(20)
-    expect(assets.wide).toMatchObject({ nativeW: 20, nativeH: 16 })
-    expect(assets.small).toMatchObject({ nativeW: 19, nativeH: 18 })
+    expect(assets.tall.nativeW).toBe(19.5)
+    expect(assets.tall.nativeH).toBeCloseTo(20.428571)
+    expect(assets.wide.nativeW).toBe(19.5)
+    expect(assets.wide.nativeH).toBeCloseTo(15.6)
+    expect(assets.small.nativeW).toBe(19.5)
+    expect(assets.small.nativeH).toBeCloseTo(18.473684)
     expect(assets.large).toMatchObject({ nativeW: 30, nativeH: 31 })
     expect(assets.star).toMatchObject({ nativeW: 21, nativeH: 22 })
     expect(assets.combo).toMatchObject({ nativeW: 30, nativeH: 31 })
@@ -69,23 +249,49 @@ describe('heart-star built-in motifs', () => {
     const originalStar = structuredClone(s.env.states[1])
     const rendered = s.feature.source(s.env.base)
     const row = s.feature.rows(144, 210)[0]
-    // Leave two native raster pixels for anti-aliasing at the 20 mm limit.
-    expect(row.width).toBeCloseTo(19.8)
-    expect(row.height).toBeCloseTo(18.9)
+    expect(row.width).toBeCloseTo(19.5)
+    expect(row.height).toBeCloseTo(18.613636)
     const motif = s.env.states[0].motif
     expect(motif.placement.x + motif.placement.w / 2).toBeCloseTo(110)
     expect(motif.placement.y + motif.placement.h / 2).toBeCloseTo(105)
-    expect(motif.frame.x).toBeCloseTo(101)
-    expect(motif.frame.y).toBeCloseTo(100.5)
-    expect(motif.frame.w).toBeCloseTo(108)
+    expect(motif.frame.x).toBeCloseTo(101.136364)
+    expect(motif.frame.y).toBeCloseTo(100.568182)
+    expect(motif.frame.w).toBeCloseTo(106.363636)
     expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8, background: { type: 'color' } })
     expect(s.env.states[1]).toEqual(originalStar)
-    expect(s.env.states[2].motif).toBeUndefined()
+    expect(s.feature.rows(144, 210)[2].width).toBeCloseTo(29.8)
+    expect(s.feature.rows(144, 210)[2].height).toBeCloseTo(29.8)
+    expect(s.env.states[2].motif.backgroundPart).toBe('heart')
     expect(s.draws.some(call => call[0] === 'clear' && call[3] === 220 && call[4] === 210)).toBe(true)
     expect(s.feature.source(s.env.base)).toBe(rendered)
     s.feature.restore([0])
     s.feature.source(s.env.base)
-    expect(s.feature.rows(144, 210)[0].width).toBeCloseTo(19.8)
+    expect(s.feature.rows(144, 210)[0].width).toBeCloseTo(19.5)
+  })
+
+  it.each([[144, 210], [210, 144]])('normalizes smaller and saved small hearts to a centered 19.5 mm width on %s×%s paper', (widthMm, heightMm) => {
+    const s = setup()
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    Object.assign(s.cfg, { widthMm, heightMm, motifSlots: [
+      { assetId: 'heart', variant: '小款', type: 'heart', box: [0, 0, 180, 160] },
+      { assetId: 'star', variant: '小款', type: 'star', box: [240, 0, 180, 160] },
+      { assetId: 'combo', variant: '原款', type: 'heart', box: [0, 500, 280, 280] },
+    ] })
+    const image = { name: 'saved-heart' }
+    s.env.states[0].motif = { assetId: 'heart', image, placement: { x: 0, y: 0, w: 180, h: 160 },
+      frame: { x: 100, y: 100, w: 120, h: 120 }, type: 'heart', backgroundPart: 'whole' }
+    s.feature.source(s.env.base)
+    const motif = s.env.states[0].motif
+    expect(s.feature.rows(widthMm, heightMm)[0].width).toBeCloseTo(19.5)
+    expect(motif.placement.w / motif.placement.h).toBeCloseTo(1.125)
+    expect(motif.placement.x + motif.placement.w / 2).toBeCloseTo(90)
+    expect(motif.placement.y + motif.placement.h / 2).toBeCloseTo(80)
+    expect(motif.frame.w / motif.placement.w).toBeCloseTo(2 / 3)
+    expect(motif.image).toBe(image)
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8, background: { type: 'color' } })
+    s.feature.source(s.env.base)
+    expect(s.env.states[0].motif).toBe(motif)
+    expect(s.env.states[1].motif).toBeUndefined()
   })
 
   it('rebuilds a restored custom catalog from current placements and keeps replacements after row changes', async () => {
@@ -126,15 +332,16 @@ describe('heart-star built-in motifs', () => {
     expect(s.env.states[2].size).toBe(.62)
     expect(s.env.states[0].motif).toBeUndefined()
   })
-  it('replaces selected same-size motifs only, preserving photo transforms and original template geometry', async () => {
+  it('replaces only selected motifs, preserving photo transforms and original template geometry', async () => {
     const s = setup()
     await s.feature.replace([0], 'heart')
-    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8, motif: { assetId: 'heart', placement: { x: 0, y: 0, w: 200, h: 200 } } })
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8, motif: { assetId: 'heart', placement: { x: 2.5, y: 2.5, w: 195, h: 195 },
+      frame: { x: 100, y: 100, w: 117, h: 117 } } })
     expect(s.env.states[0].background).toBeUndefined()
     expect(s.env.states[1]).toEqual({ size: .8 })
     expect(s.cfg.slots[0]).toEqual({ x: 100, y: 100, w: 120, h: 120 })
-    expect(s.feature.rows(144, 210)[0]).toMatchObject({ name: '新爱心', width: 20, height: 20 })
-    expect(s.feature.rows(288, 420)[0]).toMatchObject({ width: 40, height: 40 })
+    expect(s.feature.rows(144, 210)[0]).toMatchObject({ name: '新爱心', width: 19.5, height: 19.5 })
+    expect(s.feature.rows(288, 420)[0]).toMatchObject({ width: 39, height: 39 })
   })
 
   it('replaces I ♥ ME as a complete group and derives its new photo opening', async () => {
@@ -159,10 +366,10 @@ describe('heart-star built-in motifs', () => {
     Object.assign(asset, { variant, nativeW, nativeH, frame: { x: .5, y: .5, w: .6, h: .6 } })
     expect(s.feature.allowed(asset, [0, 2])).toBe(true)
     expect(s.feature.allowed(s.assets.combo, [0, 2])).toBe(true)
-    expect(s.feature.allowed({ ...asset, type: 'circle' }, [0, 2])).toBe(false)
-    expect(s.feature.allowed({ ...asset, type: 'square' }, [0, 2])).toBe(false)
+    expect(s.feature.allowed({ ...asset, type: 'circle' }, [0, 2])).toBe(true)
+    expect(s.feature.allowed({ ...asset, type: 'square' }, [0, 2])).toBe(true)
     await s.feature.replace([0, 2], type)
-    const w = Math.min(nativeW * 10, 300), h = w * nativeH / nativeW
+    const w = type === 'heart' && variant === '小款' ? 195 : Math.min(nativeW * 10, 300), h = w * nativeH / nativeW
     for (const [id, y] of [[0, 0], [2, 500]] as const) {
       const motif = s.env.states[id].motif
       expect(motif).toMatchObject({ assetId: type, type, backgroundPart: 'whole' })
@@ -184,7 +391,7 @@ describe('heart-star built-in motifs', () => {
     expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8 })
   })
 
-  it.each(['小款', '大款'])('allows only matching %s hearts and stars, fitting the existing position', async variant => {
+  it.each(['小款', '大款'])('allows replacements across %s sizes and shapes, fitting the existing position', async variant => {
     const s = setup()
     Object.assign(s.cfg, { motifSlots: [
       { row: 0, column: 0, name: '爱心', variant, box: [0, 0, 200, 200] },
@@ -196,15 +403,19 @@ describe('heart-star built-in motifs', () => {
     s.assets.star.nativeH = 21
     s.assets.heart.variant = variant
     expect(s.feature.allowed(s.assets.star, [0, 1])).toBe(true)
-    expect(s.feature.allowed(s.assets.star, [0, 2])).toBe(false)
-    expect(s.feature.allowed({ ...s.assets.star, variant: variant === '小款' ? '大款' : '小款', nativeW: 10, nativeH: 10 }, [0])).toBe(false)
-    expect(s.feature.allowed({ ...s.assets.star, type: 'circle', nativeW: 10, nativeH: 10 }, [0])).toBe(false)
+    expect(s.feature.allowed(s.assets.star, [0, 2])).toBe(true)
+    expect(s.feature.allowed({ ...s.assets.star, variant: variant === '小款' ? '大款' : '小款', nativeW: 10, nativeH: 10 }, [0])).toBe(true)
+    expect(s.feature.allowed({ ...s.assets.star, type: 'circle', nativeW: 10, nativeH: 10 }, [0])).toBe(true)
+    expect(s.feature.allowed(undefined, [0])).toBe(false)
+    expect(s.feature.allowed(s.assets.star, [])).toBe(false)
+    expect(s.feature.allowed(s.assets.star, [0, 999])).toBe(false)
     await s.feature.replace([0], 'star')
     expect(s.env.states[0].motif).toMatchObject({ assetId: 'star', type: 'star', placement: { x: 0, y: 0, w: 200, h: 200 }, frame: { x: 140, y: 50, w: 80, h: 100 } })
     await s.feature.replace([1], 'combo')
-    expect(s.env.states[1].motif).toBeUndefined()
+    expect(s.env.states[1].motif).toMatchObject({ assetId: 'combo', placement: { x: 240, y: 0, w: 200, h: 200 },
+      frame: { x: 380, y: 50, w: 80, h: 100 } })
     await s.feature.replace([0], 'heart')
-    expect(s.env.states[0].motif.placement).toEqual({ x: 0, y: 0, w: 200, h: 200 })
+    expect(s.env.states[0].motif.placement).toEqual(variant === '小款' ? { x: 2.5, y: 2.5, w: 195, h: 195 } : { x: 0, y: 0, w: 200, h: 200 })
     expect(s.feature.allowed(s.assets.star, [0])).toBe(true)
     expect(s.env.states[0].imageDx).toBe(8)
   })
@@ -245,7 +456,7 @@ describe('heart-star built-in motifs', () => {
     expect(catalog[0]).toMatchObject({ type, assetId: firstId, box: [bounds[0].x - 105, bounds[0].y - 110, 210, 220] })
     const selectedAsset = 'star'
     expect(s.feature.allowed((s.assets as any)[selectedAsset], [0])).toBe(true)
-    expect(s.feature.allowed({ ...(s.assets as any)[selectedAsset], variant: '大款' }, [0])).toBe(false)
+    expect(s.feature.allowed({ ...(s.assets as any)[selectedAsset], variant: '大款' }, [0])).toBe(true)
     expect(s.feature.allowed((s.assets as any)[firstId], [0])).toBe(true)
     await s.feature.replace([0], selectedAsset)
     expect(s.env.states[0].motif.assetId).toBe(selectedAsset)
@@ -260,8 +471,8 @@ describe('heart-star built-in motifs', () => {
     const restoredRows = s.feature.rows(144, 210)
     catalog.forEach((meta: any, i: number) => {
       if (meta.type === 'heart' && meta.variant === '小款') {
-        expect(restoredRows[i].width).toBeLessThanOrEqual(20.000001)
-        expect(restoredRows[i].height).toBeLessThanOrEqual(20.000001)
+        expect(restoredRows[i].width).toBeCloseTo(19.5)
+        expect(restoredRows[i].height / restoredRows[i].width).toBeCloseTo(220 / templates[name].h * 210 / (210 / templates[name].w * 144))
       }
     })
   })
@@ -277,15 +488,18 @@ describe('heart-star built-in motifs', () => {
     s.assets.heart.variant = variant
     for (const assetId of ['heart', 'star'] as const) {
       expect(s.feature.allowed(s.assets[assetId], [0, 1])).toBe(true)
-      expect(s.feature.allowed({ ...s.assets[assetId], variant: variant === '小款' ? '大款' : '小款' }, [0, 1])).toBe(false)
-      expect(s.feature.allowed(s.assets[assetId], [0, 2])).toBe(false)
+      expect(s.feature.allowed({ ...s.assets[assetId], variant: variant === '小款' ? '大款' : '小款' }, [0, 1])).toBe(true)
+      expect(s.feature.allowed(s.assets[assetId], [0, 2])).toBe(true)
       await s.feature.replace([0, 1], assetId)
-      expect(s.env.states[0].motif).toMatchObject({ assetId, type: assetId, placement: { x: 0, y: 0, w: 200, h: 200 } })
-      expect(s.env.states[1].motif).toMatchObject({ assetId, type: assetId, placement: { x: 240, y: 0, w: 200, h: 200 } })
+      const smallHeart = assetId === 'heart' && variant === '小款'
+      expect(s.env.states[0].motif).toMatchObject({ assetId, type: assetId,
+        placement: smallHeart ? { x: 2.5, y: 2.5, w: 195, h: 195 } : { x: 0, y: 0, w: 200, h: 200 } })
+      expect(s.env.states[1].motif).toMatchObject({ assetId, type: assetId,
+        placement: smallHeart ? { x: 242.5, y: 2.5, w: 195, h: 195 } : { x: 240, y: 0, w: 200, h: 200 } })
       expect(s.env.states[0].imageDx).toBe(8)
       expect(s.env.states[2].motif).toBeUndefined()
     }
-    expect(s.feature.allowed(s.assets.combo, [0, 1])).toBe(false)
+    expect(s.feature.allowed(s.assets.combo, [0, 1])).toBe(true)
   })
 
   it('supports custom-layout replacements using placements and refuses text templates', async () => {
@@ -307,6 +521,55 @@ describe('heart-star built-in motifs', () => {
     s.env.cfg = { text: true, slots: [{}] }
     expect(s.feature.active()).toBe(false)
     expect(s.feature.selection()).toEqual([])
+  })
+
+  it.each([
+    ['heart', 40, 20, 180, 120, 180, 90, '大款'],
+    ['heart', 20, 40, 180, 120, 60, 120, '大款'],
+    ['heart', 18, 12, 180, 120, 180, 120, '大款'],
+    ['heart', 10, 8, 180, 120, 100, 80, '大款'],
+    ['heart', 19.5, 39, 180, 120, 60, 120, '小款'],
+    ['heart', 10, 8, 180, 120, 100, 80, '小款'],
+    ['star', 40, 20, 180, 120, 180, 90, '大款'],
+    ['combo', 40, 20, 180, 120, 180, 90, '原款'],
+  ] as const)('fits oversized custom %s %s×%s into %s×%s without enlarging artwork that already fits (%s)', async (assetId, nativeW, nativeH, boxW, boxH, wantW, wantH, variant) => {
+    const s = setup()
+    s.env.name = '自定义排版.png'
+    s.env.cfg = { w: 1440, h: 2100, custom: true,
+      slots: [{ row: 0, column: 0 }, { row: 0, column: 1 }],
+      placements: [{ assetId: 'heart', x: 100, y: 200, w: boxW, h: boxH },
+        { assetId: 'star', x: 500, y: 200, w: 200, h: 200 }] }
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    Object.assign(s.assets[assetId], { nativeW, nativeH, variant })
+    const neighbor = structuredClone(s.env.states[1])
+    expect(s.feature.allowed(s.assets[assetId], [0])).toBe(true)
+    await s.feature.replace([0], assetId)
+    const motif = s.env.states[0].motif
+    expect(motif.placement.w).toBeCloseTo(wantW)
+    expect(motif.placement.h).toBeCloseTo(wantH)
+    expect(motif.placement.w / motif.placement.h).toBeCloseTo(nativeW / nativeH)
+    expect(motif.placement.x + motif.placement.w / 2).toBeCloseTo(190)
+    expect(motif.placement.y + motif.placement.h / 2).toBeCloseTo(260)
+    expect(motif.frame.w).toBeCloseTo(wantW * .4)
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8 })
+    s.feature.source(s.env.base)
+    expect(s.env.states[0].motif).toBe(motif)
+    expect(s.env.states[1]).toEqual(neighbor)
+    s.feature.reflow()
+    expect(s.env.states[0].motif.placement.w).toBeCloseTo(wantW)
+  })
+
+  it('does not regrow fitted custom small hearts or letter groups during rendering or restore', () => {
+    const s = setup()
+    s.env.name = '自定义排版.png'
+    s.env.cfg = { w: 1440, h: 2100, custom: true, slots: [{ row: 0, column: 0 }, { row: 1, column: 0 }],
+      placements: [{ assetId: 'heart', x: 10, y: 20, w: 100, h: 90 }, { assetId: 'combo', x: 10, y: 300, w: 150, h: 150 }] }
+    s.env.states = [{ size: .62 }, { size: .8 }]
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    expect(s.feature.source(s.env.base)).toBe(s.env.base)
+    expect(s.feature.rows(144, 210)[0]).toMatchObject({ width: 10, height: 9 })
+    s.feature.restore([0])
+    expect(s.feature.source(s.env.base)).toBe(s.env.base)
   })
 
   it('caches composite artwork and restores selected motifs without undoing unselected replacements', async () => {
@@ -347,6 +610,69 @@ describe('heart-star built-in motifs', () => {
 })
 
 describe('heart-star catalog and overflow details', () => {
+  it.each([
+    ['solid', 'heart', '-small', 'rose-heart-small', '浅蓝纯色爱心'],
+    ['solid', 'heart', '', 'rose-heart', '浅蓝纯色爱心'],
+    ['solid', 'star', '-small', 'mint-star-small', '浅蓝纯色星星'],
+    ['solid', 'star', '', 'mint-star', '浅蓝纯色星星'],
+    ['stripe', 'heart', '-small', 'rose-heart-small', '浅蓝竖条纹爱心'],
+    ['stripe', 'heart', '', 'rose-heart', '浅蓝竖条纹爱心'],
+    ['stripe', 'star', '-small', 'mint-star-small', '浅蓝竖条纹星星'],
+    ['stripe', 'star', '', 'mint-star', '浅蓝竖条纹星星'],
+  ])('offers light-blue %s %s%s with preserved silhouette dimensions and usable selection geometry', async (pattern, type, suffix, originalId, label) => {
+    const scope: any = {}
+    new Function('globalThis', source('light-blue-motifs.js'))(scope)
+    expect(scope.HeartStarLightBlue).toBeDefined()
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const before = structuredClone(assets), entries = scope.HeartStarLightBlue.register(assets)
+    const id = `light-blue-${pattern}-${type}${suffix}`, asset = entries[id], original = assets[originalId!]
+    expect(Object.keys(entries)).toHaveLength(8)
+    expect(asset).toMatchObject({ type, baseName: label, group: '浅蓝色款', variant: original.variant,
+      nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+    const png = readFileSync(new URL(asset.src, directory))
+    expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([original.w * 4, original.h * 4])
+    expect(png[25]).toBe(6)
+    expect(assets).toEqual(before)
+    const s = setup()
+    Object.assign(s.assets, entries)
+    await s.feature.replace([2], id)
+    expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type, backgroundPart: 'whole' } })
+    expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8, background: { type: 'color' } })
+  })
+  it.each([
+    ['sky-blue-polka-heart-small', 'rose-heart-small', '天蓝波点爱心', '天蓝色款'],
+    ['sky-blue-polka-heart', 'rose-heart', '天蓝波点爱心', '天蓝色款'],
+    ['sky-blue-stripe-heart-small', 'rose-heart-small', '天蓝竖条纹爱心', '天蓝色款'],
+    ['sky-blue-stripe-heart', 'rose-heart', '天蓝竖条纹爱心', '天蓝色款'],
+    ['ime-sky-blue-polka', 'ime-rose', '天蓝波点 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-sky-blue-polka', 'ive-rose', '天蓝波点 I ♥ VE', 'I ♥ VE 组合'],
+    ['ime-sky-blue-stripe', 'ime-rose', '天蓝竖条纹 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-sky-blue-stripe', 'ive-rose', '天蓝竖条纹 I ♥ VE', 'I ♥ VE 组合'],
+  ])('offers %s with proportional artwork and photo geometry without altering existing motifs', async (id, originalId, label, group) => {
+    const scope: any = {}
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    new Function('globalThis', source('ive-motifs.js'))(scope)
+    Object.assign(assets, scope.HeartStarIVE.register(assets))
+    const before = structuredClone(assets)
+    new Function('globalThis', source('sky-blue-motifs.js'))(scope)
+    expect(scope.HeartStarSkyBlue).toBeDefined()
+    const entries = scope.HeartStarSkyBlue.register(assets), original = assets[originalId!], asset = entries[id!]
+    expect(Object.keys(entries)).toHaveLength(8)
+    expect(asset).toMatchObject({ baseName: label, group, type: 'heart', variant: original.variant,
+      nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+    const png = readFileSync(new URL(asset.src, directory))
+    expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([original.w * 4, original.h * 4])
+    expect(png[25]).toBe(6) // RGBA: retain transparent silhouettes for photo composition.
+    expect(assets).toEqual(before)
+    const s = setup()
+    Object.assign(s.assets, entries)
+    await s.feature.replace([2], id!)
+    expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type: 'heart',
+      backgroundPart: original.variant === '原款' ? 'heart' : 'whole' } })
+    expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8, background: { type: 'color' } })
+  })
   it.each([
     ['yellow-polka-heart-small', 'rose-heart-small', '黄色波点爱心', '黄色款'],
     ['yellow-polka-heart', 'rose-heart', '黄色波点爱心', '黄色款'],
@@ -525,5 +851,19 @@ describe('heart-star catalog and overflow details', () => {
     expect(() => build([{ id: 'r', groups: [{ id: 'g', assetId: 'a', count: 7 }] }], assets, 144, 210)).toThrow(/超出纸张 14\.00 mm/)
     const rows = Array.from({ length: 10 }, (_, i) => ({ id: String(i), groups: [{ id: 'g', assetId: 'a', count: 1 }] }))
     expect(() => build(rows, assets, 144, 210)).toThrow(/超出纸张 14\.00 mm/)
+    expect(assets.a).toMatchObject({ nativeW: 20, nativeH: 20 })
   })
+
+  it('keeps custom rows at native size when they fit exactly or have extra space', () => {
+    const start = toolHtml.indexOf('function buildCustomLayout(')
+    const build = new Function(`${toolHtml.slice(start, toolHtml.indexOf('\n}', start) + 2)};return buildCustomLayout`)()
+    const assets = { a: { nativeW: 20, nativeH: 10, frame: { x: .5, y: .5, w: .4, h: .6 } } }
+    const rows = [{ id: 'r', groups: [{ id: 'g', assetId: 'a', count: 6 }] }]
+    for (const width of [136, 144]) {
+      const layout = build(rows, assets, width, 210)
+      layout.placements.forEach((p: any) => expect(p).toMatchObject({ w: 200, h: 100 }))
+      expect(layout.slots[0]).toMatchObject({ w: 80, h: 60 })
+    }
+  })
+
 })

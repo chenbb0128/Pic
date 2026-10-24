@@ -11,6 +11,9 @@ function setup() {
     new Function('globalThis', readFileSync(new URL(`../../public/embedded/heart-star/${file}`, import.meta.url), 'utf8'))(scope)
     Object.assign(assets, scope[api!].register(assets))
   }
+  new Function('globalThis', readFileSync(new URL('../../public/embedded/heart-star/template-motifs.js', import.meta.url), 'utf8'))(scope)
+  scope.HeartStarMotifs.limitSmallHearts(assets)
+  scope.HeartStarMotifs.limitIMe(assets)
   const path = new URL('../../public/embedded/heart-star/heart-preset.js', import.meta.url)
   if (existsSync(path)) new Function('globalThis', readFileSync(path, 'utf8'))(scope)
   const start = toolHtml.indexOf('function buildCustomLayout(')
@@ -30,6 +33,7 @@ describe('heart-star independent 210×144 template', () => {
       const a = assets[p.assetId]
       expect(p.w).toBeCloseTo(a.nativeW * 10)
       expect(p.h).toBeCloseTo(a.nativeH * 10)
+      if (a.type === 'heart' && a.variant === '小款') expect(p.w).toBe(195)
       expect(p.x).toBeGreaterThanOrEqual(30)
       expect(p.y).toBeGreaterThanOrEqual(30)
       expect(p.x + p.w).toBeLessThanOrEqual(2070.001)

@@ -706,8 +706,9 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
   scene: BoardScene = { paper: paper.value, assets: placedAssets.value, placements: placements.value,
     numberingEnabled: numberingEnabled.value, footerText: footerText.value }): void {
   context.clearRect(0, 0, width, height)
-  const scaleX = width / scene.paper.widthMm
-  const scaleY = height / numberedPaper(scene.paper, scene.numberingEnabled).heightMm
+  const output = numberedPaper(scene.paper, scene.numberingEnabled)
+  const scaleX = width / output.widthMm
+  const scaleY = height / output.heightMm
   const imageById = new Map(scene.assets.map((asset) => [asset.id, asset]))
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
@@ -877,7 +878,7 @@ onBeforeUnmount(() => {
 function pointMm(event: PointerEvent, canvas: HTMLCanvasElement): { xMm: number; yMm: number } {
   const rect = canvas.getBoundingClientRect()
   return {
-    xMm: (event.clientX - rect.left) / rect.width * paper.value.widthMm,
+    xMm: (event.clientX - rect.left) / rect.width * outputPaper.value.widthMm,
     yMm: (event.clientY - rect.top) / rect.height * outputPaper.value.heightMm,
   }
 }
@@ -906,7 +907,7 @@ function onPointerDown(event: PointerEvent): void {
   const canvas = preview.value
   if (!adjusting.value || !canvas || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
   const point = pointMm(event, canvas)
-  if (point.yMm >= paper.value.heightMm) return
+  if (point.xMm >= paper.value.widthMm || point.yMm >= paper.value.heightMm) return
   if (adjustTool.value === 'select') {
     const previousIndices = event.shiftKey ? [...selectedPlacementIndices.value] : []
     selectedPlacementIndex.value = null
@@ -1227,7 +1228,7 @@ async function copyFooterNumber(): Promise<void> {
           <input v-model="footerText" type="text" aria-label="底部编号" :required="numberingEnabled" maxlength="200" placeholder="输入订单号或客户编号" class="studio-input min-w-0 flex-1 disabled:opacity-40" :disabled="!numberingEnabled || exporting || uploading" />
           <button type="button" class="studio-choice shrink-0 px-3 text-xs disabled:opacity-40" :disabled="!numberingEnabled || !footerText.trim() || exporting || uploading" @click="copyFooterNumber">复制编号</button>
         </div>
-        <p class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">{{ numberingEnabled ? `底部另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加底部高度。' }}各画板独立设置。</p>
+        <p class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">{{ numberingEnabled ? `${paper.widthMm > paper.heightMm ? '右侧' : '底部'}另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加编号区。' }}各画板独立设置。</p>
       </details>
       <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
         <summary class="studio-section-summary">管理模式</summary>
@@ -1362,7 +1363,7 @@ async function copyFooterNumber(): Promise<void> {
             </div>
             <div class="mt-3 flex items-center justify-between gap-2 text-sm"><strong>画板 {{ board.index + 1 }}</strong><span v-if="board.index === activeBoardIndex" class="text-xs text-violet-600">当前画板</span></div>
             <p class="mt-1 text-xs text-slate-500">{{ board.preset }} · {{ board.paper.widthMm }} × {{ board.paper.heightMm }} mm · 已排 {{ board.placements.length }} 个</p>
-            <p v-if="board.numberingEnabled" class="mt-1 break-all text-xs text-violet-600">编号：{{ board.footerText || '待填写' }} · 底部另加 3mm</p>
+            <p v-if="board.numberingEnabled" class="mt-1 break-all text-xs text-violet-600">编号：{{ board.footerText || '待填写' }} · {{ board.paper.widthMm > board.paper.heightMm ? '右侧' : '底部' }}另加 3mm</p>
           </button>
         </div>
       </section>

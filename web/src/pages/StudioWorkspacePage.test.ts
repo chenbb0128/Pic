@@ -25,8 +25,8 @@ describe('overflow artboards', () => {
     expect(html.match(/<input[^>]*aria-label="启用底部编号"[^>]*>/)?.[0]).toContain('checked')
     expect(html).toMatch(/<input[^>]*aria-label="底部编号"[^>]*required/)
     expect(html).toContain('复制编号')
-    expect(html).toContain('293 × 213 mm')
-    expect(html).toContain('底部另加 3mm')
+    expect(html).toContain('296 × 210 mm')
+    expect(html).toContain('右侧另加 3mm')
   })
 
   it('底部编号：复制编号和下单文案均不清空，分块导出绘制编号，编码失败保留输入', async () => {
@@ -53,7 +53,7 @@ describe('overflow artboards', () => {
       expect(written).toEqual(['订单A'])
       expect(state.footerText).toBe('订单A')
       await state.generate()
-      expect(output).toEqual([[11535, 8386]])
+      expect(output).toEqual([[11654, 8268]])
       expect(context.fillText.mock.lastCall![0]).toBe('订单A')
       await state.copyOrDownload()
       expect(state.footerText).toBe('订单A')
@@ -137,6 +137,45 @@ describe('overflow artboards', () => {
       state.adjustTool = 'select'
       state.onPointerDown({ button: 0, clientX: 10, clientY: 110, pointerId: 1, preventDefault() {} })
       expect(state.boxSelection).toBeNull()
+    } finally { state.preview = null; cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('横向编号：预览、总览和弹窗在右侧加宽，保持图片尺寸及坐标，编号区不参与框选', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = footerContext()
+    const canvas = { width: 2130, height: 1440, getContext: () => context,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 213, height: 144 }),
+      setPointerCapture() {}, hasPointerCapture: () => false }
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [{ ...asset('one', 1, 20), ratioLocked: false }]
+      state.customWidth = 210
+      state.customHeight = 144
+      state.orientation = 'landscape'
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerText = '横向订单'
+      state.watermarkEnabled = false
+      await nextTick()
+      const before = JSON.stringify(state.placements)
+      expect(state.outputPaper).toEqual({ widthMm: 213, heightMm: 144 })
+      state.preview = canvas
+      state.renderPreview()
+      expect(context.rect).toHaveBeenLastCalledWith(2100, 0, 30, 1440)
+      expect(context.drawImage).toHaveBeenLastCalledWith(state.assets[0].image, -100, -100, 200, 200)
+      expect(state.pointMm({ clientX: 100, clientY: 100 }, canvas)).toEqual({ xMm: 100, yMm: 100 })
+      const thumbnail = { width: 0, height: 0, getContext: () => context }
+      state.setOverviewCanvas(0, thumbnail)
+      expect([thumbnail.width, thumbnail.height]).toEqual([400, 270])
+      const proof = state.createProofCanvas()
+      expect([proof.width, proof.height]).toEqual([1600, 1082])
+      state.adjusting = true
+      state.adjustTool = 'select'
+      state.onPointerDown({ button: 0, clientX: 212, clientY: 10, pointerId: 1, preventDefault() {} })
+      expect(state.boxSelection).toBeNull()
+      expect(JSON.stringify(state.placements)).toBe(before)
+      state.numberingEnabled = false
+      expect(state.outputPaper).toEqual({ widthMm: 210, heightMm: 144 })
     } finally { state.preview = null; cleanup(); vi.unstubAllGlobals() }
   })
 
@@ -234,6 +273,41 @@ describe('overflow artboards', () => {
       expect(state.footerText).toBe('')
       expect(state.boards[0].footerText).toBe('')
       expect(state.activeBoardIndex).toBe(1)
+    } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('混合画板编号：批量导出分别使用竖向底部和横向右侧编号区', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const context = footerContext()
+    const output: number[][] = []
+    const png = vi.spyOn(studioImage, 'canvasPng').mockImplementation(async canvas => {
+      output.push([canvas.width, canvas.height]); return new Blob(['png'])
+    })
+    const download = vi.spyOn(studioImage, 'downloadBlob').mockImplementation(() => {})
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { callback(0); return 1 })
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [asset('one', 8)]
+      state.customWidth = 108
+      state.customHeight = 144
+      state.orientation = 'portrait'
+      state.numberingEnabled = true
+      state.footerText = '竖向订单'
+      state.dpi = 254
+      state.resetLayout()
+      await nextTick()
+      state.createRemainingBoard()
+      state.customWidth = 210
+      state.customHeight = 144
+      state.orientation = 'landscape'
+      state.footerText = '横向订单'
+      state.resetLayout()
+      await nextTick()
+      await state.exportAllBoards()
+      expect(output).toEqual([[1080, 1470], [2130, 1440]])
+      expect(context.rect).toHaveBeenLastCalledWith(2100, 0, 30, 1440)
+      expect(state.footerText).toBe('')
+      expect(state.boards[0].footerText).toBe('')
     } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
   })
 

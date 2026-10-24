@@ -1,22 +1,31 @@
 import type { PaperSize } from '../domain/studio/layout'
 
 export function numberedPaper(paper: PaperSize, enabled: boolean): PaperSize {
-  return { widthMm: paper.widthMm, heightMm: paper.heightMm + (enabled ? 3 : 0) }
+  const right = paper.widthMm > paper.heightMm
+  return { widthMm: paper.widthMm + (enabled && right ? 3 : 0), heightMm: paper.heightMm + (enabled && !right ? 3 : 0) }
 }
 
 export function drawStudioFooter(context: CanvasRenderingContext2D, width: number, height: number,
   paper: PaperSize, enabled: boolean, text: string): void {
   if (!enabled || !text) return
-  const scaleX = width / paper.widthMm
-  const scaleY = height / numberedPaper(paper, enabled).heightMm
+  const output = numberedPaper(paper, enabled), right = paper.widthMm > paper.heightMm
+  const scaleX = width / output.widthMm
+  const scaleY = height / output.heightMm
+  const contentWidth = paper.widthMm * scaleX
   const contentHeight = paper.heightMm * scaleY
-  const maxWidth = Math.max(1, width - 2 * scaleX)
-  let fontSize = 1.8 * scaleY
+  const padding = right ? scaleY : scaleX
+  const maxWidth = Math.max(1, (right ? height : width) - 2 * padding)
+  let fontSize = 1.8 * (right ? scaleX : scaleY)
   // Preserve the caller's transform, including the offset used by tiled exports.
   context.save()
   context.beginPath()
-  context.rect(0, contentHeight, width, height - contentHeight)
+  if (right) context.rect(contentWidth, 0, width - contentWidth, height)
+  else context.rect(0, contentHeight, width, height - contentHeight)
   context.clip()
+  if (right) {
+    context.translate((paper.widthMm + 1.5) * scaleX, 0)
+    context.rotate(Math.PI / 2)
+  }
   context.fillStyle = '#28252d'
   context.textAlign = 'left'
   context.textBaseline = 'middle'
@@ -28,6 +37,6 @@ export function drawStudioFooter(context: CanvasRenderingContext2D, width: numbe
     fontSize *= maxWidth / measured
     context.font = font()
   }
-  context.fillText(text, scaleX, (paper.heightMm + 1.5) * scaleY)
+  context.fillText(text, padding, right ? 0 : (paper.heightMm + 1.5) * scaleY)
   context.restore()
 }
