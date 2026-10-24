@@ -70,15 +70,16 @@ describe('heart-star lightweight preview', () => {
     expect(feature.selectionBoard()).toMatchObject({ contentWidthRatio: 1578 / 1600, contentRatio: 1 })
   })
 
-  it('reports landscape total width and right-side numbering in the size summary', () => {
+  it('reports portrait PNG dimensions while explaining landscape editing numbering', () => {
     const { feature, output, controls } = setup()
     Object.assign(output, { w: 210, h: 144, totalW: 213, totalH: 144, pxW: 5031, pxH: 3402,
       contentPxW: 4961, contentPxH: 3402, footerPxW: 70, footerPxH: 0, footerSide: 'right' })
     feature.draw(false)
-    expect(controls.get('exportSize').textContent).toBe('213 × 144 mm')
-    expect(controls.get('footerAreaLabel').textContent).toBe('右侧编号区')
-    expect(controls.get('footerAreaSize').textContent).toBe('另加 3 mm 宽')
-    expect(controls.get('footerSizeHint').textContent).toBe('含右侧编号区')
+    expect(controls.get('exportSize').textContent).toBe('144 × 213 mm')
+    expect(controls.get('exportPixels').textContent).toBe('3402 × 5031 px')
+    expect(controls.get('footerAreaLabel').textContent).toBe('底部编号区')
+    expect(controls.get('footerAreaSize').textContent).toBe('另加 3 mm 高（编辑时在右侧）')
+    expect(controls.get('footerSizeHint').textContent).toBe('含底部编号区')
   })
 
   it('drags photos using the content width rather than the full width including the right strip', () => {

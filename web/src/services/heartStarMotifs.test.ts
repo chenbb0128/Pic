@@ -288,6 +288,29 @@ describe('heart-star built-in motifs', () => {
 
 describe('heart-star catalog and overflow details', () => {
   it.each([
+    ['heart', '-small', 'rose-heart-small', '棕金豹纹爱心'],
+    ['heart', '', 'rose-heart', '棕金豹纹爱心'],
+    ['star', '-small', 'mint-star-small', '棕金豹纹星星'],
+    ['star', '', 'mint-star', '棕金豹纹星星'],
+  ])('offers a gold leopard %s%s without replacing existing black-and-white motifs', async (type, suffix, originalId, label) => {
+    const scope: any = {}
+    new Function('globalThis', source('gold-leopard-motifs.js'))(scope)
+    expect(scope.HeartStarGoldLeopard).toBeDefined()
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    const before = structuredClone(assets), entries = scope.HeartStarGoldLeopard.register(assets)
+    expect(Object.keys(entries)).toHaveLength(4)
+    const id = `gold-leopard-${type}${suffix}`, asset = entries[id], original = assets[originalId!]
+    expect(asset).toMatchObject({ type, baseName: label, variant: original.variant,
+      nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+    expect([...readFileSync(new URL(asset.src, directory)).subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect(assets).toEqual(before)
+    const s = setup()
+    Object.assign(s.assets, entries)
+    await s.feature.replace([2], id)
+    expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type, backgroundPart: 'whole' } })
+    expect(s.env.states[0].motif).toBeUndefined()
+  })
+  it.each([
     ['heart', '-small', 'rose-heart-small', '大红波点爱心'],
     ['heart', '', 'rose-heart', '大红波点爱心'],
     ['star', '-small', 'mint-star-small', '大红波点星星'],
