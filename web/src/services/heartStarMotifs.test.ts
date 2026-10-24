@@ -288,6 +288,33 @@ describe('heart-star built-in motifs', () => {
 
 describe('heart-star catalog and overflow details', () => {
   it.each([
+    ['yellow-polka-heart-small', 'rose-heart-small', '黄色波点爱心', '黄色款'],
+    ['yellow-polka-heart', 'rose-heart', '黄色波点爱心', '黄色款'],
+    ['ime-yellow-polka', 'ime-yellow-glow', '黄色波点 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-yellow-polka', 'ive-yellow-glow', '黄色波点 I ♥ VE', 'I ♥ VE 组合'],
+  ])('offers %s with matching photo geometry and leaves other selected artwork unchanged', async (id, originalId, label, group) => {
+    const scope: any = {}
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    new Function('globalThis', source('ive-motifs.js'))(scope)
+    Object.assign(assets, scope.HeartStarIVE.register(assets))
+    const before = structuredClone(assets)
+    new Function('globalThis', source('yellow-motifs.js'))(scope)
+    const entries = scope.HeartStarYellow?.register(assets) || {}
+    const original = assets[originalId!], asset = entries[id!]
+    expect(asset).toMatchObject({ baseName: label, group, type: 'heart', variant: original.variant,
+      nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+    const png = readFileSync(new URL(asset.src, directory))
+    expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([original.w * 4, original.h * 4])
+    expect(assets).toEqual(before)
+    const s = setup()
+    Object.assign(s.assets, entries)
+    await s.feature.replace([2], id!)
+    expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type: 'heart',
+      backgroundPart: original.variant === '原款' ? 'heart' : 'whole' } })
+    expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8, background: { type: 'color' } })
+  })
+  it.each([
     ['heart', '-small', 'rose-heart-small', '棕金豹纹爱心'],
     ['heart', '', 'rose-heart', '棕金豹纹爱心'],
     ['star', '-small', 'mint-star-small', '棕金豹纹星星'],
