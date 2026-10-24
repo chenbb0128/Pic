@@ -189,7 +189,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./preview-watermark.js?v=picture-preview-3"></script>
 <script src="./editor-interactions.js?v=right-numbering-3"></script>
 <script src="./motif-catalog.js?v=motifs-1"></script>
-<script src="./template-motifs.js?v=cloud-catalog-9"></script>
+<script src="./template-motifs.js?v=small-hearts-20mm-10"></script>
 <script src="./ive-motifs.js?v=ive-1"></script>
 <script src="./brown-motifs.js?v=brown-2"></script>
 <script src="./pink-motifs.js?v=pink-stars-2"></script>
@@ -454,6 +454,7 @@ Object.assign(customAssets,HeartStarRed.register(customAssets));
 Object.assign(customAssets,HeartStarGoldLeopard.register(customAssets));
 Object.assign(customAssets,HeartStarYellow.register(customAssets));
 Object.assign(customAssets,HeartStarPatternCombos.register(customAssets));
+HeartStarMotifs.limitSmallHearts(customAssets);
 Object.entries(templates).forEach(([name,cfg])=>{cfg.photoTypes=HeartStarMotifs.photoTypes(name,customAssets)});
 function buildCustomLayout(rows,assets,widthMm,heightMm){
  const w=Number(widthMm)*10,h=Number(heightMm)*10,margin=30,minGap=20;

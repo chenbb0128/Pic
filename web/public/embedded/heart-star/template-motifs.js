@@ -1,6 +1,15 @@
 (() => {
   'use strict';
 
+  const smallHeart = asset => asset?.type === 'heart' && asset.variant === '小款';
+  function limitSmallHearts(assets) {
+    for (const [id, asset] of Object.entries(assets)) {
+      if (!smallHeart(asset)) continue;
+      const factor = Math.min(1, 20 / asset.nativeW, 20 / asset.nativeH);
+      if (factor < 1) assets[id] = { ...asset, nativeW: asset.nativeW * factor, nativeH: asset.nativeH * factor };
+    }
+  }
+
   const repeat = (id, count) => Array(count).fill(id);
   const pair = (a, b, count) => [...repeat(a, count), ...repeat(b, count)];
   function colorRows(square, star, heartA, heartB, comboA, comboB) {
@@ -72,7 +81,8 @@
     function placement(id, asset) {
       const [x, y, w, h] = catalog()[id].box, cfg = getTemplate(), width = cfg.widthMm || (cfg.custom ? cfg.w / 10 : 144), height = cfg.heightMm || (cfg.custom ? cfg.h / 10 : 210);
       // Keep the original slot and fit replacement artwork without enlarging it.
-      const factor = Math.min(1, w / cfg.w * width / asset.nativeW, h / cfg.h * height / asset.nativeH);
+      const factor = Math.min(1, w / cfg.w * width / asset.nativeW, h / cfg.h * height / asset.nativeH,
+        ...(smallHeart(asset) ? [20 / asset.nativeW, 20 / asset.nativeH] : []));
       const pw = asset.nativeW * factor / width * cfg.w, ph = asset.nativeH * factor / height * cfg.h;
       return { x: x + (w - pw) / 2, y: y + (h - ph) / 2, w: pw, h: ph };
     }
@@ -132,8 +142,36 @@
       redraw();
     }
 
+    function fitSmallHearts(base) {
+      if (!base || !(base.naturalWidth || base.width)) return;
+      const cfg = getTemplate(), states = getStates(), width = cfg.widthMm || (cfg.custom ? cfg.w / 10 : 144), height = cfg.heightMm || (cfg.custom ? cfg.h / 10 : 210);
+      catalog().forEach((meta, id) => {
+        const state = states[id];if (!state) return;
+        const current = state.motif, assetId = current?.assetId || meta.assetId ||
+          Object.keys(assets).find(key => assets[key].baseName === meta.name && assets[key].variant === meta.variant);
+        if (!smallHeart(assets[assetId])) return;
+        const [x, y, w, h] = meta.box, p = current?.placement || { x, y, w, h };
+        if (p.w / cfg.w * width < 20 - 1e-10 && p.h / cfg.h * height < 20 - 1e-10) return;
+        // Keep antialiased edge pixels inside 20 mm as well as the logical box.
+        const factor = Math.min(1, Math.max(1, Math.floor(20 / width * cfg.w) - 2) / p.w,
+          Math.max(1, Math.floor(20 / height * cfg.h) - 2) / p.h);
+        let image = current?.image;
+        if (!image) {
+          // Crop the actual template artwork so its original texture is preserved.
+          image = document.createElement('canvas');image.width = Math.ceil(w);image.height = Math.ceil(h);
+          const sx = (base.naturalWidth || base.width) / cfg.w, sy = (base.naturalHeight || base.height) / cfg.h;
+          image.getContext('2d').drawImage(base, x * sx, y * sy, w * sx, h * sy, 0, 0, image.width, image.height);
+        }
+        const placement = { x: p.x + p.w * (1 - factor) / 2, y: p.y + p.h * (1 - factor) / 2, w: p.w * factor, h: p.h * factor };
+        const frame = current?.frame || cfg.slots[id];
+        state.motif = { ...current, assetId, image, placement, type: 'heart', originalAssetId: meta.assetId, backgroundPart: 'whole',
+          frame: { x: placement.x + (frame.x - p.x) * factor, y: placement.y + (frame.y - p.y) * factor, w: frame.w * factor, h: frame.h * factor } };
+      });
+    }
+
     function source(base) {
       if (!active()) return base;
+      fitSmallHearts(base);
       const states = getStates(), values = states.map(state => state.motif);
       if (!values.some(Boolean)) { cached = null; return base; }
       if (cached?.base === base && cached.states === states &&
@@ -154,6 +192,7 @@
 
     function rows(widthMm, heightMm) {
       if (!active()) return [];
+      fitSmallHearts(getSource());
       const cfg = getTemplate(), states = getStates();
       return catalog().map((meta, id) => {
         const motif = states[id]?.motif, [x, y, w, h] = meta.box;
@@ -170,5 +209,5 @@
   // Crop slots historically label some squares as hearts. Keep those legacy
   // slots intact and expose the real artwork types for uncropped photo fitting.
   const photoTypes = (name, assets) => originalRows[name]?.flat().map(id => assets[id].type);
-  globalThis.HeartStarMotifs = { create, photoTypes };
+  globalThis.HeartStarMotifs = { create, photoTypes, limitSmallHearts };
 })();

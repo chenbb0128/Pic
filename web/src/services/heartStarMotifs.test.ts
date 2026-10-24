@@ -37,6 +37,57 @@ function setup(measureRegions?: (cfg: any, pixels: any) => any[]) {
 }
 
 describe('heart-star built-in motifs', () => {
+  it('limits only oversized small-heart asset dimensions to 20 mm without stretching or enlarging smaller artwork', () => {
+    const scope: any = {}
+    new Function('globalThis', source('template-motifs.js'))(scope)
+    const assets = {
+      tall: { type: 'heart', variant: '小款', nativeW: 21, nativeH: 22 },
+      wide: { type: 'heart', variant: '小款', nativeW: 25, nativeH: 20 },
+      small: { type: 'heart', variant: '小款', nativeW: 19, nativeH: 18 },
+      large: { type: 'heart', variant: '大款', nativeW: 30, nativeH: 31 },
+      star: { type: 'star', variant: '小款', nativeW: 21, nativeH: 22 },
+      combo: { type: 'heart', variant: '原款', nativeW: 30, nativeH: 31 },
+    }
+    scope.HeartStarMotifs.limitSmallHearts?.(assets)
+    expect(assets.tall.nativeW).toBeCloseTo(19.090909)
+    expect(assets.tall.nativeH).toBe(20)
+    expect(assets.wide).toMatchObject({ nativeW: 20, nativeH: 16 })
+    expect(assets.small).toMatchObject({ nativeW: 19, nativeH: 18 })
+    expect(assets.large).toMatchObject({ nativeW: 30, nativeH: 31 })
+    expect(assets.star).toMatchObject({ nativeW: 21, nativeH: 22 })
+    expect(assets.combo).toMatchObject({ nativeW: 30, nativeH: 31 })
+  })
+
+  it('shrinks oversized original small hearts around their centers in the rendered template and photo frame', () => {
+    const s = setup()
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    Object.assign(s.cfg, { motifSlots: [
+      { assetId: 'heart', variant: '小款', type: 'heart', box: [0, 0, 220, 210] },
+      { assetId: 'star', variant: '小款', type: 'star', box: [240, 0, 220, 210] },
+      { assetId: 'combo', variant: '原款', type: 'heart', box: [0, 500, 300, 300] },
+    ] })
+    const originalStar = structuredClone(s.env.states[1])
+    const rendered = s.feature.source(s.env.base)
+    const row = s.feature.rows(144, 210)[0]
+    // Leave two native raster pixels for anti-aliasing at the 20 mm limit.
+    expect(row.width).toBeCloseTo(19.8)
+    expect(row.height).toBeCloseTo(18.9)
+    const motif = s.env.states[0].motif
+    expect(motif.placement.x + motif.placement.w / 2).toBeCloseTo(110)
+    expect(motif.placement.y + motif.placement.h / 2).toBeCloseTo(105)
+    expect(motif.frame.x).toBeCloseTo(101)
+    expect(motif.frame.y).toBeCloseTo(100.5)
+    expect(motif.frame.w).toBeCloseTo(108)
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8, background: { type: 'color' } })
+    expect(s.env.states[1]).toEqual(originalStar)
+    expect(s.env.states[2].motif).toBeUndefined()
+    expect(s.draws.some(call => call[0] === 'clear' && call[3] === 220 && call[4] === 210)).toBe(true)
+    expect(s.feature.source(s.env.base)).toBe(rendered)
+    s.feature.restore([0])
+    s.feature.source(s.env.base)
+    expect(s.feature.rows(144, 210)[0].width).toBeCloseTo(19.8)
+  })
+
   it('rebuilds a restored custom catalog from current placements and keeps replacements after row changes', async () => {
     const s = setup()
     s.env.name = '自定义排版.png'
@@ -183,7 +234,7 @@ describe('heart-star built-in motifs', () => {
     s.env.name = name
     s.env.cfg = templates[name]
     Object.assign(s.assets, JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!))
-    s.env.base = { complete: true, naturalWidth: templates[name].w }
+    s.env.base = { complete: true, naturalWidth: templates[name].w, naturalHeight: templates[name].h }
     s.env.states = Array.from({ length: Number(count) }, () => ({ size: .62, imageDx: 8 }))
     expect(s.feature.active()).toBe(true)
     const catalog = s.feature.catalog()
@@ -203,7 +254,16 @@ describe('heart-star built-in motifs', () => {
     s.feature.source(s.env.base)
     expect(s.draws).toContainEqual(['clear', bounds[0].x - 105, bounds[0].y - 110, 210, 220])
     s.feature.restore([0])
-    expect(s.feature.source(s.env.base)).toBe(s.env.base)
+    s.feature.source(s.env.base)
+    expect(s.env.states[0].motif?.assetId).toBe(type === 'heart' ? firstId : undefined)
+    expect(s.env.states[0]).toMatchObject({ size: .62, imageDx: 8 })
+    const restoredRows = s.feature.rows(144, 210)
+    catalog.forEach((meta: any, i: number) => {
+      if (meta.type === 'heart' && meta.variant === '小款') {
+        expect(restoredRows[i].width).toBeLessThanOrEqual(20.000001)
+        expect(restoredRows[i].height).toBeLessThanOrEqual(20.000001)
+      }
+    })
   })
 
   it.each(['小款', '大款'])('replaces %s circles and squares with hearts or stars while preserving other positions', async variant => {
