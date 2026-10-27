@@ -3,8 +3,9 @@
 
   const smallHeart = asset => asset?.type === 'heart' && asset.variant === '小款';
   const smallHeartWidth = 19.5;
+  const smallStar = asset => asset?.type === 'star' && asset.variant === '小款';
   const iMe = asset => asset?.group === 'I ♥ ME 组合';
-  const sizeLimit = asset => iMe(asset) ? 30 : Infinity;
+  const sizeLimit = asset => smallStar(asset) ? 20 : iMe(asset) ? 30 : Infinity;
   function limitSmallHearts(assets) {
     for (const [id, asset] of Object.entries(assets)) {
       if (!smallHeart(asset)) continue;
@@ -16,6 +17,13 @@
     for (const [id, asset] of Object.entries(assets)) {
       if (!iMe(asset)) continue;
       const factor = Math.min(1, 30 / asset.nativeW, 30 / asset.nativeH);
+      if (factor < 1) assets[id] = { ...asset, nativeW: asset.nativeW * factor, nativeH: asset.nativeH * factor };
+    }
+  }
+  function limitSmallStars(assets) {
+    for (const [id, asset] of Object.entries(assets)) {
+      if (!smallStar(asset)) continue;
+      const factor = Math.min(1, 20 / asset.nativeW, 20 / asset.nativeH);
       if (factor < 1) assets[id] = { ...asset, nativeW: asset.nativeW * factor, nativeH: asset.nativeH * factor };
     }
   }
@@ -152,22 +160,23 @@
     function fitLimitedMotifs(base) {
       if (!base || !(base.naturalWidth || base.width)) return;
       const cfg = getTemplate(), states = getStates(), width = cfg.widthMm || (cfg.custom ? cfg.w / 10 : 144), height = cfg.heightMm || (cfg.custom ? cfg.h / 10 : 210);
-      // Custom layout placements and replacements are already fitted. Never regrow them on render.
-      if (cfg.custom) return;
       catalog().forEach((meta, id) => {
         const state = states[id];if (!state) return;
-        // New replacements retain their fitted size across preview, export and saved-work restore.
-        if (state.motif?.fitToSlot) return;
         const current = state.motif, assetId = current?.assetId || meta.assetId ||
           Object.keys(assets).find(key => assets[key].baseName === meta.name && assets[key].variant === meta.variant);
         const asset = assets[assetId], limit = sizeLimit(asset);
+        const cappedStar = smallStar(asset);
+        // Keep fitted artwork unchanged, except oversized stars from older saved layouts.
+        if ((cfg.custom || current?.fitToSlot) && !cappedStar) return;
         const fixedWidth = smallHeart(asset);
         if (!fixedWidth && !Number.isFinite(limit)) return;
         const [x, y, w, h] = meta.box, p = current?.placement || { x, y, w, h };
+        if (cappedStar && p.w / cfg.w * width <= limit + 1e-10 && p.h / cfg.h * height <= limit + 1e-10) return;
         if (fixedWidth ? Math.abs(p.w / cfg.w * width - smallHeartWidth) < 1e-10 :
             p.w / cfg.w * width < limit - 1e-10 && p.h / cfg.h * height < limit - 1e-10) return;
         // Fixed-width hearts keep their exact proportion; capped letter groups leave raster edge room.
-        const factor = fixedWidth ? smallHeartWidth / width * cfg.w / p.w : Math.min(1, Math.max(1, Math.floor(limit / width * cfg.w) - 2) / p.w,
+        const factor = fixedWidth ? smallHeartWidth / width * cfg.w / p.w : cappedStar ?
+          Math.min(1, limit / width * cfg.w / p.w, limit / height * cfg.h / p.h) : Math.min(1, Math.max(1, Math.floor(limit / width * cfg.w) - 2) / p.w,
           Math.max(1, Math.floor(limit / height * cfg.h) - 2) / p.h);
         let image = current?.image;
         if (!image) {
@@ -224,5 +233,5 @@
   // Crop slots historically label some squares as hearts. Keep those legacy
   // slots intact and expose the real artwork types for uncropped photo fitting.
   const photoTypes = (name, assets) => originalRows[name]?.flat().map(id => assets[id].type);
-  globalThis.HeartStarMotifs = { create, photoTypes, limitSmallHearts, limitIMe };
+  globalThis.HeartStarMotifs = { create, photoTypes, limitSmallHearts, limitSmallStars, limitIMe };
 })();

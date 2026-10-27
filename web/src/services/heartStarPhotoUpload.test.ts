@@ -31,12 +31,37 @@ function setup(ids: number[]) {
     toolHtml.slice(toolHtml.indexOf('function setFiles('), toolHtml.indexOf('function renderThumbs(')) +
     toolHtml.slice(toolHtml.indexOf('function updateControls('), toolHtml.indexOf('function setSelectedSize('))
   const feature = new Function('env', `with(env){${source};return {upload:setFiles,slotPhoto,
-    updateControls,remove:typeof removeSelectedPhotos==='function'?removeSelectedPhotos:null}}`)(env)
+    updateControls,applySolid:typeof applySolidPhotos==='function'?applySolidPhotos:null,
+    remove:typeof removeSelectedPhotos==='function'?removeSelectedPhotos:null}}`)(env)
   const file = (name: string) => ({ name, type: 'image/png' })
   return { env, states, old, images, messages, revoked, controls, ...feature, file }
 }
 
 describe('heart-star selected photo upload', () => {
+  it('persists the processed badge only after applying and clears it when restoring, uploading, or deleting', () => {
+    const s = setup([1]), result = { name: 'transparent' }
+    s.applySolid([{ id: 1, image: result, processed: true }])
+    expect(s.states[1]).toHaveProperty('photoBackgroundRemoved', true)
+    s.applySolid([{ id: 1, image: s.old.image, processed: false }])
+    expect(s.states[1]).not.toHaveProperty('photoBackgroundRemoved')
+    s.applySolid([{ id: 1, image: result, processed: true }])
+    s.upload([s.file('new')]); s.images[0].onload()
+    expect(s.states[1]).not.toHaveProperty('photoBackgroundRemoved')
+    s.applySolid([{ id: 1, image: result, processed: true }])
+    s.remove()
+    expect(s.states[1]).not.toHaveProperty('photoBackgroundRemoved')
+  })
+
+  it('applies background-removed photos without resetting transforms, motifs, or unselected photos', () => {
+    const s = setup([1])
+    Object.assign(s.states[1]!, { size: .7, dx: 8, imageDy: -4, motif: { assetId: 'heart' }, background: { type: 'outline' } })
+    const states = structuredClone(s.states), result = { name: 'transparent-result' }
+    expect(s.applySolid).toBeTypeOf('function')
+    s.applySolid([{ id: 1, image: result }])
+    expect(s.slotPhoto(1)).toBe(result)
+    expect([0, 2, 3].map(i => s.slotPhoto(i))).toEqual([s.old.image, s.old.image, s.old.image])
+    expect(s.states).toEqual(states)
+  })
   it('automatically resets only uploaded positions to the preset uncropped photo area', () => {
     const s = setup([1])
     Object.assign(s.states[1]!, { size: 1.2, dx: 30, dy: -20, imageDy: 12, background: { type: 'color', color: '#ffccdd' } })
