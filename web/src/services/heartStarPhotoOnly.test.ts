@@ -45,6 +45,40 @@ function combination(custom: boolean) {
 }
 
 describe('heart-star photo-only modes', () => {
+  it('keeps I/VE lettering when only the heart fill is transparent and centers the portrait in that heart', () => {
+    const { pixels, cfg, source } = combination(false)
+    const { api } = setup(pixels)
+    const state = { size: .62, dx: 0, dy: 0, imageScale: 1.2,
+      background: { type: 'transparent', photoBaseSize: .62, keepLetters: true } }
+    const target = surface()
+    api.drawTemplate(target.ctx, cfg, source, [state])
+    expect(target.calls).toContainEqual(['rect', 6, 1, 5, 4])
+    expect(target.calls.filter(call => call[0] === 'rect').slice(1)).not.toContainEqual(['rect', 0, 0, 12, 10])
+    const f = api.frame(cfg, source, [state], 0)
+    expect(f).toMatchObject({ x: 8.5, y: 3 })
+    expect(f.w * state.size).toBeCloseTo(5)
+    expect(f.h * state.size).toBeCloseTo(4)
+    const photo = { width: 200, height: 100 }, render = surface()
+    api.drawPhoto(render.ctx, cfg, source, [state], 0, photo)
+    expect(render.calls).toEqual([['image', photo, 5.5, 1.5, 6, 3]])
+  })
+  it('enlarges a transparent portrait to 120% of the complete group without distortion', () => {
+    const { pixels, cfg, source } = combination(false)
+    const { api } = setup(pixels)
+    const photo = { width: 12, height: 10 }
+    const normal = { size: .62, dx: 0, dy: 0, imageScale: 1, background: { type: 'transparent', photoBaseSize: .62 } }
+    const portrait = { ...normal, imageScale: 1.2 }
+    const original = surface(), enlarged = surface()
+    api.drawPhoto(original.ctx, cfg, source, [normal], 0, photo)
+    api.drawPhoto(enlarged.ctx, cfg, source, [portrait], 0, photo)
+    const before = original.calls.find(call => call[0] === 'image')!
+    const after = enlarged.calls.find(call => call[0] === 'image')!
+    expect(after[4]).toBeCloseTo(before[4] * 1.2)
+    expect(after[5]).toBeCloseTo(before[5] * 1.2)
+    expect(enlarged.calls.some(call => ['clip', 'fill', 'composite'].includes(call[0]))).toBe(false)
+    expect(after[2] + after[4] / 2).toBeCloseTo(6)
+    expect(after[3] + after[5] / 2).toBeCloseTo(5)
+  })
   it.each(['transparent', 'outline'])('applies %s only to selected slots and restores the original photo settings', type => {
     const { api, document } = setup()
     const states: any[] = [{ size: .62, dx: 4, imageScale: 2 }, { size: .8 }, { size: .4 }]
@@ -70,7 +104,7 @@ describe('heart-star photo-only modes', () => {
     for (const type of ['transparent', 'outline']) {
       const target = surface()
       api.drawTemplate(target.ctx, cfg, source, [{ background: { type } }])
-      expect(target.calls).toContainEqual(['rect', 1, 1, 10, 8])
+      expect(target.calls).toContainEqual(['rect', 0, 0, 12, 10])
       expect(target.calls).not.toContainEqual(['rect', 6, 1, 5, 4])
       expect(target.calls).toContainEqual(['clip', 'evenodd'])
     }
@@ -127,7 +161,7 @@ describe('heart-star photo-only modes', () => {
     api.apply(states, [0], { type: 'transparent' })
     const target = surface(), source = {}
     api.drawTemplate(target.ctx, cfg, source, states)
-    expect(target.calls).toContainEqual(['rect', 0, 0, 40, 60])
+    expect(target.calls).toContainEqual(['rect', -1, -1, 42, 62])
     expect(target.calls).not.toContainEqual(['rect', 60, 0, 40, 60])
     api.draw(target.ctx, states[0], 20, 30, 40, 60, source)
     expect(target.calls.some(call => call[0] === 'fill')).toBe(false)

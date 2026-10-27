@@ -4,14 +4,13 @@ import { matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
 import { clearHeartStarAccess, hasHeartStarAccess, rememberHeartStarAccess } from '../services/heartStarAccess'
 import { canLeaveHeartStar, heartStarNeedsSave } from '../services/heartStarLeave'
 
-// MVP entry guard only. Static tool files are not protected server-side.
-const ACCESS_PASSWORD = '87654321'
 const password = ref('')
 const unlocked = ref(false)
 const checkingAccess = ref(false)
+const locking = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=cloud-library-3`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=tool-session-1`
 const editorFrame = ref<HTMLIFrameElement | null>(null)
 function onBeforeUnload(event: BeforeUnloadEvent): void {
   if (heartStarNeedsSave(editorFrame.value)) { event.preventDefault(); event.returnValue = '' }
@@ -52,31 +51,35 @@ function onShortcutBackdrop(event: MouseEvent): void {
 onMounted(async () => {
   if (typeof window !== 'undefined') window.addEventListener?.('beforeunload', onBeforeUnload)
   checkingAccess.value = true
-  unlocked.value = await hasHeartStarAccess(ACCESS_PASSWORD)
-  checkingAccess.value = false
+  try { unlocked.value = await hasHeartStarAccess() }
+  catch (cause) { error.value = cause instanceof Error ? cause.message : '访问验证失败，请重试。' }
+  finally { checkingAccess.value = false }
 })
 
 async function unlock(): Promise<void> {
-  if (password.value !== ACCESS_PASSWORD) {
-    error.value = '密码错误，请重新输入。'
-    return
-  }
-  password.value = ''
+  if (checkingAccess.value) return
   error.value = ''
   loading.value = true
   checkingAccess.value = true
-  await rememberHeartStarAccess(ACCESS_PASSWORD)
-  unlocked.value = true
-  checkingAccess.value = false
+  try {
+    await rememberHeartStarAccess(password.value)
+    unlocked.value = true
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '访问验证失败，请重试。' }
+  finally { password.value = ''; checkingAccess.value = false }
 }
 
-function lock(): void {
+async function lock(): Promise<void> {
+  if (locking.value) return
   if (!window.confirm('重新锁定会清空此工具内尚未下载的编辑内容，确定继续吗？')) return
-  clearHeartStarAccess()
-  unlocked.value = false
-  password.value = ''
   error.value = ''
-  loading.value = true
+  locking.value = true
+  try {
+    await clearHeartStarAccess()
+    unlocked.value = false
+    password.value = ''
+    loading.value = true
+  } catch (cause) { error.value = cause instanceof Error ? cause.message : '锁定失败，请重试。当前编辑已保留。' }
+  finally { locking.value = false }
 }
 </script>
 
@@ -95,7 +98,7 @@ function lock(): void {
         <p id="heart-star-access-feedback" class="mt-2 min-h-5 text-xs text-rose-600" role="status">{{ error }}</p>
         <button type="submit" class="mt-3 min-h-12 w-full rounded-xl bg-pink-600 px-4 text-sm font-bold text-white hover:bg-pink-700">解锁使用</button>
       </form>
-      <p class="mt-5 text-xs leading-6 text-slate-500">仅此工具需要密码，其他功能照常使用。同一浏览器解锁后记住 30 天，密码更新后需重新解锁；图片默认在本机处理，使用共享保存时会上传到门店服务器。</p>
+      <p class="mt-5 text-xs leading-6 text-slate-500">验证工具密码后可直接保存到门店共享空间，无需另行登录。同一浏览器记住 30 天，密码更新后需重新验证；图片默认在本机处理，主动共享保存时才上传。</p>
     </div>
   </section>
   <section v-else class="flex h-[calc(100dvh-64px)] min-h-[420px] w-full min-w-0 flex-1 flex-col bg-[#faf8f9] lg:h-auto lg:min-h-0">
@@ -106,11 +109,12 @@ function lock(): void {
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2">
         <button type="button" aria-haspopup="dialog" aria-controls="heart-star-shortcut-guide" class="min-h-10 rounded-lg border border-pink-200 bg-pink-50 px-3 text-xs font-semibold text-pink-700 hover:bg-pink-100" @click="openShortcutGuide">快捷键指南</button>
-        <button type="button" class="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50" @click="lock">重新锁定</button>
+        <button type="button" :disabled="locking" class="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50" @click="lock">{{ locking ? '正在锁定…' : '重新锁定' }}</button>
       </div>
     </div>
+    <p v-if="error" class="shrink-0 px-4 py-2 text-xs text-rose-600" role="status">{{ error }}</p>
     <p v-if="loading" class="shrink-0 px-4 py-2 text-xs text-pink-700" role="status">正在载入模板工具…</p>
-    <iframe ref="editorFrame" :src="toolUrl" title="爱心星星排版工具" class="block min-h-0 w-full flex-1 border-0" sandbox="allow-scripts allow-same-origin allow-downloads allow-modals" allow="clipboard-write" @load="loading = false"></iframe>
+    <iframe ref="editorFrame" :src="toolUrl" title="爱心星星排版工具" class="block min-h-0 w-full flex-1 border-0" sandbox="allow-scripts allow-same-origin allow-downloads allow-modals allow-forms" allow="clipboard-write" @load="loading = false"></iframe>
     <dialog id="heart-star-shortcut-guide" ref="shortcutGuide" aria-labelledby="heart-star-shortcut-title" aria-describedby="heart-star-shortcut-note" class="shortcut-dialog m-auto rounded-2xl border border-pink-100 bg-white p-5 text-slate-800 shadow-xl backdrop:bg-slate-900/45 sm:p-6" @click="onShortcutBackdrop">
       <div class="mb-2 flex items-center justify-between gap-4">
         <h2 id="heart-star-shortcut-title" class="text-lg font-bold">快捷键指南</h2>

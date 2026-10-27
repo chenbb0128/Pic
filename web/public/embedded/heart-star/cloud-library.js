@@ -28,7 +28,7 @@
         error.status = response.status; throw error;
       }
       const blob = await response.blob();
-      if (blob.type !== 'image/png') throw Error('结果图格式无效，请重新登录或稍后重试');
+      if (blob.type !== 'image/png') throw Error('结果图格式无效，请重新验证访问密码或稍后重试');
       return blob;
     }
     const list = (kind, offset, query = '') => request('/' + kind + 's?offset=' + offset + '&q=' + encodeURIComponent(query));
@@ -66,15 +66,15 @@
     dialog.innerHTML = `<div class="cloud-head"><h2 id="cloudTitle">门店共享空间</h2><button type="button" class="btn" data-close aria-label="关闭共享空间">×</button></div>
       <p class="cloud-note">门店成员共享查看、编辑。作品保存原图、模板、可编辑排版及当前 DPI 高清结果 PNG；模板仅保留图案、背景和位置，不带客户照片。</p>
       <p class="cloud-status" role="status" aria-live="polite"></p>
-      <form class="cloud-login" hidden><label>门店账号<input name="username" required autocomplete="username" value="staff"></label><label>密码<input name="password" type="password" required autocomplete="current-password"></label><button class="btn primary" type="submit">登录共享空间</button><p class="cloud-note">登录记住 30 天；密码更改后需重新登录。此账号与工具访问密码独立。</p></form>
+      <form class="cloud-login" hidden><label>工具访问密码<input name="password" type="password" required autocomplete="current-password"></label><button class="btn primary" type="submit">验证并继续</button><p class="cloud-note">访问验证已过期，请使用工具访问密码重新验证，当前排版会保留。验证记住 30 天，无需门店账号。</p></form>
       <section class="cloud-content" hidden><p class="cloud-current"></p><label class="cloud-name">名称<input maxlength="100" placeholder="例如：客户名／订单号／模板名"></label>
       <div class="cloud-actions"><button type="button" class="btn primary" data-save>保存作品</button><button type="button" class="btn" data-copy>另存作品</button><button type="button" class="btn" data-template>存为模板</button></div>
       <p class="cloud-note">作品结果图不含预览水印和选框，保留编号。保存需上传原图并生成高清图片，请等候完成。若提示版本冲突，可“另存作品”保留当前编辑。</p>
-      <div class="cloud-list-head"><select aria-label="共享内容类型"><option value="project">共享作品</option><option value="template">共享模板库</option></select><button type="button" class="btn" data-refresh>刷新</button><button type="button" class="btn" data-logout>退出登录</button></div>
+      <div class="cloud-list-head"><select aria-label="共享内容类型"><option value="project">共享作品</option><option value="template">共享模板库</option></select><button type="button" class="btn" data-refresh>刷新</button></div>
       <form class="cloud-search" role="search"><input type="search" maxlength="200" aria-label="搜索共享排版名称或编号" placeholder="搜索名称／订单号／排版编号"><button type="submit" class="btn">搜索</button><button type="button" class="btn" data-clear-search>清空</button></form>
       <div class="cloud-list"></div><div class="cloud-pagination"><button type="button" class="btn" data-prev>上一页</button><span></span><button type="button" class="btn" data-next>下一页</button></div></section>`;
     document.body.append(dialog);
-    const el = selector => dialog.querySelector(selector), login = el('form'), content = el('.cloud-content'), name = el('.cloud-name input'), select = el('select'), list = el('.cloud-list');
+    const el = selector => dialog.querySelector(selector), login = el('.cloud-login'), content = el('.cloud-content'), name = el('.cloud-name input'), select = el('select'), list = el('.cloud-list');
     const status = (message, error = false) => { el('.cloud-status').textContent = message; el('.cloud-status').classList.toggle('error', error); };
     const current = () => {
       el('.cloud-current').textContent = active ? `当前：${active.name} · ${active.kind === 'template' ? '模板' : '作品'} · v${active.version}` : '当前尚未保存到共享空间';
@@ -158,7 +158,7 @@
       },
       loadImage: id => new Promise((resolve, reject) => {
         const image = new Image(); image.onload = () => { image.picFileId = id; resolve(image); };
-        image.onerror = () => reject(Error('图片载入失败，请重新登录或检查原文件是否完整；当前编辑已保留'));
+        image.onerror = () => reject(Error('图片载入失败，请重新验证访问密码或检查原文件是否完整；当前编辑已保留'));
         image.src = '/api/v1/assets/' + id;
       }),
     });
@@ -195,8 +195,9 @@
       dialog.showModal(); current(); perform(async () => { await client.request('/session'); login.hidden = true; content.hidden = false; await refresh(); status('已连接门店共享空间'); });
     });
     login.addEventListener('submit', event => { event.preventDefault(); perform(async () => {
-      await client.json('/session', 'POST', { username: login.elements.username.value, password: login.elements.password.value });
-      login.elements.password.value = ''; login.hidden = true; content.hidden = false; offset = 0; await refresh(); status('登录成功');
+      const password = login.elements.password.value; login.elements.password.value = '';
+      await client.json('/tool-session', 'POST', { password });
+      login.hidden = true; content.hidden = false; offset = 0; await refresh(); status('验证成功，已连接门店共享空间');
     }); });
     el('[data-save]').addEventListener('click', () => save(active?.kind || 'project', false));
     el('[data-copy]').addEventListener('click', () => save('project', true));
@@ -213,7 +214,6 @@
     });
     select.addEventListener('change', () => { offset = 0; perform(async () => { await refresh(); status(''); }); });
     for (const [attr, delta] of [['prev', -50], ['next', 50]]) el(`[data-${attr}]`).addEventListener('click', () => perform(async () => { offset = Math.max(0, offset + delta); await refresh(); status(''); }));
-    el('[data-logout]').addEventListener('click', () => perform(async () => { await client.json('/session', 'DELETE'); login.hidden = false; content.hidden = true; files = []; list.replaceChildren(); status('已退出共享空间，本地编辑仍然保留'); }));
     el('[data-close]').addEventListener('click', () => { if (!busy) dialog.close(); });
     dialog.addEventListener('cancel', event => { if (busy) event.preventDefault(); });
     return { client, changed, hasUnsavedChanges: shouldWarn };

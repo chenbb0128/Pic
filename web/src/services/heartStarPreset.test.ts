@@ -7,7 +7,7 @@ function setup() {
   const scope: any = {}
   new Function('globalThis', catalogSource)(scope)
   const assets = { ...JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!), ...scope.HeartStarMotifCatalog.assets }
-  for (const [file, api] of [['ive-motifs.js', 'HeartStarIVE'], ['pink-motifs.js', 'HeartStarPink']]) {
+  for (const [file, api] of [['ive-motifs.js', 'HeartStarIVE'], ['brown-motifs.js', 'HeartStarBrown'], ['pink-motifs.js', 'HeartStarPink'], ['red-motifs.js', 'HeartStarRed'], ['light-blue-motifs.js', 'HeartStarLightBlue'], ['pattern-combos.js', 'HeartStarPatternCombos']]) {
     new Function('globalThis', readFileSync(new URL(`../../public/embedded/heart-star/${file}`, import.meta.url), 'utf8'))(scope)
     Object.assign(assets, scope[api!].register(assets))
   }
@@ -63,5 +63,37 @@ describe('heart-star independent 210×144 template', () => {
     expect([width.value, height.value]).toEqual(['210', '144'])
     api.selectSize({}, width, height)
     expect([width.value, height.value]).toEqual(['293', '210'])
+  })
+
+  it('builds the separate big portrait preset with all 36 motifs in the requested order', () => {
+    const { api, assets, build } = setup()
+    const cfg = api.buildPortrait(assets, build)
+    expect(cfg).toMatchObject({ w: 2100, h: 1440, widthMm: 210, heightMm: 144 })
+    const expected = [
+      ['ime-pink-stripe', 'ime-red-polka', 'ime-brown-polka', 'ime-rose', 'ime-rose', 'ime-brown-stripe'],
+      ['ime-rose', 'ime-pink-dot', 'ime-light-blue-stripe', 'ive-rose', 'ive-rose', 'ive-rose'],
+      ['pink-dot-heart-small', 'brown-polka-heart-small', 'brown-stripe-heart-small', 'rose-dot-star-small', 'rose-dot-star-small', 'rose-heart-small', 'rose-heart-small', 'pink-dot-heart-small'],
+      ['pink-dot-heart-small', 'light-blue-stripe-heart-small', 'light-blue-stripe-heart-small', 'teal-dot-star-small', 'teal-dot-star-small', 'pink-stripe-heart-small', 'red-polka-heart-small', 'rose-heart-small'],
+      ['rose-heart-small', 'rose-heart-small', 'teal-heart-small', 'teal-heart-small', 'polka-heart-small', 'rose-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small'],
+    ]
+    expect(expected.map((_, row) => cfg.placements.filter((_: any, i: number) => cfg.slots[i].row === row).map((p: any) => p.assetId))).toEqual(expected)
+    cfg.placements.forEach((p: any) => {
+      expect(p.x).toBeGreaterThanOrEqual(30)
+      expect(p.y).toBeGreaterThanOrEqual(30)
+      expect(p.x + p.w).toBeLessThanOrEqual(2070.001)
+      expect(p.y + p.h).toBeLessThanOrEqual(1410.001)
+      expect(p.w / p.h).toBeCloseTo(assets[p.assetId].nativeW / assets[p.assetId].nativeH)
+      expect(existsSync(new URL('../../public/embedded/heart-star/' + assets[p.assetId].src.split('?')[0].replace('./', ''), import.meta.url))).toBe(true)
+    })
+    const states = cfg.slots.map((_: any, i: number) => api.initialState(cfg, i))
+    expect(states.flatMap((st: any, i: number) => st.background ? [i] : [])).toEqual([10, 11, 17, 18, 33])
+    for (const i of [10, 11]) expect(states[i]).toMatchObject({ imageScale: 1.2, background: { type: 'transparent', photoBaseSize: .62, keepLetters: true } })
+    for (const i of [17, 18, 33]) {
+      expect(states[i].background.type).toBe('transparent')
+      expect(states[i].background.keepLetters).not.toBe(true)
+      expect(Math.max(cfg.placements[i].w, cfg.placements[i].h)).toBeLessThanOrEqual(200)
+    }
+    expect(api.initialState(api.build(assets, build), 10).background).toBeUndefined()
+    expect(api.initialState(cfg, 10).background).not.toBe(api.initialState(cfg, 10).background)
   })
 })

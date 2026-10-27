@@ -7,6 +7,7 @@
   const photoAreaCache = new WeakMap();
   const visiblePhotoCache = new WeakMap();
   const photoOnly = state => ['transparent', 'outline'].includes(state?.background?.type);
+  const wholePhoto = state => photoOnly(state) && !state.background.keepLetters;
   function has(state) {
     const bg = state?.background;
     return photoOnly(state) || !!bg && (bg.type === 'color' ? /^#[0-9a-f]{6}$/i.test(bg.color) :
@@ -159,7 +160,7 @@
   }
 
   function artworkRegions(cfg, pixels) {
-    return cfg.custom ? cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h })) : measureRegions(cfg, pixels);
+    return cfg.placements?.length === cfg.slots.length ? cfg.placements.map(p => ({ x: p.x + p.w / 2, y: p.y + p.h / 2, w: p.w, h: p.h })) : measureRegions(cfg, pixels);
   }
 
   function measureBackgroundRegions(cfg, pixels, states = [], bounds = artworkRegions(cfg, pixels)) {
@@ -189,7 +190,7 @@
   function frame(cfg, source, states, index) {
     const state = states[index];
     if (photoOnly(state)) {
-      const region = regions(cfg, source, states, state.background.type === 'transparent')[index];
+      const region = regions(cfg, source, states, state.background.type === 'transparent' && wholePhoto(state))[index];
       const size = state.background.photoBaseSize || state.size || 1;
       return { ...region, w: region.w / size, h: region.h / size };
     }
@@ -341,8 +342,13 @@
     states.forEach((state, index) => {
       if (!has(state) || !bounds[index]) return;
       // Photo-only modes remove the whole group, not just its central heart.
-      const p = photoOnly(state) ? complete[index] : bounds[index];
-      ctx.rect(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h);
+      const p = wholePhoto(state) ? complete[index] : bounds[index];
+      if (wholePhoto(state) && cfg.placements?.length === cfg.slots.length) {
+        // Fractional placements can leave a 1 px antialiased edge outside the
+        // source rectangle. Clear that edge together with the complete group.
+        const left = Math.floor(p.x - p.w / 2) - 1, top = Math.floor(p.y - p.h / 2) - 1;
+        ctx.rect(left, top, Math.ceil(p.x + p.w / 2) + 1 - left, Math.ceil(p.y + p.h / 2) + 1 - top);
+      } else ctx.rect(p.x - p.w / 2, p.y - p.h / 2, p.w, p.h);
     });
     ctx.clip('evenodd');
     ctx.drawImage(source, 0, 0, cfg.w, cfg.h);
@@ -385,7 +391,7 @@
     const state = states[index];
     if (!photoOnly(state) || !image) return;
     const bg = state.background, mask = bg.type === 'outline';
-    const region = regions(cfg, source, states, !mask)[index];
+    const region = regions(cfg, source, states, !mask && wholePhoto(state))[index];
     const size = (state.size || 1) / (bg.photoBaseSize || state.size || 1);
     const w = region.w * size, h = region.h * size;
     const x = region.x + (state.dx || 0), y = region.y + (state.dy || 0);
@@ -454,7 +460,7 @@
       scaleRange.value = String((first.scale ?? 1) * 100);
       note.textContent = busy() ? '正在读取背景图片，完成后可导出…' :
         !selected.length ? '请先选择图案。' : mode.value === 'mixed' ? '所选图案背景不同，修改将批量应用。' :
-        mode.value === 'transparent' ? '已移除所选整组底图和字母，只保留原占位大小与位置。请从上方“上传照片”放入抠图，等比完整显示并保留透明边缘，不受“启用裁剪”影响；可缩放、移动。' :
+        mode.value === 'transparent' ? (values.every(bg => bg.keepLetters) ? '爱心底图透明，保留 I/VE 字母。上传头像后在原爱心位置等比显示，可缩放、移动。' : '已移除所选底图；保留字母的模板位置仅移除爱心。请从上方“上传照片”放入抠图，等比完整显示并保留透明边缘，不受“启用裁剪”影响；可缩放、移动。') :
         mode.value === 'outline' ? '已移除所选原花纹和字母，仅复用爱心、星星等外轮廓裁剪照片，不画边框。请从上方“上传照片”放入图片，可缩放、移动；不受其他裁剪形状影响。' :
         mode.value === 'image' ? (first.image?.naturalWidth ? '新背景默认等比例铺满整个外轮廓，不保留旧花纹或内部镂空。可调整花纹大小和 X / Y，超出轮廓自动裁掉，照片保持不变；I ♥ ME / I ♥ VE 仅替换爱心，字母保持原色。' : '上传图片作为全新背景，仅复用原来的爱心、星星等外轮廓；I ♥ ME / I ♥ VE 的字母保持原色。') :
         mode.value === 'color' ? `所选 ${selected.length} 个图案已换为纯色，原轮廓不变。` : '未启用，保留原图案。可多选后批量替换。';

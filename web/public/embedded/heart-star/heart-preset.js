@@ -1,6 +1,7 @@
 // Independent upright artwork arranged on a 210 × 144 mm sheet.
 (() => {
   const name = '爱心横版.png', sources = new WeakMap();
+  const portraitName = 'I-ME横版大头.png';
   let previousSize = null;
   function build(assets, arrange) {
     const repeat = (id, count) => Array(count).fill(id);
@@ -10,7 +11,11 @@
       [...repeat('rose-heart-small', 3), 'rose-dot-star-small', 'teal-dot-star-small', ...repeat('teal-heart-small', 3)],
       [...repeat('pink-stripe-heart-small', 3), 'mint-star-small', 'white-mint-star-small', ...repeat('mint-plaid-heart-small', 3)],
       [...repeat('purple-white-polka-heart-small', 4), ...repeat('polka-heart-small', 4)],
-    ].map((ids, row) => ({
+    ];
+    return buildRows(rows, assets, arrange);
+  }
+  function buildRows(patterns, assets, arrange) {
+    const rows = patterns.map((ids, row) => ({
       id: `preset-${row}`, groups: ids.map((assetId, column) => ({ id: String(column), assetId, count: 1 })),
     }));
     const layout = arrange(rows, assets, 210, 144);
@@ -19,6 +24,29 @@
       name: assets[p.assetId].baseName, variant: assets[p.assetId].variant, box: [p.x, p.y, p.w, p.h],
     }));
     return { ...layout, preset: true, widthMm: 210, heightMm: 144, motifSlots };
+  }
+  function buildPortrait(assets, arrange) {
+    const cfg = buildRows([
+      ['ime-pink-stripe', 'ime-red-polka', 'ime-brown-polka', 'ime-rose', 'ime-rose', 'ime-brown-stripe'],
+      ['ime-rose', 'ime-pink-dot', 'ime-light-blue-stripe', 'ive-rose', 'ive-rose', 'ive-rose'],
+      ['pink-dot-heart-small', 'brown-polka-heart-small', 'brown-stripe-heart-small', 'rose-dot-star-small', 'rose-dot-star-small', 'rose-heart-small', 'rose-heart-small', 'pink-dot-heart-small'],
+      ['pink-dot-heart-small', 'light-blue-stripe-heart-small', 'light-blue-stripe-heart-small', 'teal-dot-star-small', 'teal-dot-star-small', 'pink-stripe-heart-small', 'red-polka-heart-small', 'rose-heart-small'],
+      ['rose-heart-small', 'rose-heart-small', 'teal-heart-small', 'teal-heart-small', 'polka-heart-small', 'rose-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small'],
+    ], assets, arrange);
+    cfg.photoOnlySlots = [10, 11, 17, 18, 33];
+    cfg.largePortraitSlots = [10, 11];
+    return cfg;
+  }
+  function initialState(cfg, index) {
+    const state = { size: .62, dx: 0, dy: 0, shape: 'template', imageScale: 1, imageDx: 0, imageDy: 0 };
+    if (cfg.photoOnlySlots?.includes(index)) {
+      state.background = { type: 'transparent', photoBaseSize: .62 };
+      if (cfg.largePortraitSlots?.includes(index)) {
+        state.imageScale = 1.2;
+        state.background.keepLetters = true;
+      }
+    }
+    return state;
   }
   function source(cfg, loadImage) {
     if (!sources.has(cfg)) sources.set(cfg, (async () => {
@@ -39,5 +67,5 @@
       [width.value, height.value] = previousSize;previousSize = null;
     }
   }
-  globalThis.HeartStarPreset = { name, build, source, selectSize };
+  globalThis.HeartStarPreset = { name, portraitName, build, buildPortrait, initialState, source, selectSize };
 })();

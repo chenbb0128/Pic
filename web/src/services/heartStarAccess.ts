@@ -1,34 +1,38 @@
 const STORAGE_KEY = 'pic:heart-star:access'
-const ACCESS_DURATION_MS = 30 * 24 * 60 * 60 * 1000
-
-async function passwordVersion(password: string): Promise<string> {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password))
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
-}
-
-export function clearHeartStarAccess(): void {
+function clearLegacyAccess(): void {
   try { localStorage.removeItem(STORAGE_KEY) } catch { /* Storage may be disabled. */ }
 }
 
-export async function hasHeartStarAccess(password: string): Promise<boolean> {
+async function sessionRequest(method: string, path = '/session', password?: string): Promise<unknown> {
+  let response: Response, body: { code: number; message?: string; data?: unknown }
   try {
-    const saved = localStorage.getItem(STORAGE_KEY)
-    if (!saved) return false
-    const record = JSON.parse(saved)
-    if (record && Number.isFinite(record.expiresAt) && record.expiresAt > Date.now()
-      && record.expiresAt <= Date.now() + ACCESS_DURATION_MS
-      && record.passwordVersion === await passwordVersion(password)) return true
-  } catch { /* Invalid or unavailable storage must not prevent manual unlocking. */ }
-  clearHeartStarAccess()
-  return false
+    response = await fetch('/api/v1' + path, {
+      method, credentials: 'same-origin', signal: AbortSignal.timeout(15000),
+      ...(password === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }),
+    })
+    body = await response.json()
+  } catch { throw Error('访问验证服务暂不可用，请检查后端服务后重试。') }
+  if (!response.ok) throw Object.assign(Error(body?.message || '访问验证失败，请重试。'), { status: response.status })
+  if (body?.code !== 0 || !Object.hasOwn(body, 'data')) throw Error('访问验证服务返回异常，请稍后重试。')
+  return body.data
+}
+
+export async function clearHeartStarAccess(): Promise<void> {
+  try { await sessionRequest('DELETE') }
+  catch (error) { if ((error as { status?: number }).status !== 401) throw error }
+  clearLegacyAccess()
+}
+
+export async function hasHeartStarAccess(): Promise<boolean> {
+  clearLegacyAccess()
+  try { await sessionRequest('GET'); return true }
+  catch (error) {
+    if ((error as { status?: number }).status === 401) return false
+    throw error
+  }
 }
 
 export async function rememberHeartStarAccess(password: string): Promise<void> {
-  try {
-    const version = await passwordVersion(password)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      passwordVersion: version,
-      expiresAt: Date.now() + ACCESS_DURATION_MS,
-    }))
-  } catch { /* Manual access still works when persistence is unavailable. */ }
+  await sessionRequest('POST', '/tool-session', password)
+  clearLegacyAccess()
 }

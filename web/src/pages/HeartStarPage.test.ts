@@ -39,6 +39,18 @@ describe('heart and star tool access', () => {
       setItem: (key: string, value: string) => { records.set(key, value) },
       removeItem: (key: string) => { records.delete(key) },
     })
+    let authenticated = false
+    vi.stubGlobal('fetch', vi.fn(async (path: string, options: RequestInit = {}) => {
+      if (path === '/api/v1/tool-session') {
+        authenticated = JSON.parse(String(options.body)).password === '87654321'
+        return new Response(JSON.stringify(authenticated ? { code: 0, data: { username: 'staff' } } : { code: 401, message: '密码错误，请重新输入。' }), { status: authenticated ? 200 : 401 })
+      }
+      if (path === '/api/v1/session') {
+        if (options.method === 'DELETE') { authenticated = false; return new Response(JSON.stringify({ code: 0, data: null })) }
+        return new Response(JSON.stringify(authenticated ? { code: 0, data: { username: 'staff' } } : { code: 401, message: '访问已过期' }), { status: authenticated ? 200 : 401 })
+      }
+      throw Error('Unexpected request: ' + path)
+    }))
   })
 
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -58,13 +70,28 @@ describe('heart and star tool access', () => {
     expect(html).not.toContain('<iframe')
   })
 
-  it('unlocks the embedded tool only with the fixed password', async () => {
+  it('unlocks the embedded tool after backend verification', async () => {
     const html = await renderPage('87654321')
     expect(html).toContain('<iframe')
     expect(html).toMatch(/src="\/embedded\/heart-star\/index\.html\?v=[^"\s]+"/)
     expect(html).toContain('allow-downloads')
+    expect(html).toContain('allow-forms')
     expect(html).not.toContain('type="password"')
     expect(html).not.toContain('87654321')
+  })
+
+  it('accepts a changed server password without a frontend release', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ code: 0, data: { username: 'staff' } }))))
+    const html = await renderPage('new-server-password')
+    expect(html).toContain('<iframe')
+    expect(html).not.toContain('new-server-password')
+  })
+
+  it('keeps the password form when the verification service is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
+    const html = await renderPage('87654321')
+    expect(html).not.toContain('<iframe')
+    expect(html).toContain('服务暂不可用')
   })
 
   it('opens and closes the shortcut guide from the header without recreating the editing iframe', async () => {
@@ -127,15 +154,16 @@ describe('heart and star tool access', () => {
     const confirm = vi.fn().mockReturnValue(false)
     vi.stubGlobal('window', { confirm })
     try {
+      await vi.waitFor(() => expect(state.checkingAccess).toBe(false))
       state.password = '87654321'
       await state.unlock()
       await nextTick()
       expect(state.unlocked).toBe(true)
       expect(state.password).toBe('')
-      state.lock()
+      await state.lock()
       expect(state.unlocked).toBe(true)
       confirm.mockReturnValue(true)
-      state.lock()
+      await state.lock()
       expect(state.unlocked).toBe(false)
       expect(state.error).toBe('')
     } finally { app.unmount(); vi.unstubAllGlobals() }
@@ -152,7 +180,7 @@ describe('heart and star tool access', () => {
     vi.stubGlobal('window', { confirm: () => true })
     const first = mountPage()
     try {
-      await nextTick()
+      await vi.waitFor(() => expect(first.state.checkingAccess).toBe(false))
       first.state.password = '87654321'
       await first.state.unlock()
       expect(first.state.unlocked).toBe(true)
@@ -161,7 +189,7 @@ describe('heart and star tool access', () => {
     const returned = mountPage()
     try {
       await vi.waitFor(() => expect(returned.state.unlocked).toBe(true))
-      returned.state.lock()
+      await returned.state.lock()
       expect(returned.state.unlocked).toBe(false)
     } finally { returned.app.unmount() }
 
@@ -170,5 +198,25 @@ describe('heart and star tool access', () => {
       await vi.waitFor(() => expect(locked.state.checkingAccess).toBe(false))
       expect(locked.state.unlocked).toBe(false)
     } finally { locked.app.unmount() }
+  })
+
+  it('preserves the editor if the server cannot revoke its session', async () => {
+    const Page = await getPage()
+    const app = renderer.createApp({ ...Page, render: () => null })
+    app.provide(ssrContextKey, {})
+    const vm = app.mount({})
+    const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
+    vi.stubGlobal('window', { confirm: () => true })
+    try {
+      await vi.waitFor(() => expect(state.checkingAccess).toBe(false))
+      state.password = '87654321'
+      await state.unlock()
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
+      await state.lock()
+      expect(state.unlocked).toBe(true)
+      expect(state.checkingAccess).toBe(false)
+      expect(state.locking).toBe(false)
+      expect(state.error).toContain('服务暂不可用')
+    } finally { app.unmount() }
   })
 })
