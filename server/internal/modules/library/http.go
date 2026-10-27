@@ -28,6 +28,7 @@ const cookieName = "pic_session"
 
 type Options struct {
 	Username, Password, SessionKey, Origin, DataDir string
+	ToolPassword                                    string
 	SecureCookie                                    bool
 }
 type attempts struct {
@@ -50,14 +51,21 @@ func NewHandler(store Store, opts Options) (http.Handler, error) {
 	if strings.TrimSpace(opts.Username) == "" || len(opts.Password) < 12 || len(opts.SessionKey) < 32 || opts.DataDir == "" || store == nil {
 		return nil, fmt.Errorf("library requires username, password (12+ bytes), session key (32+ bytes), data directory and MySQL")
 	}
+	if opts.ToolPassword != "" && len(opts.ToolPassword) < 8 {
+		return nil, fmt.Errorf("PIC_TOOL_PASSWORD must be at least 8 bytes")
+	}
 	if err := os.MkdirAll(opts.DataDir, 0700); err != nil {
 		return nil, err
 	}
 	mac := hmac.New(sha256.New, []byte(opts.SessionKey))
 	mac.Write([]byte(opts.Username + "\x00" + opts.Password))
+	if opts.ToolPassword != "" {
+		mac.Write([]byte("\x00" + opts.ToolPassword))
+	}
 	h := &handler{store: store, opts: opts, credential: hex.EncodeToString(mac.Sum(nil)), attempts: map[string]attempts{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/session", h.login)
+	mux.HandleFunc("POST /api/v1/tool-session", h.toolLogin)
 	mux.HandleFunc("GET /api/v1/session", func(w http.ResponseWriter, r *http.Request) {
 		h.reply(w, 200, map[string]string{"username": opts.Username})
 	})
@@ -80,9 +88,10 @@ func NewHandler(store Store, opts Options) (http.Handler, error) {
 			h.fail(w, 403, "请求来源不被允许")
 			return
 		}
-		if r.Method != "POST" || r.URL.Path != "/api/v1/session" {
+		isLogin := r.Method == "POST" && (r.URL.Path == "/api/v1/session" || r.URL.Path == "/api/v1/tool-session")
+		if !isLogin {
 			if !h.authorized(r) {
-				h.fail(w, 401, "请先登录门店共享空间")
+				h.fail(w, 401, "访问验证已过期，请重新输入工具访问密码")
 				return
 			}
 		}
@@ -185,6 +194,33 @@ func (h *handler) login(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, 401, "用户名或密码不正确")
 		return
 	}
+	h.startSession(w, r)
+}
+func (h *handler) toolLogin(w http.ResponseWriter, r *http.Request) {
+	if h.opts.ToolPassword == "" {
+		h.fail(w, 503, "工具访问密码尚未配置，请联系维护人员设置 PIC_TOOL_PASSWORD")
+		return
+	}
+	if !h.allowLogin(r) {
+		w.Header().Set("Retry-After", "600")
+		h.fail(w, 429, "验证尝试过多，请稍后重试")
+		return
+	}
+	var body struct {
+		Password string `json:"password"`
+	}
+	if decode(w, r, &body, 4096) != nil {
+		h.error(w, ErrInvalid)
+		return
+	}
+	got, want := sha256.Sum256([]byte(body.Password)), sha256.Sum256([]byte(h.opts.ToolPassword))
+	if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
+		h.fail(w, 401, "密码错误，请重新输入。")
+		return
+	}
+	h.startSession(w, r)
+}
+func (h *handler) startSession(w http.ResponseWriter, r *http.Request) {
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
 	h.mu.Lock()
 	delete(h.attempts, ip)

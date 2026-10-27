@@ -7,6 +7,7 @@ try {
     Get-Content -LiteralPath '.env' | ForEach-Object {
         if ($_ -match '^([A-Z_]+)=(.*)$') { [Environment]::SetEnvironmentVariable($matches[1], $matches[2], 'Process') }
     }
+    if (-not $env:PIC_TOOL_PASSWORD) { throw '请在 .env 设置 PIC_TOOL_PASSWORD（工具访问密码，至少 8 字节）。' }
     if (-not $SkipDatabase) {
         docker compose -f compose.dev.yaml up -d --wait mysql
         if ($LASTEXITCODE -ne 0) { throw '项目专用 MySQL 启动失败，请检查 Docker Desktop。' }
@@ -24,7 +25,7 @@ try {
     Set-Location -LiteralPath (Join-Path $projectRoot 'server')
     go run ./cmd/migrate -command up
     if ($LASTEXITCODE -ne 0) { throw '数据库迁移失败，未启动 API。' }
-    Write-Host 'Pic API: http://127.0.0.1:8081 ; 登录账号密码见项目根目录 .env（勿提交）'
+    Write-Host 'Pic API: http://127.0.0.1:8081 ; 使用 .env 中的 PIC_TOOL_PASSWORD 解锁并进入共享空间（勿提交密码）'
     go run ./cmd/api
     if ($LASTEXITCODE -ne 0) { throw 'API 已退出，请检查以上日志。' }
 } finally { Pop-Location }

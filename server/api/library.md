@@ -1,9 +1,10 @@
 # 门店共享 API v1
 
-前缀 `/api/v1`，单门店共享空间。成功信封 `{code:0,message:"success",data:...}`；错误返回相应 HTTP status 和 `message`。401 重新登录，409 提示冲突，禁止自动重试覆盖。
+前缀 `/api/v1`，单门店共享空间。成功信封 `{code:0,message:"success",data:...}`；错误返回相应 HTTP status 和 `message`。401 重新验证工具密码，409 提示冲突，禁止自动重试覆盖。
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
+| POST | `/tool-session` | JSON `{password}`，验证 `PIC_TOOL_PASSWORD` 后设置 30 天 HttpOnly cookie，无需用户名 |
 | POST | `/session` | JSON username/password，设置 30 天 HttpOnly cookie |
 | GET | `/session` | 当前登录账号 |
 | DELETE | `/session` | 注销并失效当前会话 |
@@ -26,3 +27,5 @@
 所有资源接口需要 cookie。POST/PUT/DELETE 还必须携带与 `PIC_ORIGIN` 完全一致的 Origin；推荐从同源浏览器调用。登录失败限流在进程内，生产代理还应限流；密钥和密码只从环境传入。环境参数见根 `.env.example` 及 `internal/modules/library/environment.go`。
 
 `api/openapi.yaml` 为上游基础健康检查定义；以上新增业务端点以此文档为准。
+
+工具页面使用 `/tool-session`，不再出现共享账号登录。`PIC_TOOL_PASSWORD` 至少 8 字节；未配置时此端点返回 503，其他资源仍要求会话。原 `/session` 账号接口保留供兼容运维脚本使用，`PIC_USERNAME`、`PIC_PASSWORD` 和 `PIC_SESSION_KEY` 不变。任一密码修改后旧会话失效。生产须先配置工具密码并发布后端，再发布前端；只发布静态前端无法启用此流程。

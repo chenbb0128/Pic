@@ -145,6 +145,125 @@ func TestPrivateRoutesRequireLogin(t *testing.T) {
 		}
 	}
 }
+func TestToolSessionRequiresConfiguredPassword(t *testing.T) {
+	h, _, _ := setupHTTP(t)
+	w := request(h, "POST", "/api/v1/tool-session", `{"password":"87654321"}`, nil)
+	if w.Code != http.StatusServiceUnavailable || len(w.Result().Cookies()) != 0 {
+		t.Fatalf("unconfigured tool access: %d %s", w.Code, w.Body)
+	}
+}
+func setupToolHTTP(t *testing.T) (http.Handler, *memoryStore, Options) {
+	t.Helper()
+	_, s, opts := setupHTTP(t)
+	opts.ToolPassword = "store-tool-password"
+	opts.SecureCookie = true
+	h, err := NewHandler(s, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, s, opts
+}
+func toolLogin(t *testing.T, h http.Handler) *http.Cookie {
+	t.Helper()
+	w := request(h, "POST", "/api/v1/tool-session", `{"password":"store-tool-password"}`, nil)
+	if w.Code != 200 || len(w.Result().Cookies()) != 1 {
+		t.Fatalf("tool access: %d %s", w.Code, w.Body)
+	}
+	return w.Result().Cookies()[0]
+}
+func TestToolSessionSharesTemplatesWithoutAccountLogin(t *testing.T) {
+	h, s, _ := setupToolHTTP(t)
+	first := toolLogin(t, h)
+	if !first.HttpOnly || !first.Secure || first.SameSite != http.SameSiteStrictMode || first.Path != "/api/v1" || first.MaxAge != 30*86400 {
+		t.Fatalf("unsafe tool cookie: %+v", first)
+	}
+	if time.Until(first.Expires) < 30*24*time.Hour-time.Minute || time.Until(first.Expires) > 30*24*time.Hour {
+		t.Fatal("tool session must expire after 30 days")
+	}
+	s.assets["0123456789abcdef0123456789abcdef"] = Asset{}
+	w := request(h, "POST", "/api/v1/templates", `{"name":"门店公共模板","snapshot":`+string(snapshot())+`}`, first)
+	if w.Code != 201 {
+		t.Fatalf("template save: %d %s", w.Code, w.Body)
+	}
+	var saved struct{ Data Document }
+	json.Unmarshal(w.Body.Bytes(), &saved)
+	second := toolLogin(t, h)
+	if first.Value == second.Value {
+		t.Fatal("members must receive independent random sessions")
+	}
+	if w = request(h, "GET", "/api/v1/templates", "", second); w.Code != 200 || !strings.Contains(w.Body.String(), "门店公共模板") {
+		t.Fatalf("shared list: %d %s", w.Code, w.Body)
+	}
+	path := "/api/v1/templates/" + saved.Data.ID
+	update := `{"name":"其他成员修改","version":1,"snapshot":` + string(snapshot()) + `}`
+	if w = request(h, "PUT", path, update, second); w.Code != 200 {
+		t.Fatalf("shared edit: %d %s", w.Code, w.Body)
+	}
+	if w = request(h, "PUT", path, update, first); w.Code != 409 {
+		t.Fatal("concurrent edit protection bypassed", w.Code)
+	}
+	request(h, "DELETE", "/api/v1/session", "", first)
+	if w = request(h, "GET", "/api/v1/templates", "", first); w.Code != 401 {
+		t.Fatal("locked tool retained shared access")
+	}
+	if w = request(h, "GET", "/api/v1/templates", "", second); w.Code != 200 {
+		t.Fatal("locking one member affected another")
+	}
+}
+func TestToolSessionRejectsBadRequestsAndLimitsFailedAttempts(t *testing.T) {
+	h, _, _ := setupToolHTTP(t)
+	for _, body := range []string{`{}`, `{"password":"wrong"}`, `{"password":"store-tool-password","username":"staff"}`, `{"password":1}`} {
+		w := request(h, "POST", "/api/v1/tool-session", body, nil)
+		if (w.Code != 400 && w.Code != 401) || len(w.Result().Cookies()) != 0 {
+			t.Fatalf("invalid access accepted: %s %d", body, w.Code)
+		}
+	}
+	for _, origin := range []string{"", "null", "http://evil.example"} {
+		r := httptest.NewRequest("POST", "/api/v1/tool-session", strings.NewReader(`{"password":"store-tool-password"}`))
+		r.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 403 || len(w.Result().Cookies()) != 0 {
+			t.Fatalf("invalid origin accepted: %q %d", origin, w.Code)
+		}
+	}
+	h, _, _ = setupToolHTTP(t)
+	for range 10 {
+		if w := request(h, "POST", "/api/v1/tool-session", `{"password":"wrong"}`, nil); w.Code != 401 {
+			t.Fatal(w.Code)
+		}
+	}
+	w := request(h, "POST", "/api/v1/tool-session", `{"password":"store-tool-password"}`, nil)
+	if w.Code != 429 || w.Header().Get("Retry-After") != "600" || len(w.Result().Cookies()) != 0 {
+		t.Fatalf("rate limit bypassed: %d", w.Code)
+	}
+}
+func TestToolSessionExpiresAndInvalidatesAfterPasswordChange(t *testing.T) {
+	h, s, opts := setupToolHTTP(t)
+	cookie := toolLogin(t, h)
+	opts.ToolPassword = "changed-tool-password"
+	changed, err := NewHandler(s, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := request(changed, "GET", "/api/v1/session", "", cookie); w.Code != 401 {
+		t.Fatal("tool password change retained session")
+	}
+	for key, session := range s.sessions {
+		session.Expires = time.Now().Add(-time.Second)
+		s.sessions[key] = session
+	}
+	if w := request(h, "GET", "/api/v1/templates", "", cookie); w.Code != 401 {
+		t.Fatal("expired tool session accepted")
+	}
+	for range 12 {
+		toolLogin(t, h)
+	}
+	opts.ToolPassword = "short"
+	if _, err := NewHandler(s, opts); err == nil {
+		t.Fatal("accepted short tool password")
+	}
+}
 func TestSuccessfulLoginsDoNotExhaustSharedProxyLimit(t *testing.T) {
 	h, _, _ := setupHTTP(t)
 	for range 12 {

@@ -20,5 +20,5 @@ func FromEnvironment(db *sql.DB) (http.Handler, error) {
 	if !secure && origin != "http://127.0.0.1:5173" && origin != "http://localhost:5173" {
 		return nil, fmt.Errorf("insecure cookie only allowed for local Vite origins")
 	}
-	return NewHandler(&MySQLStore{DB: db}, Options{Username: os.Getenv("PIC_USERNAME"), Password: os.Getenv("PIC_PASSWORD"), SessionKey: os.Getenv("PIC_SESSION_KEY"), Origin: origin, DataDir: os.Getenv("PIC_DATA_DIR"), SecureCookie: secure})
+	return NewHandler(&MySQLStore{DB: db}, Options{Username: os.Getenv("PIC_USERNAME"), Password: os.Getenv("PIC_PASSWORD"), ToolPassword: os.Getenv("PIC_TOOL_PASSWORD"), SessionKey: os.Getenv("PIC_SESSION_KEY"), Origin: origin, DataDir: os.Getenv("PIC_DATA_DIR"), SecureCookie: secure})
 }

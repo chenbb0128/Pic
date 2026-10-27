@@ -18,6 +18,11 @@ const values = Object.fromEntries(fs.readFileSync(path.join(root, '.env'), 'utf8
   const origin = values.PIC_ORIGIN || 'http://127.0.0.1:5173';
   try {
     assert.equal((await context.request.get(origin + '/api/v1/projects')).status(), 401);
+    await page.goto(origin + '/tools/heart-star');
+    await page.locator('#heart-star-password').fill(values.PIC_TOOL_PASSWORD);
+    await page.getByRole('button', { name: '解锁使用' }).click();
+    await page.locator('iframe').waitFor();
+    assert.equal((await context.request.get(origin + '/api/v1/session')).status(), 200);
     await page.goto(origin + '/embedded/heart-star/index.html');
     await page.waitForFunction(() => typeof states !== 'undefined' && states.length && base.complete && base.naturalWidth);
     await page.waitForFunction(() => document.querySelector('.cloud-save-state')?.textContent.includes('尚未保存'));
@@ -28,11 +33,8 @@ const values = Object.fromEntries(fs.readFileSync(path.join(root, '.env'), 'utf8
     }
     const textTemplate = await page.evaluate(() => !!templates[sel.value].text);
     await page.locator('.cloud-entry').click();
-    await page.locator('.cloud-login').waitFor({ state: 'visible' });
-    await page.locator('.cloud-login input[name=username]').fill(values.PIC_USERNAME);
-    await page.locator('.cloud-login input[name=password]').fill(values.PIC_PASSWORD);
-    await page.locator('.cloud-login button').click();
     await page.locator('.cloud-content').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('.cloud-login').isVisible(), false);
     await page.waitForFunction(() => !document.querySelector('.cloud-dialog [data-close]').disabled);
     await page.locator('[data-close]').click();
     if (!textTemplate) {
