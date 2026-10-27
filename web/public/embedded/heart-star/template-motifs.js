@@ -47,7 +47,8 @@
     '波点圆形.png': [...Array.from({ length: 5 }, () => repeat('polka-circle-small', 6)), ...Array.from({ length: 3 }, () => repeat('polka-circle', 4))],
   };
 
-  function create({ getName, getTemplate, getStates, getSelection, getSource, measureRegions, assets, slots, loadImage, redraw, report }) {
+  function create({ getName, getTemplate, getStates, getSelection, getSource, measureRegions, assets, slots, loadImage, redraw, report,
+    getSize, loadRowSource, applyRow }) {
     const catalogs = new WeakMap();
     function catalog() {
       const cfg = getTemplate();
@@ -62,7 +63,7 @@
       if (cfg.placements?.length) {
         entries = cfg.placements.map((p, i) => ({ index: i, row: cfg.slots[i].row, column: cfg.slots[i].column,
           assetId: p.assetId, name: assets[p.assetId].baseName, variant: assets[p.assetId].variant,
-          type: assets[p.assetId].type, box: [p.x, p.y, p.w, p.h] }));
+          type: assets[p.assetId].type, box: [p.x, p.y, p.w, p.h], ...(p.rowBounds ? { rowBounds: p.rowBounds } : {}) }));
       } else {
         const rows = originalRows[getName()];
         if (!rows || rows.flat().length !== cfg.slots.length || !measureRegions || !base?.complete || !base.naturalWidth) return [];
@@ -157,6 +158,38 @@
       redraw();
     }
 
+    async function replaceRow(ids, assetId, count, options = {}) {
+      if (busy()) return false;
+      const cfg = getTemplate(), size = getSize(), target = { states: getStates(), source: getSource(), request: ++request };
+      let result;
+      try {
+        result = globalThis.HeartStarRowLayout.plan({ cfg, catalog: catalog(), ids, assetId, asset: assets[assetId], count,
+          widthMm: size[0], heightMm: size[1], ...options });
+      } catch (error) { report(error.message, true); return false; }
+      pending = target; redraw();
+      const current = () => pending === target && request === target.request && busy() && getTemplate() === cfg &&
+        getSize().every((value, i) => value === size[i]);
+      try {
+        const image = await loadImage(assetId);
+        if (!current()) return false;
+        const sheet = document.createElement('canvas'); sheet.width = cfg.w; sheet.height = cfg.h;
+        const paint = sheet.getContext('2d'); paint.drawImage(target.source, 0, 0, cfg.w, cfg.h);
+        result.old.forEach(meta => { const [x, y, w, h] = meta.box;
+          paint.clearRect(Math.floor(x), Math.floor(y), Math.ceil(x + w) - Math.floor(x), Math.ceil(y + h) - Math.floor(y)); });
+        result.added.forEach(p => paint.drawImage(image, p.x, p.y, p.w, p.h));
+        const source = await loadRowSource(sheet);
+        if (!current()) return false;
+        applyRow(result, source);
+        report(`已将第 ${result.row + 1} 排调整为 ${count} 个图案，照片按原顺序循环保留。`);
+        return true;
+      } catch (error) {
+        if (current()) report(error.message || '整排调整失败，原排版已保留。', true);
+        return false;
+      } finally {
+        if (pending === target) { pending = null; redraw(); }
+      }
+    }
+
     function fitLimitedMotifs(base) {
       if (!base || !(base.naturalWidth || base.width)) return;
       const cfg = getTemplate(), states = getStates(), width = cfg.widthMm || (cfg.custom ? cfg.w / 10 : 144), height = cfg.heightMm || (cfg.custom ? cfg.h / 10 : 210);
@@ -227,7 +260,7 @@
       });
     }
 
-    return { active, selection, allowed, placement, replace, restore, source, rows, busy, catalog, reflow };
+    return { active, selection, allowed, placement, replace, replaceRow, restore, source, rows, busy, catalog, reflow };
   }
 
   // Crop slots historically label some squares as hearts. Keep those legacy

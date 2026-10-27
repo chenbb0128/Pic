@@ -256,7 +256,8 @@ describe('heart-star predefined photo placement', () => {
     const cfg = { w: 10, h: 10, custom: true, background: source, slots: [{ x: 5, y: 5, w: 10, h: 10 }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }
     const calls: any[] = []
     let clips = 0
-    const env = { sharedLibrary: undefined, photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
+    const env = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, photoThumbnails: undefined,
+      photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
       states: [{ size: .62, dx: 0, dy: 0, imageScale: 1 }], slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false },
       updateMotifControls() {}, updateCanvasSize: () => true, canvas: { width: 10, height: 10 },
       ctx: { clearRect() {}, save() {}, restore() {}, beginPath() {}, rect() {}, clip() { clips++ }, scale() {}, drawImage: (...args: any[]) => calls.push(args) },
@@ -285,7 +286,8 @@ describe('heart-star predefined photo placement', () => {
       placements: [{ x: 0, y: 0, w: 13, h: 13 }] }
     const calls: any[] = [], borders: number[][] = []
     let currentPhoto: typeof photo | null = null
-    const env = { sharedLibrary: undefined, photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
+    const env = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, photoThumbnails: undefined,
+      photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
       states: [{ size: .62, dx: 0, dy: 0, imageScale: 1 }], slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false },
       updateMotifControls() {}, updateCanvasSize: () => true, canvas: { width: 13, height: 13 },
       ctx: { clearRect() {}, save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, scale() {}, setLineDash() {},

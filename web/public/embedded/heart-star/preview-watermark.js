@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   const DEFAULT_TEXT = '仅供确认 · 禁止盗用';
-  let settings = { text: DEFAULT_TEXT, opacity: 0.2 };
+  let settings = { text: DEFAULT_TEXT, opacity: 0.4 };
 
   function tile() {
     const width = Math.max(160, settings.text.length * 14 + 16);
@@ -17,7 +17,7 @@
       const amount = Number(opacity.value);
       settings = {
         text: text.value.trim().slice(0, 40) || DEFAULT_TEXT,
-        opacity: Math.max(8, Math.min(50, Number.isFinite(amount) ? amount : 20)) / 100,
+        opacity: Math.max(8, Math.min(50, Number.isFinite(amount) ? amount : 40)) / 100,
       };
       const escaped = settings.text.replace(/[&<>"']/g, character => (
         { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[character]
