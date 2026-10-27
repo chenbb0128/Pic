@@ -856,7 +856,7 @@ describe('heart-star catalog and overflow details', () => {
     expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type: 'heart', backgroundPart: 'heart' } })
     expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8, background: { type: 'color' } })
   })
-  it('adds all three new heart patterns to both letter combinations without changing their photo openings', () => {
+  it('adds all four heart patterns to both letter combinations without changing their photo openings', () => {
     const scope: any = {}
     new Function('globalThis', source('pattern-combos.js'))(scope)
     expect(scope.HeartStarPatternCombos).toBeDefined()
@@ -864,8 +864,8 @@ describe('heart-star catalog and overflow details', () => {
     new Function('globalThis', source('ive-motifs.js'))(scope)
     Object.assign(assets, scope.HeartStarIVE.register(assets))
     const extra = scope.HeartStarPatternCombos.register(assets)
-    expect(Object.keys(extra)).toHaveLength(6)
-    for (const letters of ['ime', 'ive']) for (const pattern of ['brown-polka', 'brown-stripe', 'pink-stripe']) {
+    expect(Object.keys(extra)).toHaveLength(8)
+    for (const letters of ['ime', 'ive']) for (const pattern of ['brown-polka', 'brown-stripe', 'pink-stripe', 'light-blue-stripe']) {
       const variant = extra[`${letters}-${pattern}`], original = assets[`${letters}-rose`]
       expect(variant).toMatchObject({ group: original.group, variant: '原款', nativeW: original.nativeW,
         nativeH: original.nativeH, frame: original.frame })

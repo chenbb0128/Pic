@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import toolHtml from '../../public/embedded/heart-star/index.html?raw'
+import presetSource from '../../public/embedded/heart-star/heart-preset.js?raw'
 
 function section(start: string, end: string) {
   const index = toolHtml.indexOf(start)
@@ -32,6 +33,7 @@ function setup() {
     ensureCopyStates: () => [{ text: 'A' }, { text: 'B' }], say() {},
     currentSlots: () => env.templates[env.sel.value].slots,
   }
+  new Function('globalThis', presetSource)(env)
   const source = section('function slotPhoto(', 'function releaseUnusedReplacementUrls(') +
     section('function loadTemplate(', 'function buildSlotSelect(') +
     section('function loadCustomTemplate(', "document.getElementById('addCustomRow')")
