@@ -197,18 +197,18 @@
         const state = states[id];if (!state) return;
         const current = state.motif, assetId = current?.assetId || meta.assetId ||
           Object.keys(assets).find(key => assets[key].baseName === meta.name && assets[key].variant === meta.variant);
-        const asset = assets[assetId], limit = sizeLimit(asset);
-        const cappedStar = smallStar(asset);
-        // Keep fitted artwork unchanged, except oversized stars from older saved layouts.
-        if ((cfg.custom || current?.fitToSlot) && !cappedStar) return;
-        const fixedWidth = smallHeart(asset);
+        const asset = assets[assetId], limit = meta.maxSizeMm || sizeLimit(asset);
+        const cappedSize = smallStar(asset) || Number.isFinite(meta.maxSizeMm);
+        // Keep fitted artwork unchanged, except artwork exceeding its explicit size cap.
+        if ((cfg.custom || current?.fitToSlot) && !cappedSize) return;
+        const fixedWidth = smallHeart(asset) && !cappedSize;
         if (!fixedWidth && !Number.isFinite(limit)) return;
         const [x, y, w, h] = meta.box, p = current?.placement || { x, y, w, h };
-        if (cappedStar && p.w / cfg.w * width <= limit + 1e-10 && p.h / cfg.h * height <= limit + 1e-10) return;
+        if (cappedSize && p.w / cfg.w * width <= limit + 1e-10 && p.h / cfg.h * height <= limit + 1e-10) return;
         if (fixedWidth ? Math.abs(p.w / cfg.w * width - smallHeartWidth) < 1e-10 :
             p.w / cfg.w * width < limit - 1e-10 && p.h / cfg.h * height < limit - 1e-10) return;
         // Fixed-width hearts keep their exact proportion; capped letter groups leave raster edge room.
-        const factor = fixedWidth ? smallHeartWidth / width * cfg.w / p.w : cappedStar ?
+        const factor = fixedWidth ? smallHeartWidth / width * cfg.w / p.w : cappedSize ?
           Math.min(1, limit / width * cfg.w / p.w, limit / height * cfg.h / p.h) : Math.min(1, Math.max(1, Math.floor(limit / width * cfg.w) - 2) / p.w,
           Math.max(1, Math.floor(limit / height * cfg.h) - 2) / p.h);
         let image = current?.image;

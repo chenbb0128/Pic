@@ -133,7 +133,7 @@ describe('heart-star built-in motifs', () => {
   it('initializes small hearts at 19.5 mm width, small stars within 20 mm and I/ME within 30 mm', () => {
     const scope: any = {}
     for (const file of ['motif-catalog.js', 'ive-motifs.js', 'brown-motifs.js', 'pink-motifs.js',
-      'red-motifs.js', 'gold-leopard-motifs.js', 'yellow-motifs.js', 'sky-blue-motifs.js', 'light-blue-motifs.js', 'pattern-combos.js', 'template-motifs.js']) {
+      'red-motifs.js', 'gold-leopard-motifs.js', 'caramel-leopard-motifs.js', 'black-pink-leopard-motifs.js', 'autumn-maple-leopard-motifs.js', 'yellow-motifs.js', 'sky-blue-motifs.js', 'light-blue-motifs.js', 'pattern-combos.js', 'template-motifs.js']) {
       new Function('globalThis', source(file))(scope)
     }
     const start = toolHtml.indexOf('const customAssets=')
@@ -190,6 +190,26 @@ describe('heart-star built-in motifs', () => {
     expect(s.feature.source(s.env.base)).toBe(rendered)
     s.feature.restore([2])
     expect(s.feature.rows(widthMm, heightMm)[2].width).toBeLessThanOrEqual(30)
+  })
+
+  it('keeps explicit 10 mm heart slots small through rendering, replacements and restored edits', async () => {
+    const s = setup()
+    Object.assign(s.cfg, { widthMm: 144, heightMm: 210, motifSlots: [
+      { assetId: 'heart', name: '新爱心', variant: '迷你款', maxSizeMm: 10, box: [0, 0, 100, 100] },
+      { assetId: 'heart', name: '新爱心', variant: '小款', box: [240, 0, 195, 195] },
+    ] })
+    Object.assign(s.env.base, { width: 1440, height: 2100 })
+    expect(s.feature.rows(144, 210)[0]).toMatchObject({ width: 10, height: 10 })
+    expect(s.feature.rows(144, 210)[1]).toMatchObject({ width: 19.5, height: 19.5 })
+    expect(s.env.states[0].motif).toBeUndefined()
+    await s.feature.replace([0], 'heart')
+    expect(s.env.states[0].motif.placement).toMatchObject({ w: 100, h: 100 })
+    const motif = s.env.states[0].motif
+    s.feature.source(s.env.base)
+    expect(s.env.states[0].motif).toBe(motif)
+    Object.assign(motif, { placement: { x: 0, y: 0, w: 120, h: 120 } })
+    expect(s.feature.rows(144, 210)[0]).toMatchObject({ width: 10, height: 10 })
+    expect(s.env.states[0].motif.fitToSlot).toBe(true)
   })
 
   it('caps oversized I/ME replacements and saved artwork without losing photos, texture or edits', async () => {
@@ -775,6 +795,64 @@ describe('heart-star catalog and overflow details', () => {
     Object.assign(s.assets, entries)
     await s.feature.replace([2], id!)
     expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type: 'heart',
+      backgroundPart: original.variant === '原款' ? 'heart' : 'whole' } })
+    expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8, background: { type: 'color' } })
+  })
+  it.each([
+    ['caramel-leopard-heart-small', 'rose-heart-small', '经典焦糖豹纹爱心', '经典焦糖豹纹系列'],
+    ['caramel-leopard-heart', 'rose-heart', '经典焦糖豹纹爱心', '经典焦糖豹纹系列'],
+    ['caramel-leopard-star-small', 'mint-star-small', '经典焦糖豹纹星星', '经典焦糖豹纹系列'],
+    ['caramel-leopard-star', 'mint-star', '经典焦糖豹纹星星', '经典焦糖豹纹系列'],
+    ['ime-caramel-leopard', 'ime-rose', '经典焦糖豹纹 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-caramel-leopard', 'ive-rose', '经典焦糖豹纹 I ♥ VE', 'I ♥ VE 组合'],
+    ['black-pink-leopard-heart-small', 'rose-heart-small', '黑粉豹纹爱心', '黑粉豹纹系列'],
+    ['black-pink-leopard-heart', 'rose-heart', '黑粉豹纹爱心', '黑粉豹纹系列'],
+    ['black-pink-leopard-star-small', 'mint-star-small', '黑粉豹纹星星', '黑粉豹纹系列'],
+    ['black-pink-leopard-star', 'mint-star', '黑粉豹纹星星', '黑粉豹纹系列'],
+    ['ime-black-pink-leopard', 'ime-rose', '黑粉豹纹 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-black-pink-leopard', 'ive-rose', '黑粉豹纹 I ♥ VE', 'I ♥ VE 组合'],
+    ['autumn-maple-leopard-heart-small', 'rose-heart-small', '秋枫豹纹爱心', '秋枫豹纹系列'],
+    ['autumn-maple-leopard-heart', 'rose-heart', '秋枫豹纹爱心', '秋枫豹纹系列'],
+    ['autumn-maple-leopard-star-small', 'mint-star-small', '秋枫豹纹星星', '秋枫豹纹系列'],
+    ['autumn-maple-leopard-star', 'mint-star', '秋枫豹纹星星', '秋枫豹纹系列'],
+    ['ime-autumn-maple-leopard', 'ime-rose', '秋枫豹纹 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-autumn-maple-leopard', 'ive-rose', '秋枫豹纹 I ♥ VE', 'I ♥ VE 组合'],
+    ['cream-pink-leopard-heart-small', 'rose-heart-small', '奶油粉豹纹爱心', '奶油粉豹纹系列'],
+    ['cream-pink-leopard-heart', 'rose-heart', '奶油粉豹纹爱心', '奶油粉豹纹系列'],
+    ['cream-pink-leopard-star-small', 'mint-star-small', '奶油粉豹纹星星', '奶油粉豹纹系列'],
+    ['cream-pink-leopard-star', 'mint-star', '奶油粉豹纹星星', '奶油粉豹纹系列'],
+    ['ime-cream-pink-leopard', 'ime-rose', '奶油粉豹纹 I ♥ ME', 'I ♥ ME 组合'],
+    ['ive-cream-pink-leopard', 'ive-rose', '奶油粉豹纹 I ♥ VE', 'I ♥ VE 组合'],
+  ])('offers %s with existing geometry, transparent edges and selectable replacements', async (id, originalId, label, group) => {
+    const scope: any = {}
+    const assets = JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!)
+    new Function('globalThis', source('ive-motifs.js'))(scope)
+    Object.assign(assets, scope.HeartStarIVE.register(assets))
+    const before = structuredClone(assets)
+    const [file, api, version] = id!.includes('cream-pink-leopard')
+      ? ['cream-pink-leopard-motifs.js', 'HeartStarCreamPinkLeopard', 'cream-pink-leopard-2']
+      : id!.includes('autumn-maple-leopard')
+      ? ['autumn-maple-leopard-motifs.js', 'HeartStarAutumnMapleLeopard', 'autumn-maple-leopard-1']
+      : id!.includes('black-pink-leopard')
+        ? ['black-pink-leopard-motifs.js', 'HeartStarBlackPinkLeopard', 'black-pink-leopard-7']
+        : ['caramel-leopard-motifs.js', 'HeartStarCaramelLeopard', 'caramel-leopard-8']
+    new Function('globalThis', source(file!))(scope)
+    const entries = scope[api!].register(assets)
+    expect(Object.keys(entries)).toHaveLength(6)
+    const original = assets[originalId!], asset = entries[id!]
+    expect(asset).toMatchObject({ baseName: label, group, type: original.type, variant: original.variant,
+      nativeW: original.nativeW, nativeH: original.nativeH, frame: original.frame })
+    const png = readFileSync(new URL(asset.src, directory))
+    expect([...png.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+    expect([png.readUInt32BE(16), png.readUInt32BE(20)]).toEqual([original.w * 4, original.h * 4])
+    expect(png[25]).toBe(6)
+    expect(assets).toEqual(before)
+    expect(toolHtml).toContain(`./${file}?v=${version}`)
+    expect(toolHtml).toContain(`Object.assign(customAssets,${api}.register(customAssets));`)
+    const s = setup()
+    Object.assign(s.assets, entries)
+    await s.feature.replace([2], id!)
+    expect(s.env.states[2]).toMatchObject({ size: .62, motif: { assetId: id, type: original.type,
       backgroundPart: original.variant === '原款' ? 'heart' : 'whole' } })
     expect(s.env.states[0]).toEqual({ size: .62, imageDx: 8, background: { type: 'color' } })
   })
