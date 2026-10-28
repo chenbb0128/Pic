@@ -125,7 +125,8 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 .watermark-controls input[type=text]{width:220px;min-width:0;height:32px;padding:0 8px;border:1px solid var(--line);border-radius:7px;color:var(--ink);background:#fff;font:inherit}
 .watermark-controls input[type=range]{width:80px;accent-color:var(--pink)}
 .watermark-controls output{min-width:28px}
-.watermark-controls button{margin-left:auto;height:32px;padding:0 10px;border-radius:7px;font-size:12px}
+.watermark-downloads{display:flex;align-items:center;gap:6px;margin-left:auto}
+.watermark-controls button{height:32px;padding:0 10px;border-radius:7px;font-size:12px;white-space:nowrap}
 .watermark-controls input:disabled{opacity:.5}
 .picture-preview-button{width:auto;padding:0 10px;gap:5px;display:flex;font-size:12px;white-space:nowrap}
 .picture-dialog{width:max-content;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);padding:12px;border:1px solid var(--line);border-radius:12px;background:#fff;overflow:auto}
@@ -271,6 +272,7 @@ const stage=document.getElementById('stage'),previewSurface=document.getElementB
 const watermarkControls=document.createElement('div');watermarkControls.className='watermark-controls';watermarkControls.innerHTML='<label><input id="watermarkEnabled" type="checkbox" checked>预览水印</label><input id="watermarkText" type="text" maxlength="40" value="仅供确认 · 禁止盗用" aria-label="水印文字"><label>浓度 <input id="watermarkOpacity" type="range" min="8" max="50" step="1" value="40" aria-label="水印浓度"><output id="watermarkOpacityValue">40%</output></label><button type="button" class="btn" id="downloadWatermarked">下载带水印预览图</button>';stage.before(watermarkControls);
 HeartStarWatermark.create({surface:previewSurface,enabled:document.getElementById('watermarkEnabled'),text:document.getElementById('watermarkText'),opacity:document.getElementById('watermarkOpacity'),value:document.getElementById('watermarkOpacityValue')});
 const watermarkDownload=document.getElementById('downloadWatermarked');watermarkDownload.disabled=true;watermarkDownload.addEventListener('click',()=>exportPng(true));
+const watermarkDownloads=document.createElement('div');watermarkDownloads.className='watermark-downloads';watermarkControls.append(watermarkDownloads);watermarkDownloads.append(watermarkDownload,download);
 const picturePreviewButton=document.createElement('button');picturePreviewButton.type='button';picturePreviewButton.className='preview-tool picture-preview-button';picturePreviewButton.textContent='预览图';picturePreviewButton.setAttribute('aria-haspopup','dialog');picturePreviewButton.setAttribute('aria-expanded','false');document.querySelector('.preview-tools').append(picturePreviewButton);
 const pictureDialog=document.createElement('dialog');pictureDialog.className='picture-dialog';pictureDialog.setAttribute('aria-labelledby','picturePreviewTitle');pictureDialog.innerHTML='<div class="picture-dialog-head"><h2 id="picturePreviewTitle">预览图</h2><button type="button" class="preview-tool" aria-label="关闭预览图">✕</button></div><div class="picture-dialog-content"></div>';document.body.append(pictureDialog);
 HeartStarWatermark.createDialog({button:picturePreviewButton,dialog:pictureDialog,close:pictureDialog.querySelector('button'),content:pictureDialog.querySelector('.picture-dialog-content'),render:picturePreviewSnapshot,onError:message=>say(message,true)});
