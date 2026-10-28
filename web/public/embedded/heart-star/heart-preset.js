@@ -48,7 +48,7 @@
   function buildLeopardMix(assets, arrange, first, second) {
     const repeat = (id, count) => Array(count).fill(id);
     const pair = (a, b, count) => [...repeat(a, count), ...repeat(b, count)];
-    return buildRows([
+    const rows = [
       pair(`${first}-star-small`, `${second}-star-small`, 3),
       pair(`${first}-star-small`, `${second}-star-small`, 3),
       pair(`${first}-heart-small`, `${second}-heart-small`, 3),
@@ -57,7 +57,16 @@
       [`${first}-heart`, `${second}-heart`, `${first}-star`, `${second}-star`],
       pair(`ime-${first}`, `ime-${second}`, 2),
       pair(`ime-${first}`, `ime-${second}`, 2),
-    ], assets, arrange, 144, 210, 10);
+    ];
+    const fittedAssets = { ...assets };
+    // Keep small motifs unchanged and reserve at least 2 mm between all eight rows.
+    for (const id of new Set(rows.slice(4).flat())) {
+      const asset = assets[id], factor = Math.min(1, 27.5 / Math.max(asset.nativeW, asset.nativeH));
+      fittedAssets[id] = { ...asset, nativeW: asset.nativeW * factor, nativeH: asset.nativeH * factor };
+    }
+    const cfg = buildRows(rows, fittedAssets, arrange, 144, 210);
+    cfg.motifSlots.forEach((meta, i) => { if (cfg.slots[i].row >= 4) meta.maxSizeMm = 27.5; });
+    return cfg;
   }
   function buildMacaron(assets, arrange) {
     const repeat = (id, count) => Array(count).fill(id);

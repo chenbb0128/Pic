@@ -43,8 +43,9 @@ describe('heart-star independent 210×144 template', () => {
     }
     cfg.placements.forEach((p: any, i: number) => {
       const asset = assets[p.assetId]
-      expect(p.w).toBeCloseTo(asset.nativeW * 10)
-      expect(p.h).toBeCloseTo(asset.nativeH * 10)
+      const factor = cfg.slots[i].row < 4 ? 1 : Math.min(1, 27.5 / Math.max(asset.nativeW, asset.nativeH))
+      expect(p.w).toBeCloseTo(asset.nativeW * factor * 10)
+      expect(p.h).toBeCloseTo(asset.nativeH * factor * 10)
       expect(cfg.motifSlots[i]).toMatchObject({ name: asset.baseName, variant: asset.variant, box: [p.x, p.y, p.w, p.h] })
       expect(cfg.slots[i].assetId).toBe(p.assetId)
       expect(api.initialState(cfg, i).background).toBeUndefined()
@@ -54,7 +55,7 @@ describe('heart-star independent 210×144 template', () => {
     expect(toolHtml).toContain('templates[HeartStarPreset.blackPinkCreamLeopardName]=HeartStarPreset.buildBlackPinkCreamLeopard(customAssets,buildCustomLayout);')
   })
 
-  it('builds the classic leopard mixed preset with 40 native-size motifs on portrait paper', () => {
+  it('builds the classic leopard mixed preset with 40 proportional motifs and consistent row spacing', () => {
     const { api, assets, build } = setup()
     const before = JSON.stringify(assets)
     const cfg = api.buildClassicLeopard(assets, build)
@@ -83,17 +84,24 @@ describe('heart-star independent 210×144 template', () => {
       expect(row[0].x).toBeCloseTo(cfg.w - row.at(-1).x - row.at(-1).w)
       row.forEach((p, column) => {
         const asset = assets[p.assetId]
-        expect(p.w).toBeCloseTo(asset.nativeW * 10)
-        expect(p.h).toBeCloseTo(asset.nativeH * 10)
+        const factor = r < 4 ? 1 : Math.min(1, 27.5 / Math.max(asset.nativeW, asset.nativeH))
+        expect(p.w).toBeCloseTo(asset.nativeW * factor * 10)
+        expect(p.h).toBeCloseTo(asset.nativeH * factor * 10)
+        expect(p.w / p.h).toBeCloseTo(asset.nativeW / asset.nativeH)
+        if (r < 4 && asset.type === 'heart') expect(p.w / 10).toBe(19.5)
+        if (r >= 4) {
+          expect(Math.max(p.w, p.h) / 10).toBeLessThanOrEqual(27.5 + 1e-10)
+          expect(cfg.motifSlots[cfg.placements.indexOf(p)].maxSizeMm).toBe(27.5)
+        }
         expect(p.x).toBeGreaterThanOrEqual(29.999)
         expect(p.y).toBeGreaterThanOrEqual(29.999)
         expect(p.x + p.w).toBeLessThanOrEqual(1410.001)
         expect(p.y + p.h).toBeLessThanOrEqual(2070.001)
-        if (column) expect(p.x - row[column - 1].x - row[column - 1].w).toBeGreaterThanOrEqual(9.999)
+        if (column) expect(p.x - row[column - 1].x - row[column - 1].w).toBeGreaterThanOrEqual(19.999)
         expect(api.initialState(cfg, cfg.placements.indexOf(p)).background).toBeUndefined()
         expect(existsSync(new URL('../../public/embedded/heart-star/' + asset.src.replace('./', '').split('?')[0], import.meta.url))).toBe(true)
       })
-      if (r) expect(Math.min(...row.map(p => p.y)) - Math.max(...rows[r - 1].map(p => p.y + p.h))).toBeGreaterThanOrEqual(9.999)
+      if (r) expect(Math.min(...row.map(p => p.y)) - Math.max(...rows[r - 1].map(p => p.y + p.h))).toBeGreaterThanOrEqual(19.999)
     })
     expect(JSON.stringify(assets)).toBe(before)
     expect(toolHtml).toContain(`<option value="${api.classicLeopardName}">经典豹纹款 · 爱心＋星星</option>`)
