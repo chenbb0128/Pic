@@ -133,7 +133,7 @@ describe('heart-star built-in motifs', () => {
   it('initializes small hearts at 19.5 mm width, small stars within 20 mm and I/ME within 30 mm', () => {
     const scope: any = {}
     for (const file of ['motif-catalog.js', 'ive-motifs.js', 'brown-motifs.js', 'pink-motifs.js',
-      'red-motifs.js', 'gold-leopard-motifs.js', 'caramel-leopard-motifs.js', 'black-pink-leopard-motifs.js', 'autumn-maple-leopard-motifs.js', 'yellow-motifs.js', 'sky-blue-motifs.js', 'light-blue-motifs.js', 'pattern-combos.js', 'template-motifs.js']) {
+      'red-motifs.js', 'gold-leopard-motifs.js', 'caramel-leopard-motifs.js', 'black-pink-leopard-motifs.js', 'autumn-maple-leopard-motifs.js', 'cream-pink-leopard-motifs.js', 'yellow-motifs.js', 'sky-blue-motifs.js', 'light-blue-motifs.js', 'pattern-combos.js', 'template-motifs.js']) {
       new Function('globalThis', source(file))(scope)
     }
     const start = toolHtml.indexOf('const customAssets=')
