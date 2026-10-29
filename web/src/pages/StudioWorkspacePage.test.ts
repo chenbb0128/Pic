@@ -138,8 +138,6 @@ describe('overflow artboards', () => {
       expect([proof.width, proof.height]).toEqual([1557, 1600])
       expect(context.fillText).toHaveBeenLastCalledWith('订单A', 1557 / 108, 109.5 * 1600 / 111)
       expect(state.pointMm({ clientX: 10, clientY: 100 }, canvas)).toEqual({ xMm: 10, yMm: 100 })
-      state.adjusting = true
-      state.adjustTool = 'select'
       state.onPointerDown({ button: 0, clientX: 10, clientY: 110, pointerId: 1, preventDefault() {} })
       expect(state.boxSelection).toBeNull()
     } finally { state.preview = null; cleanup(); vi.unstubAllGlobals() }
@@ -174,8 +172,6 @@ describe('overflow artboards', () => {
       expect([thumbnail.width, thumbnail.height]).toEqual([400, 270])
       const proof = state.createProofCanvas()
       expect([proof.width, proof.height]).toEqual([1600, 1082])
-      state.adjusting = true
-      state.adjustTool = 'select'
       state.onPointerDown({ button: 0, clientX: 212, clientY: 10, pointerId: 1, preventDefault() {} })
       expect(state.boxSelection).toBeNull()
       expect(JSON.stringify(state.placements)).toBe(before)
@@ -329,8 +325,6 @@ describe('overflow artboards', () => {
       state.resetLayout()
       state.manualPlacements = [10, 40, 75].map(xMm => ({ itemId: 'one', xMm, yMm: 10, widthMm: 10, heightMm: 10 }))
       state.preview = canvas
-      state.adjusting = true
-      state.adjustTool = 'select'
       state.selectedPlacementIndices = [0]
       state.onPointerDown(event(35, 5, true))
       state.onPointerEnd(event(55, 25))
@@ -520,7 +514,6 @@ describe('overflow artboards', () => {
         { itemId: 'two', xMm: 30, yMm: 10, widthMm: 10, heightMm: 10 },
       ]
       state.preview = canvas
-      state.adjusting = true
       state.selectedPlacementIndex = 0
       state.setSelectedWidth(2.4)
       expect(state.placements[0].widthMm).toBe(24)
@@ -646,7 +639,6 @@ describe('overflow artboards', () => {
       state.resetLayout()
       state.setAssetSize('one', 'heightMm', 4)
       state.setRotation('one', 90)
-      state.adjusting = true
       state.selectedPlacementIndices = [0]
       state.boxSelection = { pointerId: 1, startXmm: 0, startYmm: 0, xMm: 100, yMm: 100 }
       const context = { clearRect() {}, save() {}, restore() {}, rotate: vi.fn(), translate() {}, drawImage: vi.fn() }
@@ -657,15 +649,19 @@ describe('overflow artboards', () => {
     } finally { cleanup() }
   })
 
-  it('框选图案入口直接显示在顶部', async () => {
+  it('直接操作：固定调整栏且不再显示调整、框选模式开关', async () => {
     const app = createSSRApp(Workspace)
     app.component('RouterLink', { render: () => null })
     const html = await renderToString(app)
     const toolbar = html.match(/<div\b[^>]*aria-label="画板工具栏"[\s\S]*?(?=<div[^>]*aria-label="画布区域")/)![0]
-    expect(toolbar).toContain('框选图案')
+    expect(toolbar).not.toContain('>调整</button>')
+    expect(toolbar).not.toContain('>框选图案</button>')
+    expect(html).toContain('aria-label="选中图片调整"')
+    expect(html).toContain('空白处拖框')
+    expect(html).not.toContain('>单张调整</button>')
   })
 
-  it.each(['mouse', 'touch'])('顶部框选：按中心实时选择，缩放后 Shift 追加，Esc 取消（%s）', async pointerType => {
+  it.each(['mouse', 'touch'])('直接操作：空白处框选、Shift 追加和点选切换，取消保留原选择（%s）', async pointerType => {
     const { state, asset, cleanup } = mountWorkspace()
     const canvas = { getBoundingClientRect: () => ({ left: 40, top: 60, width: 216, height: 222 }),
       setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
@@ -678,36 +674,100 @@ describe('overflow artboards', () => {
       state.manualPlacements = [10, 35, 70].map(xMm => ({ itemId: 'one', xMm, yMm: 10, widthMm: 10, heightMm: 10 }))
       state.preview = canvas
       state.numberingEnabled = true
-      state.overviewOpen = true
       const before = JSON.stringify(state.placements)
-      state.toggleBoxSelection()
-      expect(state.adjusting).toBe(true)
-      expect(state.adjustTool).toBe('select')
-      expect(state.overviewOpen).toBe(false)
-      state.onPointerDown(event(14, 14, 'pointerdown'))
+      state.onPointerDown(event(5, 5, 'pointerdown'))
       state.onPointerMove(event(41, 16))
       expect(state.selectedPlacementIndices).toEqual([0, 1])
       state.onPointerEnd(event(41, 16, 'pointerup'))
-      state.onPointerDown(event(76, 16, 'pointerdown', true))
+      state.onPointerDown(event(80, 24, 'pointerdown', true))
       state.onPointerMove(event(74, 14, 'pointermove', true))
       state.onPointerEnd(event(74, 14, 'pointerup', true))
       expect(state.selectedPlacementIndices).toEqual([0, 1, 2])
-      state.onPointerDown(event(14, 14, 'pointerdown'))
+      state.onPointerDown(event(5, 5, 'pointerdown'))
       state.onPointerMove(event(16, 16))
       expect(state.selectedPlacementIndices).toEqual([0])
       state.onPointerEnd(event(16, 16, 'pointercancel'))
-      expect(state.selectedPlacementIndices).toEqual([])
-      state.onPointerDown(event(14, 14, 'pointerdown'))
+      expect(state.selectedPlacementIndices).toEqual([0, 1, 2])
+      state.onPointerDown(event(15, 15, 'pointerdown', true))
+      expect(state.selectedPlacementIndices).toEqual([1, 2])
+      state.onPointerDown(event(40, 15, 'pointerdown', true))
+      expect(state.selectedPlacementIndices).toEqual([2])
+      expect(state.selectedPlacementIndex).toBe(2)
+      state.onPointerDown(event(5, 5, 'pointerdown'))
       state.onPointerEnd(event(41, 16, 'pointerup'))
       expect(JSON.stringify(state.placements)).toBe(before)
       expect(state.layoutPending).toBe(false)
       state.onWorkspaceKeydown({ key: 'Escape', preventDefault() {} })
       expect(state.selectedPlacementIndices).toEqual([])
-      state.toggleBoxSelection()
-      expect(state.adjustTool).toBe('move')
       state.exporting = true
-      state.toggleBoxSelection()
-      expect(state.adjustTool).toBe('move')
+      state.onPointerDown(event(15, 15, 'pointerdown'))
+      expect(state.selectedPlacementIndex).toBeNull()
+    } finally { state.preview = null; cleanup() }
+  })
+
+  it.each(['mouse', 'touch'])('直接操作：点选不误移，多选整体拖动且按整体边界限位（%s）', pointerType => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
+      setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
+    const event = (x: number, y: number, type = 'pointermove', shiftKey = false) => ({
+      clientX: x, clientY: y, pointerId: 1, pointerType, button: 0, isPrimary: true, type, shiftKey, preventDefault() {} })
+    try {
+      state.assets = [asset('one', 3, 10)]
+      state.resetLayout()
+      state.manualPlacements = [10, 40, 80].map(xMm => ({ itemId: 'one', xMm, yMm: 10, widthMm: 10, heightMm: 10 }))
+      state.preview = canvas
+      const before = JSON.parse(JSON.stringify(state.placements))
+      state.onPointerDown(event(15, 15, 'pointerdown'))
+      expect(state.selectedPlacementIndex).toBe(0)
+      state.onPointerMove(event(16, 16))
+      state.onPointerEnd(event(16, 16, 'pointerup'))
+      expect(state.placements).toEqual(before)
+      state.onPointerDown(event(45, 15, 'pointerdown', true))
+      expect(state.selectedPlacementIndices).toEqual([0, 1])
+      state.onPointerDown(event(15, 15, 'pointerdown'))
+      state.onPointerMove(event(20, 35))
+      expect(state.placements.slice(0, 2).map((p: any) => [p.xMm, p.yMm])).toEqual([[15, 30], [45, 30]])
+      state.onPointerMove(event(115, 35))
+      expect(state.placements.slice(0, 2).map((p: any) => [p.xMm, p.yMm])).toEqual([[64, 30], [94, 30]])
+      state.onPointerMove(event(-85, 35))
+      state.onPointerEnd(event(-85, 35, 'pointerup'))
+      expect(state.placements.slice(0, 2).map((p: any) => [p.xMm, p.yMm])).toEqual([[4, 30], [34, 30]])
+      expect(state.placements.map((p: any) => [p.widthMm, p.heightMm])).toEqual([[10, 10], [10, 10], [10, 10]])
+      expect(state.placements[2]).toEqual(before[2])
+      expect(state.selectedPlacementIndices).toEqual([0, 1])
+      state.onPointerDown(event(5, 80, 'pointerdown'))
+      state.onPointerEnd(event(5, 80, 'pointerup'))
+      expect(state.selectedPlacementIndices).toEqual([])
+      expect(state.selectedPlacementIndex).toBeNull()
+    } finally { state.preview = null; cleanup() }
+  })
+
+  it('直接操作：多选拖动整组拒绝重叠，取消移动恢复原位置，切换画板清空选区', () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),
+      setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
+    const event = (x: number, y: number, type = 'pointermove', shiftKey = false) => ({
+      clientX: x, clientY: y, pointerId: 1, button: 0, isPrimary: true, type, shiftKey, preventDefault() {} })
+    try {
+      state.assets = [asset('one', 3, 10)]
+      state.resetLayout()
+      state.manualPlacements = [10, 35, 80].map(xMm => ({ itemId: 'one', xMm, yMm: 10, widthMm: 10, heightMm: 10 }))
+      state.preview = canvas
+      const before = JSON.parse(JSON.stringify(state.placements))
+      state.onPointerDown(event(5, 5, 'pointerdown'))
+      state.onPointerEnd(event(46, 21, 'pointerup'))
+      state.onPointerDown(event(15, 15, 'pointerdown'))
+      state.onPointerMove(event(50, 15))
+      expect(state.placements.slice(0, 2).map((p: any) => p.xMm)).toEqual([45, 70])
+      state.onPointerMove(event(51, 15))
+      expect(state.placements.slice(0, 2).map((p: any) => p.xMm)).toEqual([45, 70])
+      expect(state.status).toContain('重叠')
+      state.onPointerEnd(event(51, 15, 'pointercancel'))
+      expect(state.placements).toEqual(before)
+      state.boards = [state.snapshotBoard(), state.snapshotBoard()]
+      state.selectBoard(1)
+      expect(state.selectedPlacementIndices).toEqual([])
+      expect(state.selectedPlacementIndex).toBeNull()
     } finally { state.preview = null; cleanup() }
   })
 
@@ -727,8 +787,6 @@ describe('overflow artboards', () => {
         { itemId: 'one', xMm: 10, yMm: 70, widthMm: 10, heightMm: 10 },
       ]
       state.preview = canvas
-      state.adjusting = true
-      state.adjustTool = 'select'
       state.onPointerDown(event(5, 5, 'pointerdown'))
       state.onPointerMove(event(95, 50))
       state.onPointerEnd(event(95, 50, 'pointerup'))
@@ -739,7 +797,7 @@ describe('overflow artboards', () => {
       state.onPointerDown(event(5, 5, 'pointerdown'))
       state.onPointerEnd(event(95, 100, 'pointercancel'))
       expect(state.boxSelection).toBeNull()
-      state.adjusting = false
+      state.clearCanvasSelection()
       await nextTick()
       expect(state.selectedPlacementIndices).toEqual([])
     } finally { state.preview = null; cleanup() }
@@ -1275,7 +1333,6 @@ describe('overflow artboards', () => {
         state.assets.value = [{ id: 'one', name: '图片', url: 'blob:one', width: 100, height: 100,
           widthMm: 50, heightMm: 50, quantity: 1, selected: true, rotationDeg: 0, ratioLocked: true }]
         state.resetLayout()
-        state.adjusting.value = true
         state.selectedPlacementIndex.value = 0
         return state
       },

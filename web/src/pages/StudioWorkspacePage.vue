@@ -32,11 +32,14 @@ interface StudioAsset extends LocalImage {
 
 interface DragState {
   pointerId: number
+  startClientX: number
+  startClientY: number
+  active: boolean
   startXmm: number
   startYmm: number
   originXmm: number
   originYmm: number
-  normalIndex?: number
+  copies?: { index: number; slot: Placement }[]
   groupId?: string
 }
 
@@ -58,6 +61,8 @@ interface BoxSelection {
   xMm: number
   yMm: number
   previousIndices?: number[]
+  initialIndices?: number[]
+  initialSelectedIndex?: number | null
 }
 
 interface StudioBoard {
@@ -123,8 +128,6 @@ const uploading = ref(false)
 const exporting = ref(false)
 const exportProgress = ref<number | null>(null)
 const batchExportLabel = ref('')
-const adjusting = ref(false)
-const adjustTool = ref<'move' | 'select'>('move')
 const boxSelection = shallowRef<BoxSelection | null>(null)
 const selectedPlacementIndices = ref<number[]>([])
 const background = ref<'checker' | 'white' | 'dark'>('checker')
@@ -346,10 +349,8 @@ function selectBoard(index: number): void {
     layoutPending.value = saved.layoutPending
     layoutOverflow.value = saved.layoutOverflow
   } finally { switchingBoard = false }
-  adjusting.value = false
   overviewOpen.value = false
-  selectedPlacementIndex.value = null
-  drag.value = null
+  clearCanvasSelection()
   clearGenerated()
   status.value = `已切换到画板 ${index + 1}，导出 PNG 仅导出当前画板。`
   void nextTick(renderPreview)
@@ -738,10 +739,11 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
     else context.drawImage(asset.image, -drawWidth / 2, -drawHeight / 2, drawWidth, drawHeight)
     context.restore()
     if (guides) {
-      const selected = adjusting.value && (selectedPlacementIndex.value === index || selectedPlacementIndices.value.includes(index))
+      const selected = selectedPlacementIndex.value === index || selectedPlacementIndices.value.includes(index) ||
+        (selectedLocked.value && !!asset.lockedGroupId && asset.lockedGroupId === selectedAsset.value?.lockedGroupId)
       context.save()
-      context.strokeStyle = selected ? '#fbbf24' : adjusting.value ? 'rgba(124,58,237,.8)' : 'rgba(99,102,241,.28)'
-      context.lineWidth = selected ? 3 : adjusting.value ? 2 : 1
+      context.strokeStyle = selected ? '#fbbf24' : 'rgba(99,102,241,.28)'
+      context.lineWidth = selected ? 3 : 1
       if (selected) context.setLineDash([8, 5])
       context.strokeRect(x, y, w, h)
       context.restore()
@@ -855,7 +857,7 @@ watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () 
   }
 }, { flush: 'sync' })
 watch([assets, exporting, uploading, controlsOpen], cancelAssetDrag, { flush: 'sync' })
-watch([paper, placements, placedAssets, adjusting], () => { void nextTick(renderPreview); clearGenerated() })
+watch([paper, placements, placedAssets], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
 watch([numberingEnabled, footerText], () => {
   if (!clearingDownloadedFooter) clearGenerated()
@@ -865,8 +867,7 @@ watch([selectedPlacementIndex, selectedPlacementIndices, boxSelection], () => { 
 watch([watermarkEnabled, watermarkText, watermarkOpacity], () => {
   void nextTick(() => { renderPreview(); if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index)) })
 })
-watch(adjusting, (active) => { if (!active) { clearCanvasSelection(); adjustTool.value = 'move' } }, { flush: 'sync' })
-watch(adjustTool, clearCanvasSelection, { flush: 'sync' })
+watch([exporting, uploading, overviewOpen], (values) => { if (values.some(Boolean)) clearCanvasSelection() }, { flush: 'sync' })
 watch(() => overviewOpen.value ? overviewBoards.value : null, () => {
   void nextTick(() => {
     if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index))
@@ -900,16 +901,9 @@ function clearCanvasSelection(): void {
   if (pointerId !== undefined && preview.value?.hasPointerCapture(pointerId)) preview.value.releasePointerCapture(pointerId)
 }
 
-function toggleBoxSelection(): void {
-  if (!placements.value.length || exporting.value || uploading.value) return
-  overviewOpen.value = false
-  if (adjusting.value && adjustTool.value === 'select') {
-    adjustTool.value = 'move'
-    return
-  }
-  adjusting.value = true
-  adjustTool.value = 'select'
-  status.value = '拖框覆盖图案中心即可选中；Shift 追加选择，Esc 取消，锁定组不参与。'
+function setCanvasSelection(indices: number[]): void {
+  selectedPlacementIndices.value = [...new Set(indices)].sort((a, b) => a - b)
+  selectedPlacementIndex.value = selectedPlacementIndices.value.length === 1 ? selectedPlacementIndices.value[0]! : null
 }
 
 function distributeSelected(axis: 'x' | 'y'): void {
@@ -925,33 +919,48 @@ function distributeSelected(axis: 'x' | 'y'): void {
 
 function onPointerDown(event: PointerEvent): void {
   const canvas = preview.value
-  if (!adjusting.value || !canvas || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
+  if (!canvas || !placements.value.length || overviewOpen.value || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
   const point = pointMm(event, canvas)
-  if (point.xMm >= paper.value.widthMm || point.yMm >= paper.value.heightMm) return
-  if (adjustTool.value === 'select') {
-    const previousIndices = event.shiftKey ? [...selectedPlacementIndices.value] : []
-    selectedPlacementIndex.value = null
-    if (!event.shiftKey) selectedPlacementIndices.value = []
-    boxSelection.value = { pointerId: event.pointerId, startXmm: point.xMm, startYmm: point.yMm, ...point, previousIndices }
-    canvas.setPointerCapture(event.pointerId)
-    event.preventDefault()
-    return
-  }
+  if (point.xMm < 0 || point.yMm < 0 || point.xMm >= paper.value.widthMm || point.yMm >= paper.value.heightMm) return
+  canvas.focus?.({ preventScroll: true })
   let index = placements.value.length - 1
   while (index >= 0) {
     const slot = placements.value[index]
     if (point.xMm >= slot.xMm && point.xMm <= slot.xMm + slot.widthMm && point.yMm >= slot.yMm && point.yMm <= slot.yMm + slot.heightMm) break
     index -= 1
   }
-  if (index < 0) { selectedPlacementIndex.value = null; return }
-  selectedPlacementIndex.value = index
+  if (index < 0) {
+    const initialIndices = [...selectedPlacementIndices.value]
+    const initialSelectedIndex = selectedPlacementIndex.value
+    const previousIndices = event.shiftKey ? initialIndices : []
+    setCanvasSelection(previousIndices)
+    boxSelection.value = { pointerId: event.pointerId, startXmm: point.xMm, startYmm: point.yMm,
+      ...point, previousIndices, initialIndices, initialSelectedIndex }
+    canvas.setPointerCapture(event.pointerId)
+    event.preventDefault()
+    return
+  }
+  if (event.shiftKey) {
+    if (index < lockedPlacements.value.length) status.value = '锁定组需先解锁后再加入多选。'
+    else setCanvasSelection(selectedPlacementIndices.value.includes(index)
+      ? selectedPlacementIndices.value.filter(selected => selected !== index) : [...selectedPlacementIndices.value, index])
+    event.preventDefault()
+    return
+  }
+  if (index < lockedPlacements.value.length) {
+    selectedPlacementIndices.value = []
+    selectedPlacementIndex.value = index
+  } else if (!selectedPlacementIndices.value.includes(index)) setCanvasSelection([index])
   const slot = placements.value[index]
   const asset = assets.value.find((item) => item.id === slot.itemId)
   const group = asset?.lockedGroupId ? groups.value.find((item) => item.id === asset.lockedGroupId) : undefined
   drag.value = {
-    pointerId: event.pointerId, startXmm: point.xMm, startYmm: point.yMm,
+    pointerId: event.pointerId, startClientX: event.clientX, startClientY: event.clientY, active: false,
+    startXmm: point.xMm, startYmm: point.yMm,
     originXmm: group?.xMm ?? slot.xMm, originYmm: group?.yMm ?? slot.yMm,
-    ...(group ? { groupId: group.id } : { normalIndex: index - lockedPlacements.value.length }),
+    ...(group ? { groupId: group.id } : { copies: selectedPlacementIndices.value.map(selected => ({
+      index: selected - lockedPlacements.value.length, slot: { ...placements.value[selected]! },
+    })) }),
   }
   canvas.setPointerCapture(event.pointerId)
   event.preventDefault()
@@ -964,12 +973,14 @@ function onPointerMove(event: PointerEvent): void {
     const point = pointMm(event, canvas)
     boxSelection.value = { ...box, ...point }
     const found = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, point, lockedPlacements.value.length)
-    selectedPlacementIndices.value = [...new Set([...(box.previousIndices ?? []), ...found])].sort((a, b) => a - b)
+    setCanvasSelection([...(box.previousIndices ?? []), ...found])
     event.preventDefault()
     return
   }
   const current = drag.value
   if (!current || current.pointerId !== event.pointerId || !canvas) return
+  if (!current.active && Math.hypot(event.clientX - current.startClientX, event.clientY - current.startClientY) < 3) return
+  current.active = true
   const point = pointMm(event, canvas)
   const deltaX = point.xMm - current.startXmm
   const deltaY = point.yMm - current.startYmm
@@ -987,18 +998,23 @@ function onPointerMove(event: PointerEvent): void {
     }
     if (!allowPlacementChange([...flattenGroups(updated), ...manualPlacements.value], changed)) return
     groups.value = updated
-  } else if (current.normalIndex !== undefined) {
+  } else if (current.copies?.length) {
     const updated = [...manualPlacements.value]
-    const slot = updated[current.normalIndex]
-    if (!slot) return
-    updated[current.normalIndex] = {
-      ...slot,
-      xMm: clampPaperPosition(current.originXmm + deltaX, slot.widthMm, paper.value.widthMm),
-      yMm: clampPaperPosition(current.originYmm + deltaY, slot.heightMm, paper.value.heightMm),
+    const left = Math.min(...current.copies.map(copy => copy.slot.xMm))
+    const top = Math.min(...current.copies.map(copy => copy.slot.yMm))
+    const width = Math.max(...current.copies.map(copy => copy.slot.xMm + copy.slot.widthMm)) - left
+    const height = Math.max(...current.copies.map(copy => copy.slot.yMm + copy.slot.heightMm)) - top
+    const dx = clampPaperPosition(left + deltaX, width, paper.value.widthMm) - left
+    const dy = clampPaperPosition(top + deltaY, height, paper.value.heightMm) - top
+    const changed = new Set<number>()
+    for (const copy of current.copies) {
+      updated[copy.index] = { ...copy.slot, xMm: copy.slot.xMm + dx, yMm: copy.slot.yMm + dy }
+      changed.add(lockedPlacements.value.length + copy.index)
     }
-    if (!allowPlacementChange([...lockedPlacements.value, ...updated], new Set([lockedPlacements.value.length + current.normalIndex]))) return
+    if (!allowPlacementChange([...lockedPlacements.value, ...updated], changed)) return
     manualPlacements.value = updated
   }
+  status.value = '已移动选中图片，尺寸和相对位置保持不变。'
 }
 
 function onPointerEnd(event: PointerEvent): void {
@@ -1007,11 +1023,26 @@ function onPointerEnd(event: PointerEvent): void {
     if (event.type === 'pointerup' && preview.value) {
       const end = pointMm(event, preview.value)
       const found = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, end, lockedPlacements.value.length)
-      selectedPlacementIndices.value = [...new Set([...(box.previousIndices ?? []), ...found])].sort((a, b) => a - b)
-      status.value = `已框选 ${selectedPlacementIndices.value.length} 张图片；至少选中 3 张可等间距排列，锁定组不参与。`
-    } else selectedPlacementIndices.value = box.previousIndices ?? []
+      setCanvasSelection([...(box.previousIndices ?? []), ...found])
+      status.value = `已选 ${selectedPlacementIndices.value.length} 张图片；拖动选中图片可整体移动，Shift 点选可增减，Esc 取消。`
+    } else {
+      setCanvasSelection(box.initialIndices ?? box.previousIndices ?? [])
+      selectedPlacementIndex.value = box.initialSelectedIndex ?? selectedPlacementIndex.value
+    }
     boxSelection.value = null
   } else if (drag.value?.pointerId !== event.pointerId) return
+  else if (event.type === 'pointerup') onPointerMove(event)
+  else if (drag.value.active) {
+    const current = drag.value
+    if (current.groupId) groups.value = groups.value.map(group => group.id === current.groupId
+      ? { ...group, xMm: current.originXmm, yMm: current.originYmm } : group)
+    else if (current.copies) {
+      const restored = [...manualPlacements.value]
+      for (const copy of current.copies) restored[copy.index] = { ...copy.slot }
+      manualPlacements.value = restored
+    }
+    status.value = '已取消移动，图片恢复原位置。'
+  }
   drag.value = null
   if (preview.value?.hasPointerCapture(event.pointerId)) preview.value.releasePointerCapture(event.pointerId)
 }
@@ -1026,7 +1057,6 @@ function resetLayout(): void {
   layoutOverflow.value = result.overflow
   layoutPending.value = false
   clearCanvasSelection()
-  adjusting.value = false
   status.value = mode.value === 'smart' ? '已按当前排列方式重新智能排版；列表靠前的图片优先，锁组保留原有位置。' : '已重新自动排版；锁组保留原有位置。'
 }
 
@@ -1364,8 +1394,6 @@ async function copyFooterNumber(): Promise<void> {
         </div>
         <div class="ml-auto flex flex-wrap items-center gap-1.5">
           <button type="button" class="studio-toolbar is-primary" :disabled="!assets.length || exporting || uploading" @click="resetLayout">✦ 排版</button>
-          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="overviewOpen = false; adjusting = !adjusting">{{ adjusting ? '完成调整' : '调整' }}</button>
-          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting && adjustTool === 'select' }" :aria-pressed="adjusting && adjustTool === 'select'" :disabled="!placements.length || exporting || uploading" title="拖框覆盖图案中心即可选中；Shift 追加选择，Esc 取消" @click="toggleBoxSelection">框选图案</button>
           <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError || !!patternSpacingError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '导出当前画板' : '导出 PNG' }}</button>
           <button type="button" class="studio-toolbar" :disabled="!placements.length || exporting || uploading || proofDownloading" @click="downloadWatermarkedPreview">{{ proofDownloading ? '正在生成…' : '下载带水印预览图' }}</button>
           <button type="button" class="studio-toolbar" aria-haspopup="dialog" aria-controls="studio-preview-dialog" :disabled="!placements.length || exporting || uploading" @click="openPreviewDialog">预览图</button>
@@ -1400,20 +1428,10 @@ async function copyFooterNumber(): Promise<void> {
         </div>
       </section>
       <div :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-2">
-      <div v-if="adjusting" class="flex shrink-0 flex-wrap items-center gap-1.5 text-xs" aria-label="框选与等间距排列">
-        <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'move' }" :aria-pressed="adjustTool === 'move'" @click="adjustTool = 'move'">单张调整</button>
-        <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'select' }" :aria-pressed="adjustTool === 'select'" @click="adjustTool = 'select'">框选图片</button>
-        <template v-if="adjustTool === 'select'">
-          <span class="text-slate-500">已选 {{ selectedPlacementIndices.length }} 张</span>
-          <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('x')">横向等间距</button>
-          <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('y')">纵向等间距</button>
-          <button type="button" class="px-2 py-1 text-slate-500" :disabled="!selectedPlacementIndices.length" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
-        </template>
-      </div>
       <div class="studio-canvas-area" aria-label="画布区域">
         <div ref="viewport" class="studio-viewport">
           <div ref="sheet" class="studio-canvas-sheet" :style="canvasStyle">
-            <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas shadow-2xl" :class="[`bg-${background}`, { 'is-adjusting': adjusting, 'is-selecting': adjusting && adjustTool === 'select' }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
+            <canvas ref="preview" :width="previewWidth" :height="previewHeight" tabindex="0" class="studio-canvas studio-editable-canvas shadow-2xl" :class="[`bg-${background}`, { 'is-dragging': drag?.active, 'is-selecting': !!boxSelection }]" aria-label="排版实时预览" aria-describedby="studio-canvas-help" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
           </div>
         </div>
         <div class="studio-zoom-controls" role="group" aria-label="画布缩放">
@@ -1424,19 +1442,26 @@ async function copyFooterNumber(): Promise<void> {
           <button type="button" :aria-label="expanded ? '退出全屏' : '全屏画布'" :aria-pressed="expanded" :disabled="!!drag || !!boxSelection" @click="toggleFullscreen">{{ expanded ? '退出全屏' : '全屏' }}</button>
         </div>
       </div>
-      <section v-if="adjusting" aria-label="选中图片调整" class="flex h-14 shrink-0 items-center gap-3 overflow-x-auto rounded-lg border border-amber-400 bg-slate-900 px-3 py-2 text-white">
+      <section aria-label="选中图片调整" class="flex h-14 shrink-0 items-center gap-3 overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-white">
+        <p id="studio-canvas-help" class="sr-only">点击图片选中并拖动；空白处拖框多选，Shift 点选增减；拖动任一选中图片可整体移动，Esc 取消选择。</p>
+        <span v-if="selectedPlacementIndex !== null || selectedPlacementIndices.length" class="shrink-0 text-xs font-semibold text-amber-300" aria-live="polite">{{ selectedLocked ? '已选锁定组' : `已选 ${selectedPlacementIndices.length || 1} 张` }}</span>
         <template v-if="selectedPlacement">
-        <div class="flex min-w-0 max-w-44 items-center gap-1 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-1 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
+        <strong class="max-w-32 shrink-0 truncate text-xs" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong>
         <p v-if="selectedLocked" class="text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
         <div v-else class="flex shrink-0 items-center gap-2 text-xs">
           <span class="shrink-0">宽度</span>
-          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="缩小选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
-          <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900" :value="(selectedPlacement.widthMm / 10).toFixed(1)" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
+          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base disabled:opacity-40" aria-label="缩小选中图片" :disabled="exporting || uploading || !!drag || !!boxSelection" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
+          <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900 disabled:opacity-40" :value="(selectedPlacement.widthMm / 10).toFixed(1)" :disabled="exporting || uploading || !!drag || !!boxSelection" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
           <span class="shrink-0">cm</span>
-          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="放大选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
+          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base disabled:opacity-40" aria-label="放大选中图片" :disabled="exporting || uploading || !!drag || !!boxSelection" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
         </div>
         </template>
-        <p v-else class="text-xs text-slate-300">{{ adjustTool === 'select' ? '框住图案中心即可选中；Shift 追加，Esc 取消，至少 3 张可等间距排列。' : '点击图片后拖动位置、调整大小；Esc 取消选择。' }}</p>
+        <p v-else class="shrink-0 text-xs text-slate-300">{{ selectedPlacementIndices.length ? '拖动任一选中图片整体移动；Shift 点选增减。' : '点击图片选中并拖动；空白处拖框多选。' }}</p>
+        <div class="ml-auto flex shrink-0 items-center gap-1.5 text-xs" aria-label="框选与等间距排列">
+          <button type="button" class="studio-toolbar" title="至少选中 3 张图片后，横向等间距排列" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading || !!drag || !!boxSelection" @click="distributeSelected('x')">横向等间距</button>
+          <button type="button" class="studio-toolbar" title="至少选中 3 张图片后，纵向等间距排列" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading || !!drag || !!boxSelection" @click="distributeSelected('y')">纵向等间距</button>
+          <button type="button" class="shrink-0 px-2 py-1 text-slate-300 disabled:opacity-40" :disabled="(selectedPlacementIndex === null && !selectedPlacementIndices.length) || !!drag || !!boxSelection" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
+        </div>
       </section>
       <footer class="studio-statusbar" aria-label="画板状态">
         <div class="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1">
@@ -1468,11 +1493,11 @@ async function copyFooterNumber(): Promise<void> {
     </dialog>
     <dialog id="studio-shortcut-dialog" ref="shortcutDialog" aria-labelledby="studio-shortcut-title" class="studio-dialog studio-shortcut-dialog" @click="closeDialogOnBackdrop">
       <div class="flex items-center justify-between gap-3"><h2 id="studio-shortcut-title" class="text-lg font-bold">快捷键指南</h2><button type="button" autofocus aria-label="关闭快捷键指南" class="h-9 w-9 rounded-lg border border-slate-200 text-xl text-slate-500" @click="shortcutDialog?.close()">×</button></div>
-      <p class="mt-2 text-xs leading-6 text-slate-500">画板操作先点击「调整」。输入框编辑时不触发画板快捷键，手机可使用触摸和页面按钮。</p>
+      <p class="mt-2 text-xs leading-6 text-slate-500">直接点击图片选中并拖动，空白处拖框多选。输入框编辑时不触发画板快捷键，手机可使用触摸和页面按钮。</p>
       <dl class="mt-4 divide-y divide-slate-100 text-sm">
         <div class="py-3"><dt class="font-semibold">取消画板选择 <kbd>Esc</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">仅取消选中，不删除图片、不改变素材勾选；弹窗打开时 Esc 只关闭弹窗。</dd></div>
-        <div class="py-3"><dt class="font-semibold">框选图案 <kbd>鼠标 / 手指拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">点击顶部「框选图案」，框住图案中心即可选中；Shift 追加，Esc 取消；至少 3 张可横向或纵向等间距排列，锁定组不参与。</dd></div>
-        <div class="py-3"><dt class="font-semibold">追加选择 <kbd>Shift + 拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">保留已选图片，再添加新框住的图片；锁定组需先解锁。</dd></div>
+        <div class="py-3"><dt class="font-semibold">框选图案 <kbd>空白处拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">从纸张空白处拖框，框住图案中心即可选中；拖动任一选中图片可整体移动；至少 3 张可等间距排列，锁定组不参与框选。</dd></div>
+        <div class="py-3"><dt class="font-semibold">增减选择 <kbd>Shift + 点击 / 拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">Shift 点击图片切换选中，Shift 从空白处拖框追加；锁定组需先解锁。</dd></div>
         <div class="py-3"><dt class="font-semibold">素材列表排序 <kbd>↑ / ↓ / Home / End</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">先聚焦图片明细右侧拖拽手柄，上下移动或移至首尾。只改变列表优先级，点击「排版」后应用。</dd></div>
       </dl>
       <p class="mt-4 text-xs text-slate-400">按 Esc、点击 × 或弹窗外部可关闭指南。</p>
@@ -1595,8 +1620,8 @@ async function copyFooterNumber(): Promise<void> {
 .studio-canvas.bg-checker { background-color: white; background-image: linear-gradient(45deg,#ddd 25%,transparent 25%),linear-gradient(-45deg,#ddd 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ddd 75%),linear-gradient(-45deg,transparent 75%,#ddd 75%); background-size: 20px 20px; background-position: 0 0,0 10px,10px -10px,-10px 0; }
 .studio-canvas.bg-white { background: #fff; }
 .studio-canvas.bg-dark { background: #1e293b; }
-.studio-canvas.is-adjusting { cursor: grab; touch-action: none; }
-.studio-canvas.is-adjusting:active { cursor: grabbing; }
+.studio-editable-canvas { touch-action: none; }
+.studio-canvas.is-dragging { cursor: grabbing; }
 .studio-canvas.is-selecting, .studio-canvas.is-selecting:active { cursor: crosshair; }
 @media (max-width: 520px) {
   .studio-gap-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 5px; }
