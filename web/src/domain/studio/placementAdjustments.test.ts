@@ -40,9 +40,12 @@ describe('box selection and equal spacing', () => {
   ]
   const paper = { widthMm: 100, heightMm: 100 }
 
-  it('selects fully enclosed instances in either drag direction and excludes locked instances', () => {
+  it('selects instances by their centers in either drag direction and excludes locked instances', () => {
     expect(adjustments.selectPlacementsInBox(slots, { xMm: 95, yMm: 50 }, { xMm: 5, yMm: 5 }, 1)).toEqual([1, 2])
     expect(adjustments.selectPlacementsInBox(slots, { xMm: 5, yMm: 5 }, { xMm: 40, yMm: 50 })).toEqual([0])
+    expect(adjustments.selectPlacementsInBox(slots, { xMm: 14, yMm: 14 }, { xMm: 46, yMm: 31 })).toEqual([0, 1])
+    expect(adjustments.selectPlacementsInBox(slots, { xMm: 46, yMm: 31 }, { xMm: 14, yMm: 14 }, 1)).toEqual([1])
+    expect(adjustments.selectPlacementsInBox(slots, { xMm: 10, yMm: 10 }, { xMm: 14, yMm: 14 })).toEqual([])
   })
 
   it('uses equal edge gaps for mixed widths on one centered row without changing other copies', () => {

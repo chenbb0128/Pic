@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { useCanvasViewport } from '../composables/useCanvasViewport'
 import { fitSizeMm, originalSizeMm, resizeAssetSize, rotatedBounds } from '../domain/studio/assetGeometry'
 import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSize'
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
@@ -93,7 +94,7 @@ const preset = ref<PaperPreset>('A4')
 const orientation = ref<Orientation>('landscape')
 const customWidth = ref(293)
 const customHeight = ref(210)
-const dpi = ref(300)
+const dpi = ref(600)
 const numberingEnabled = ref(true)
 const footerText = ref('')
 let clearingDownloadedFooter = false
@@ -145,7 +146,7 @@ const overviewOpen = ref(false)
 const overviewCanvases = new Map<number, HTMLCanvasElement>()
 const watermarkEnabled = ref(true)
 const watermarkText = ref('仅供确认 · 禁止盗用')
-const watermarkOpacity = ref(20)
+const watermarkOpacity = ref(40)
 const previewDialog = ref<HTMLDialogElement | null>(null)
 const shortcutDialog = ref<HTMLDialogElement | null>(null)
 const previewImage = ref('')
@@ -163,6 +164,7 @@ const paperOptions = [
 
 const paper = computed(() => orientedPaperSize(preset.value, orientation.value, customWidth.value, customHeight.value))
 const outputPaper = computed(() => numberedPaper(paper.value, numberingEnabled.value))
+const { workspace, viewport, sheet, zoom, expanded, canvasStyle, setZoom, fit, toggleFullscreen } = useCanvasViewport(outputPaper)
 const dpiInfo = computed(() => exportSize(outputPaper.value, dpi.value))
 const dpiError = computed(() => {
   if (!Number.isInteger(dpi.value) || dpi.value <= 0) return '请输入大于 0 的整数 DPI。'
@@ -397,6 +399,12 @@ function releaseUnusedImage(url: string): void {
   if (!url || assets.value.some((asset) => asset.url === url) || boards.value.some((board, index) =>
     index !== activeBoardIndex.value && board?.assets.some((asset) => asset.url === url))) return
   URL.revokeObjectURL(url)
+}
+
+function setPaperPreset(value: PaperPreset): void {
+  if (preset.value === value) return
+  preset.value = value
+  if (value === 'A5') setOrientation('portrait')
 }
 
 function setOrientation(value: Orientation): void {
@@ -892,6 +900,18 @@ function clearCanvasSelection(): void {
   if (pointerId !== undefined && preview.value?.hasPointerCapture(pointerId)) preview.value.releasePointerCapture(pointerId)
 }
 
+function toggleBoxSelection(): void {
+  if (!placements.value.length || exporting.value || uploading.value) return
+  overviewOpen.value = false
+  if (adjusting.value && adjustTool.value === 'select') {
+    adjustTool.value = 'move'
+    return
+  }
+  adjusting.value = true
+  adjustTool.value = 'select'
+  status.value = '拖框覆盖图案中心即可选中；Shift 追加选择，Esc 取消，锁定组不参与。'
+}
+
 function distributeSelected(axis: 'x' | 'y'): void {
   if (exporting.value || uploading.value) return
   try {
@@ -941,7 +961,10 @@ function onPointerMove(event: PointerEvent): void {
   const canvas = preview.value
   const box = boxSelection.value
   if (box && box.pointerId === event.pointerId && canvas) {
-    boxSelection.value = { ...box, ...pointMm(event, canvas) }
+    const point = pointMm(event, canvas)
+    boxSelection.value = { ...box, ...point }
+    const found = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, point, lockedPlacements.value.length)
+    selectedPlacementIndices.value = [...new Set([...(box.previousIndices ?? []), ...found])].sort((a, b) => a - b)
     event.preventDefault()
     return
   }
@@ -986,7 +1009,7 @@ function onPointerEnd(event: PointerEvent): void {
       const found = selectPlacementsInBox(placements.value, { xMm: box.startXmm, yMm: box.startYmm }, end, lockedPlacements.value.length)
       selectedPlacementIndices.value = [...new Set([...(box.previousIndices ?? []), ...found])].sort((a, b) => a - b)
       status.value = `已框选 ${selectedPlacementIndices.value.length} 张图片；至少选中 3 张可等间距排列，锁定组不参与。`
-    }
+    } else selectedPlacementIndices.value = box.previousIndices ?? []
     boxSelection.value = null
   } else if (drag.value?.pointerId !== event.pointerId) return
   drag.value = null
@@ -1198,11 +1221,10 @@ async function copyFooterNumber(): Promise<void> {
     <div v-if="controlsOpen" class="fixed inset-0 z-30 bg-slate-950/60 lg:hidden" @click="controlsOpen = false"></div>
     <aside ref="sidebar" :class="controlsOpen ? 'fixed inset-x-0 bottom-0 top-0 z-40 block' : 'hidden lg:block'" class="w-full shrink-0 overflow-y-auto border-r border-[#31415f] bg-[#17233d] pb-[env(safe-area-inset-bottom)] text-white lg:static lg:max-h-full lg:w-[466px] lg:pb-0">
       <button type="button" class="sticky top-0 z-10 flex min-h-11 w-full items-center justify-between bg-[#a78bfa] px-5 text-sm font-bold text-white lg:hidden" @click="controlsOpen = false"><span>排版设置</span><span>完成 ✓</span></button>
-      <h1 class="border-b border-[#31415f] px-4 py-3 text-sm font-bold text-[#c796ff]">✦ 小星贴自动排版</h1>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
         <summary class="studio-section-summary">◩&nbsp; 纸张</summary>
         <div class="grid grid-cols-3 gap-1">
-          <button v-for="option in paperOptions" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': preset === option.value }" @click="preset = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ orientation === 'landscape' ? option.size : option.portraitSize }}</small></button>
+          <button v-for="option in paperOptions" :key="option.value" type="button" class="studio-choice studio-paper-choice min-w-0" :class="{ 'is-active': preset === option.value }" @click="setPaperPreset(option.value)"><span class="text-xs font-semibold">{{ option.label }}</span><small class="text-[10px]">{{ orientation === 'landscape' ? option.size : option.portraitSize }}</small></button>
         </div>
         <div class="mt-1 grid grid-cols-2 gap-1">
           <button type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': orientation === 'landscape' }" :aria-pressed="orientation === 'landscape'" @click="setOrientation('landscape')">横排</button>
@@ -1214,26 +1236,24 @@ async function copyFooterNumber(): Promise<void> {
         </div>
         <p v-if="preset === 'custom' && (customWidth !== paper.widthMm || customHeight !== paper.heightMm)" class="mt-1 text-[11px] text-[#a9bbe1]">已按{{ orientation === 'landscape' ? '横排' : '竖排' }}调整为 {{ paper.widthMm }} × {{ paper.heightMm }} mm</p>
       </details>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
         <summary class="studio-section-summary">DPI</summary>
         <div class="grid grid-cols-5 gap-1">
           <button v-for="value in dpiChoices" :key="value" type="button" class="studio-choice studio-choice-compact" :class="{ 'is-active': dpi === value }" :disabled="!exportSize(outputPaper, value).allowed" :title="exportSize(outputPaper, value).allowed ? `${value} DPI` : '超出 1 亿像素导出上限'" @click="dpi = value">{{ value }}</button>
         </div>
         <p id="dpi-feedback" class="mt-1 text-[11px]" :class="dpiError ? 'text-amber-300' : 'text-[#a9bbe1]'" aria-live="polite">{{ dpiError || `输出：${dpiInfo.width} × ${dpiInfo.height} px` }}</p>
       </details>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
-        <summary class="studio-section-summary">底部编号</summary>
-        <label class="flex min-h-9 items-center gap-2 text-xs text-[#c8bbff]"><input v-model="numberingEnabled" type="checkbox" aria-label="启用底部编号" :disabled="exporting || uploading" />启用当前画板编号</label>
-        <div class="mt-1 flex gap-2">
-          <input v-model="footerText" type="text" aria-label="底部编号" :required="numberingEnabled" maxlength="200" placeholder="输入订单号或客户编号" class="studio-input min-w-0 flex-1 disabled:opacity-40" :disabled="!numberingEnabled || exporting || uploading" />
-          <button type="button" class="studio-choice shrink-0 px-3 text-xs disabled:opacity-40" :disabled="!numberingEnabled || !footerText.trim() || exporting || uploading" @click="copyFooterNumber">复制编号</button>
-        </div>
-        <p class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">{{ numberingEnabled ? `${paper.widthMm > paper.heightMm ? '右侧' : '底部'}另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加编号区。' }}各画板独立设置。</p>
+      <details class="studio-settings-section border-b border-[#31415f] px-4 py-2" aria-label="预览水印设置">
+        <summary class="studio-section-summary">预览水印</summary>
+        <label class="flex min-h-7 items-center gap-2 text-xs text-[#c8bbff]"><input v-model="watermarkEnabled" type="checkbox" />启用预览水印</label>
+        <input v-model="watermarkText" type="text" maxlength="40" aria-label="水印文字" :disabled="!watermarkEnabled" placeholder="仅供确认 · 禁止盗用" class="studio-input mt-1 w-full disabled:opacity-40" />
+        <label class="mt-2 flex items-center gap-2 text-xs text-[#a9bbe1]">浓度<input v-model.number="watermarkOpacity" type="range" min="8" max="50" step="1" aria-label="水印浓度" :disabled="!watermarkEnabled" class="min-w-0 flex-1 accent-violet-400 disabled:opacity-40" /><output class="w-8 text-right">{{ watermarkOpacity }}%</output></label>
+        <p class="mt-2 text-[11px] text-[#a9bbe1]">普通 PNG 导出不带水印。</p>
       </details>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
         <summary class="studio-section-summary">管理模式</summary>
-        <div class="grid grid-cols-2 gap-1 sm:grid-cols-5">
-          <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '列表顺序逐行' }, { value: 'smart', label: '智能填充', hint: '列表靠前先排' }, { value: 'neat', label: '整齐排版', hint: '分块对齐' }] as const)" :key="option.value" type="button" class="studio-choice min-w-0 py-1" :class="{ 'is-active': mode === option.value }" :aria-pressed="mode === option.value" @click="mode = option.value"><span class="text-sm font-semibold">{{ option.label }}</span><small class="mt-0.5 text-[10px]">{{ option.hint }}</small></button>
+        <div class="grid grid-cols-3 gap-1 sm:grid-cols-5">
+          <button v-for="option in ([{ value: 'balanced', label: '均衡', hint: '各图等量' }, { value: 'compact', label: '省料', hint: '大图优先' }, { value: 'custom', label: '定制', hint: '列表顺序逐行' }, { value: 'smart', label: '智能填充', hint: '列表靠前先排' }, { value: 'neat', label: '整齐排版', hint: '分块对齐' }] as const)" :key="option.value" type="button" class="studio-choice studio-mode-choice min-w-0" :class="{ 'is-active': mode === option.value }" :aria-pressed="mode === option.value" @click="mode = option.value"><span class="text-xs font-semibold">{{ option.label }}</span><small class="text-[10px]">{{ option.hint }}</small></button>
         </div>
         <p v-if="mode === 'custom'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">按图片列表从上到下优先满足数量并逐行排版；大图旁的小图可按列纵向叠放。尺寸、数量和留边不变，行内整体居中。</p>
         <p v-if="mode === 'smart'" class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">按图片列表从上到下优先满足数量，再按所选方式填充剩余空间；保持尺寸和角度。{{ autoGap ? '自动间距为 5mm。' : '使用当前横纵间距。' }}</p>
@@ -1241,7 +1261,7 @@ async function copyFooterNumber(): Promise<void> {
         <template v-if="mode === 'smart'">
           <h3 class="mb-1 mt-2 text-xs font-medium text-[#a9bbe1]">排列方式</h3>
           <div class="grid grid-cols-3 gap-1" role="group" aria-label="排列方式">
-            <button v-for="option in groupingOptions" :key="option.value" type="button" class="studio-choice min-w-0 px-1 py-2 text-xs" :class="{ 'is-active': grouping === option.value }" :aria-pressed="grouping === option.value" @click="grouping = option.value">{{ option.label }}</button>
+            <button v-for="option in groupingOptions" :key="option.value" type="button" class="studio-choice studio-choice-compact min-w-0 px-1 text-xs" :class="{ 'is-active': grouping === option.value }" :aria-pressed="grouping === option.value" @click="grouping = option.value">{{ option.label }}</button>
           </div>
           <template v-if="grouping === 'free'">
             <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="useContours" type="checkbox" />利用透明空隙（尽量多排）</label>
@@ -1250,7 +1270,7 @@ async function copyFooterNumber(): Promise<void> {
           <p v-else class="mt-2 text-[11px] leading-5 text-[#a9bbe1]">每张素材视为一类，同类连续{{ grouping === 'rows' ? '横排，换素材另起一行' : '竖排，换素材另起一列' }}；按图片外框整齐对齐，不穿插透明空隙，可能比尽量填满少排。锁组保留原位，自动排版会避让。</p>
         </template>
       </details>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
         <summary class="studio-section-summary">间距</summary>
         <p class="mb-2 text-[11px] text-[#a9bbe1]">纸张四周至少留边 {{ PAPER_MARGIN_MM }}mm；图案间距默认 {{ DEFAULT_PATTERN_GAP_MM }}mm，可设置为 0～30 整数毫米。</p>
         <div class="studio-gap-grid">
@@ -1259,7 +1279,7 @@ async function copyFooterNumber(): Promise<void> {
           <label class="studio-auto-gap"><input v-model="autoGap" type="checkbox" />自动</label>
         </div>
       </details>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
         <summary class="studio-section-summary">添加图片</summary>
         <input ref="fileInput" class="hidden" type="file" accept="image/png,image/webp,image/jpeg" multiple @change="onFileChange" />
         <input ref="folderInput" class="hidden" type="file" webkitdirectory multiple @change="onFileChange" />
@@ -1274,7 +1294,7 @@ async function copyFooterNumber(): Promise<void> {
         </div>
         <div v-if="groups.length" class="mt-2 flex flex-wrap gap-1 text-[11px]"><span v-for="group in groups" :key="group.id" class="rounded border border-[#52658c] px-2 py-1 text-[#c8bbff]">{{ group.name }} · {{ group.itemIds.length }} 图 <button type="button" class="ml-1 text-rose-300" @click="unlockGroup(group.id)">解锁</button></span></div>
       </details>
-      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-3">
+      <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
         <summary class="studio-section-summary">图片明细 <span class="text-[11px] text-[#8098c5]">（尺寸单位 cm）</span></summary>
         <label class="mt-2 flex items-center gap-2 text-xs text-[#c8bbff]"><input v-model="bulkOpen" type="checkbox" />统一设置</label>
         <p v-if="assets.length" class="mt-1 text-[11px] text-[#8098c5]">定制、智能填充按列表从上到下优先排版；拖动右侧手柄调整顺序，松手后更新排版。数量 0 表示不排入，最多 500 份。导入按图片 DPI 换算原尺寸，无 DPI 时用导入时的画板 DPI；修改导出 DPI 不改变厘米尺寸，修改明细保持当前模式。</p>
@@ -1326,27 +1346,39 @@ async function copyFooterNumber(): Promise<void> {
       <RouterLink class="mx-4 my-3 block rounded-lg border border-[#5e579d] bg-[#232952] p-3 text-xs leading-5 text-[#c8bbff]" to="/pricing">查看纸张价格与下单说明 →</RouterLink>
     </aside>
 
-    <main class="flex min-w-0 flex-1 flex-col gap-3 lg:min-h-0 lg:p-5">
-      <div class="flex min-w-0 flex-wrap items-center gap-2">
+    <main ref="workspace" class="studio-workspace flex min-w-0 flex-1 flex-col gap-2 lg:min-h-0 lg:p-3" :class="{ 'is-expanded': expanded }">
+      <div class="studio-workspace-toolbar" role="toolbar" aria-label="画板工具栏">
         <div class="flex min-w-0 max-w-full gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="画板切换">
           <div v-for="(_, index) in boards" :key="index" class="flex shrink-0 items-center rounded-lg border" :class="activeBoardIndex === index ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-600'">
-            <button type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-40" @click="editOverviewBoard(index)">画板 {{ index + 1 }}</button>
+            <button type="button" role="tab" :aria-selected="activeBoardIndex === index" :disabled="exporting || uploading" class="rounded-lg px-2 py-1.5 text-xs font-semibold disabled:opacity-40" @click="editOverviewBoard(index)">画板 {{ index + 1 }}</button>
             <button v-if="index > 0" type="button" class="mr-1 flex h-7 w-7 items-center justify-center rounded text-lg hover:bg-black/10 disabled:opacity-40" :aria-label="`删除画板 ${index + 1}`" title="删除画板" :disabled="exporting || uploading" @click.stop="removeBoard(index)">×</button>
           </div>
         </div>
-        <button v-if="countMode" type="button" class="rounded-lg border border-violet-300 bg-violet-50 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-40" :disabled="!overflow || exporting || uploading" @click="createRemainingBoard">＋ 新建画板排剩余<span v-if="overflow">（{{ overflow }}）</span></button>
-        <button type="button" class="rounded-lg border px-3 py-2 text-xs font-semibold disabled:opacity-40" :class="overviewOpen ? 'border-violet-500 bg-violet-500 text-white' : 'border-slate-200 bg-white text-slate-700'" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回当前画板' : '▦ 画板总览' }}</button>
-        <div class="ml-auto flex flex-wrap gap-2">
-          <button type="button" class="min-h-10 rounded-lg border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 disabled:opacity-40" aria-haspopup="dialog" aria-controls="studio-preview-dialog" :disabled="!placements.length || exporting || uploading" @click="openPreviewDialog">预览图</button>
-          <button type="button" class="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600" aria-haspopup="dialog" aria-controls="studio-shortcut-dialog" @click="shortcutDialog?.showModal()">快捷键指南</button>
+        <button v-if="countMode" type="button" class="studio-toolbar" :disabled="!overflow || exporting || uploading" title="新建画板排入剩余图案" @click="createRemainingBoard">＋ 排剩余<span v-if="overflow">（{{ overflow }}）</span></button>
+        <button type="button" class="studio-toolbar" :class="{ 'is-primary': overviewOpen }" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回画板' : '画板总览' }}</button>
+        <div class="studio-numbering-controls" role="group" aria-label="当前画板编号" aria-describedby="studio-numbering-help">
+          <label class="flex shrink-0 items-center gap-1 text-xs text-slate-600" title="启用当前画板编号"><input v-model="numberingEnabled" type="checkbox" aria-label="启用底部编号" :disabled="exporting || uploading" class="accent-violet-600" />编号</label>
+          <input v-model="footerText" type="text" aria-label="底部编号" :required="numberingEnabled" maxlength="200" placeholder="输入订单号或客户编号" class="studio-numbering-input" :disabled="!numberingEnabled || exporting || uploading" />
+          <button type="button" class="studio-toolbar shrink-0" :disabled="!numberingEnabled || !footerText.trim() || exporting || uploading" @click="copyFooterNumber">复制编号</button>
+          <span id="studio-numbering-help" class="sr-only">{{ numberingEnabled ? `${paper.widthMm > paper.heightMm ? '右侧' : '底部'}另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加编号区。' }}各画板独立设置。</span>
         </div>
-      </div>
-      <div class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600" aria-label="预览水印设置">
-        <label class="flex min-h-9 items-center gap-2"><input v-model="watermarkEnabled" type="checkbox" class="accent-violet-600" />预览水印</label>
-        <input v-model="watermarkText" type="text" maxlength="40" aria-label="水印文字" :disabled="!watermarkEnabled" placeholder="仅供确认 · 禁止盗用" class="h-9 min-w-0 w-44 rounded-lg border border-slate-200 px-2 disabled:opacity-40" />
-        <label class="flex min-h-9 items-center gap-2">浓度<input v-model.number="watermarkOpacity" type="range" min="8" max="50" step="1" aria-label="水印浓度" :disabled="!watermarkEnabled" class="w-24 accent-violet-600 disabled:opacity-40" /><output class="w-8">{{ watermarkOpacity }}%</output></label>
-        <button type="button" class="min-h-9 rounded-lg border border-violet-200 px-3 font-semibold text-violet-700 disabled:opacity-40" :disabled="!placements.length || exporting || uploading || proofDownloading" @click="downloadWatermarkedPreview">{{ proofDownloading ? '正在生成…' : '下载带水印预览图' }}</button>
-        <span class="text-[11px] text-slate-400">普通 PNG 导出不带水印</span>
+        <div class="ml-auto flex flex-wrap items-center gap-1.5">
+          <button type="button" class="studio-toolbar is-primary" :disabled="!assets.length || exporting || uploading" @click="resetLayout">✦ 排版</button>
+          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="overviewOpen = false; adjusting = !adjusting">{{ adjusting ? '完成调整' : '调整' }}</button>
+          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting && adjustTool === 'select' }" :aria-pressed="adjusting && adjustTool === 'select'" :disabled="!placements.length || exporting || uploading" title="拖框覆盖图案中心即可选中；Shift 追加选择，Esc 取消" @click="toggleBoxSelection">框选图案</button>
+          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError || !!patternSpacingError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '导出当前画板' : '导出 PNG' }}</button>
+          <button type="button" class="studio-toolbar" :disabled="!placements.length || exporting || uploading || proofDownloading" @click="downloadWatermarkedPreview">{{ proofDownloading ? '正在生成…' : '下载带水印预览图' }}</button>
+          <button type="button" class="studio-toolbar" aria-haspopup="dialog" aria-controls="studio-preview-dialog" :disabled="!placements.length || exporting || uploading" @click="openPreviewDialog">预览图</button>
+          <details class="studio-more">
+            <summary class="studio-toolbar">更多 ▾</summary>
+            <div class="studio-more-menu">
+              <button type="button" class="studio-menu-item" @click="cycleBackground">切换画布背景</button>
+              <button type="button" class="studio-menu-item" aria-haspopup="dialog" aria-controls="studio-shortcut-dialog" @click="shortcutDialog?.showModal()">快捷键指南</button>
+              <RouterLink class="studio-menu-item" to="/pricing">价格与下单说明</RouterLink>
+              <button type="button" class="studio-menu-item text-rose-600" :disabled="!assets.length" @click="clearAll">清空当前画板</button>
+            </div>
+          </details>
+        </div>
       </div>
       <section v-if="overviewOpen" aria-label="画板总览" class="min-h-0 flex-1 overflow-y-auto rounded-2xl bg-slate-100 p-3 sm:p-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
@@ -1367,61 +1399,63 @@ async function copyFooterNumber(): Promise<void> {
           </button>
         </div>
       </section>
-      <div :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-3">
-      <div class="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-        <span class="rounded-full bg-white px-3 py-1.5">{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
-        <span v-if="numberingEnabled" class="rounded-full bg-violet-100 px-3 py-1.5 text-violet-800">含编号输出 {{ outputPaper.widthMm }} × {{ outputPaper.heightMm }} mm</span>
-        <span class="rounded-full bg-white px-3 py-1.5">已排 {{ placements.length }} 个</span>
-        <span v-if="layoutPending" class="rounded-full bg-violet-100 px-3 py-1.5 text-violet-800" role="status">设置有更新，点击「排版」后应用</span>
-        <span v-if="overflow" class="rounded-full bg-amber-100 px-3 py-1.5 text-amber-800">{{ overflow }} 个未排入</span>
-        <span class="rounded-full bg-white px-3 py-1.5">{{ Number.isFinite(dpi) ? `${dpi} DPI` : '请填写 DPI' }}</span>
+      <div :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-2">
+      <div v-if="adjusting" class="flex shrink-0 flex-wrap items-center gap-1.5 text-xs" aria-label="框选与等间距排列">
+        <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'move' }" :aria-pressed="adjustTool === 'move'" @click="adjustTool = 'move'">单张调整</button>
+        <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'select' }" :aria-pressed="adjustTool === 'select'" @click="adjustTool = 'select'">框选图片</button>
+        <template v-if="adjustTool === 'select'">
+          <span class="text-slate-500">已选 {{ selectedPlacementIndices.length }} 张</span>
+          <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('x')">横向等间距</button>
+          <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('y')">纵向等间距</button>
+          <button type="button" class="px-2 py-1 text-slate-500" :disabled="!selectedPlacementIndices.length" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
+        </template>
       </div>
-      <div class="relative flex min-h-[45dvh] min-w-0 flex-1 items-center justify-center overflow-auto rounded-2xl bg-slate-800 p-3 sm:min-h-[480px] sm:p-6 lg:min-h-0">
-        <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas block h-auto max-h-[calc(100dvh-260px)] max-w-full shadow-2xl lg:max-h-full" :class="[`bg-${background}`, { 'is-adjusting': adjusting, 'is-selecting': adjusting && adjustTool === 'select' }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
+      <div class="studio-canvas-area" aria-label="画布区域">
+        <div ref="viewport" class="studio-viewport">
+          <div ref="sheet" class="studio-canvas-sheet" :style="canvasStyle">
+            <canvas ref="preview" :width="previewWidth" :height="previewHeight" class="studio-canvas shadow-2xl" :class="[`bg-${background}`, { 'is-adjusting': adjusting, 'is-selecting': adjusting && adjustTool === 'select' }]" aria-label="排版实时预览" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
+          </div>
+        </div>
+        <div class="studio-zoom-controls" role="group" aria-label="画布缩放">
+          <button type="button" aria-label="缩小画布" :disabled="zoom <= .5 || !!drag || !!boxSelection" @click="setZoom(zoom - .25)">−</button>
+          <output :title="'相对适应窗口的放大倍数'">{{ Math.round(zoom * 100) }}%</output>
+          <button type="button" aria-label="放大画布" :disabled="zoom >= 4 || !!drag || !!boxSelection" @click="setZoom(zoom + .25)">+</button>
+          <button type="button" aria-label="适应窗口" :disabled="!!drag || !!boxSelection" @click="fit">适应</button>
+          <button type="button" :aria-label="expanded ? '退出全屏' : '全屏画布'" :aria-pressed="expanded" :disabled="!!drag || !!boxSelection" @click="toggleFullscreen">{{ expanded ? '退出全屏' : '全屏' }}</button>
+        </div>
       </div>
-      <section v-if="adjusting && selectedPlacement" aria-label="选中图片调整" class="shrink-0 rounded-xl border border-amber-400 bg-slate-900 p-3 text-white">
-        <div class="flex items-center justify-between gap-2 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-2 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
-        <p v-if="selectedLocked" class="mt-2 text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
-        <div v-else class="mt-2 flex items-center justify-center gap-2 text-xs">
+      <section v-if="adjusting" aria-label="选中图片调整" class="flex h-14 shrink-0 items-center gap-3 overflow-x-auto rounded-lg border border-amber-400 bg-slate-900 px-3 py-2 text-white">
+        <template v-if="selectedPlacement">
+        <div class="flex min-w-0 max-w-44 items-center gap-1 text-xs"><strong class="truncate text-amber-300" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong><button type="button" class="shrink-0 px-1 text-lg leading-none text-slate-300" aria-label="取消选中图片" @click="selectedPlacementIndex = null">×</button></div>
+        <p v-if="selectedLocked" class="text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
+        <div v-else class="flex shrink-0 items-center gap-2 text-xs">
           <span class="shrink-0">宽度</span>
           <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="缩小选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
           <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900" :value="(selectedPlacement.widthMm / 10).toFixed(1)" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
           <span class="shrink-0">cm</span>
           <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base" aria-label="放大选中图片" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
         </div>
-        <p class="mt-2 text-center text-[11px] text-slate-400">拖动画布上的图片调整位置</p>
+        </template>
+        <p v-else class="text-xs text-slate-300">{{ adjustTool === 'select' ? '框住图案中心即可选中；Shift 追加，Esc 取消，至少 3 张可等间距排列。' : '点击图片后拖动位置、调整大小；Esc 取消选择。' }}</p>
       </section>
-      <div class="sticky bottom-2 z-10 space-y-2 rounded-2xl border border-slate-200 bg-white p-3 shadow-lg lg:static">
-        <p class="text-xs text-slate-600" aria-live="polite">{{ status }}</p>
-        <div v-if="adjusting" class="flex flex-wrap items-center gap-2 border-b border-slate-100 pb-2 text-xs" aria-label="框选与等间距排列">
-          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'move' }" :aria-pressed="adjustTool === 'move'" @click="adjustTool = 'move'">单张调整</button>
-          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjustTool === 'select' }" :aria-pressed="adjustTool === 'select'" @click="adjustTool = 'select'">框选图片</button>
-          <template v-if="adjustTool === 'select'">
-            <span class="text-slate-500">已选 {{ selectedPlacementIndices.length }} 张</span>
-            <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('x')">横向等间距</button>
-            <button type="button" class="studio-toolbar" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading" @click="distributeSelected('y')">纵向等间距</button>
-            <button type="button" class="px-2 py-2 text-slate-500" :disabled="!selectedPlacementIndices.length" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
-          </template>
+      <footer class="studio-statusbar" aria-label="画板状态">
+        <div class="flex min-w-0 max-w-full flex-wrap items-center gap-x-3 gap-y-1">
+          <span>{{ preset }} · {{ paper.widthMm }} × {{ paper.heightMm }} mm</span>
+          <span v-if="numberingEnabled" class="text-violet-700">含编号输出 {{ outputPaper.widthMm }} × {{ outputPaper.heightMm }} mm</span>
+          <span>{{ Number.isFinite(dpi) ? `${dpi} DPI` : '请填写 DPI' }}</span>
+          <span>已排 {{ placements.length }} 个</span>
+          <span v-if="overflow" class="text-amber-700">{{ overflow }} 个未排入</span>
+          <span v-if="layoutPending" class="text-violet-700" title="当前画板保持原样，点击「排版」应用新设置">待排版</span>
         </div>
-        <div class="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-          <button type="button" class="studio-toolbar is-primary" :disabled="!assets.length || exporting || uploading" @click="resetLayout">✦ 排版</button>
-          <button type="button" class="studio-toolbar" :class="{ 'is-primary': adjusting }" :disabled="!placements.length" @click="adjusting = !adjusting">✋ {{ adjusting ? '完成' : '调整' }}</button>
-          <button type="button" class="studio-toolbar" :disabled="exporting || !placements.length || !!dpiError || !!paperMarginError || !!patternSpacingError" @click="generate">{{ exporting ? '生成中…' : boards.length > 1 ? '♧ 导出当前画板' : '♧ 导出 PNG' }}</button>
-          <RouterLink class="studio-toolbar" to="/pricing">⭐ 升级</RouterLink>
-          <button type="button" class="studio-toolbar" :disabled="!assets.length" @click="clearAll">▤ 清空</button>
-          <button type="button" class="studio-toolbar" @click="cycleBackground">背景</button>
-        </div>
-        <p v-if="adjusting" class="text-xs text-indigo-700">{{ adjustTool === 'select' ? '鼠标或手指拖框，完整框住需要排列的图片；Shift 拖框追加选择，Esc 取消选择。至少 3 张可等间距排列，锁定组需先解锁。' : '点击画布上的一张图片，可拖动位置并调整单张大小；锁组整体移动，Esc 取消选择。' }}</p>
-        <p v-if="layoutPending" class="text-xs text-violet-700">当前画板保持原样；点击「排版」将应用新设置并替换手动调整。导出仅包含当前已排入的图案。</p>
-        <p v-if="dpiError" class="text-xs text-amber-700">{{ dpiError }}</p>
-        <p v-if="paperMarginError" class="text-xs text-amber-700">{{ paperMarginError }}</p>
-        <p v-if="patternSpacingError" class="text-xs text-amber-700" role="alert">{{ patternSpacingError }}</p>
-        <div v-if="generated" class="space-y-2 border-t border-slate-100 pt-2">
-          <div class="flex flex-wrap items-center gap-2 text-xs"><span class="text-emerald-700">{{ generated.name }} · {{ formatBytes(generated.size) }}</span><a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a></div>
-          <div class="grid grid-cols-2 gap-2"><button type="button" class="min-h-10 rounded-lg bg-slate-900 px-3 text-xs font-bold text-white" @click="copyOrDownload">{{ orderCopied ? '点击下载图片' : '复制下单文案 → 下载' }}</button><button type="button" class="min-h-10 rounded-lg border border-slate-300 px-3 text-xs font-semibold text-slate-700" @click="downloadOnly">仅下载图片</button></div>
-        </div>
-        <div v-if="manualCopy" class="space-y-1 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">浏览器未允许复制，请长按文案手动复制。<textarea :value="XIAOHONGSHU_ORDER_TEXT" readonly class="h-16 w-full rounded border border-amber-200 bg-white p-2 text-slate-700" /></div>
+        <p class="studio-status-message" :class="{ 'is-error text-amber-700': dpiError || paperMarginError || patternSpacingError }" :title="patternSpacingError || paperMarginError || dpiError || status" aria-live="polite" :role="patternSpacingError || paperMarginError || dpiError ? 'alert' : 'status'">{{ patternSpacingError || paperMarginError || dpiError || status }}</p>
+      </footer>
+      <div v-if="generated" class="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-white p-2 text-xs">
+        <span class="min-w-0 flex-1 truncate text-emerald-700" :title="generated.name">{{ generated.name }} · {{ formatBytes(generated.size) }}</span>
+        <button type="button" class="studio-toolbar is-primary" @click="copyOrDownload">{{ orderCopied ? '点击下载图片' : '复制下单文案 → 下载' }}</button>
+        <button type="button" class="studio-toolbar" @click="downloadOnly">仅下载图片</button>
+        <a :href="XIAOHONGSHU_ORDER_URL" target="_blank" rel="noopener noreferrer" class="font-bold text-rose-600">去小红书下单 ↗</a>
       </div>
+      <div v-if="manualCopy" class="shrink-0 space-y-1 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">浏览器未允许复制，请长按文案手动复制。<textarea :value="XIAOHONGSHU_ORDER_TEXT" readonly class="h-16 w-full rounded border border-amber-200 bg-white p-2 text-slate-700" /></div>
       </div>
     </main>
     <dialog id="studio-preview-dialog" ref="previewDialog" aria-labelledby="studio-preview-title" class="studio-dialog studio-proof-dialog" @click="closeDialogOnBackdrop" @close="previewImage = ''">
@@ -1437,7 +1471,7 @@ async function copyFooterNumber(): Promise<void> {
       <p class="mt-2 text-xs leading-6 text-slate-500">画板操作先点击「调整」。输入框编辑时不触发画板快捷键，手机可使用触摸和页面按钮。</p>
       <dl class="mt-4 divide-y divide-slate-100 text-sm">
         <div class="py-3"><dt class="font-semibold">取消画板选择 <kbd>Esc</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">仅取消选中，不删除图片、不改变素材勾选；弹窗打开时 Esc 只关闭弹窗。</dd></div>
-        <div class="py-3"><dt class="font-semibold">框选图片 <kbd>鼠标 / 手指拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">切换「框选图片」，完整框住所需图片；至少 3 张可横向或纵向等间距排列。</dd></div>
+        <div class="py-3"><dt class="font-semibold">框选图案 <kbd>鼠标 / 手指拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">点击顶部「框选图案」，框住图案中心即可选中；Shift 追加，Esc 取消；至少 3 张可横向或纵向等间距排列，锁定组不参与。</dd></div>
         <div class="py-3"><dt class="font-semibold">追加选择 <kbd>Shift + 拖框</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">保留已选图片，再添加新框住的图片；锁定组需先解锁。</dd></div>
         <div class="py-3"><dt class="font-semibold">素材列表排序 <kbd>↑ / ↓ / Home / End</kbd></dt><dd class="mt-1 text-xs leading-6 text-slate-500">先聚焦图片明细右侧拖拽手柄，上下移动或移至首尾。只改变列表优先级，点击「排版」后应用。</dd></div>
       </dl>
@@ -1448,11 +1482,42 @@ async function copyFooterNumber(): Promise<void> {
 </template>
 
 <style scoped>
-.studio-section-summary { display: flex; align-items: center; gap: 6px; min-height: 28px; color: #a9bbe1; font-size: 12px; cursor: pointer; list-style: none; }
+.studio-workspace { background: #f1f5f9; }
+.studio-workspace.is-expanded { position: fixed; inset: 0; z-index: 50; width: 100%; height: 100dvh; padding: 12px; }
+.studio-workspace-toolbar { display: flex; flex: 0 0 auto; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
+.studio-numbering-controls { display: flex; flex: 1 1 250px; min-width: 0; max-width: 300px; align-items: center; gap: 6px; }
+.studio-numbering-input { flex: 1 1 auto; width: 0; min-width: 100px; height: 32px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; padding: 0 6px; color: #334155; font-size: 12px; }
+.studio-numbering-input:disabled { opacity: .4; }
+.studio-more { position: relative; }
+.studio-more > summary { cursor: pointer; list-style: none; }
+.studio-more > summary::-webkit-details-marker { display: none; }
+.studio-more-menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: 152px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; padding: 4px; box-shadow: 0 8px 24px #0f172a24; }
+.studio-menu-item { display: block; width: 100%; border-radius: 6px; padding: 8px; text-align: left; font-size: 12px; }
+.studio-menu-item:hover { background: #f1f5f9; }
+.studio-menu-item:disabled { opacity: .4; }
+.studio-canvas-area { position: relative; flex: 1 0 auto; min-width: 0; min-height: 320px; height: 60dvh; overflow: hidden; border-radius: 12px; background: #1e293b; }
+.studio-viewport { position: absolute; inset: 0; display: flex; overflow: auto; overscroll-behavior: contain; padding: 12px; scrollbar-gutter: stable; }
+.studio-canvas-sheet { flex: 0 0 auto; margin: auto; }
+.studio-canvas-sheet > .studio-canvas { display: block; width: 100%; height: 100%; max-width: none; max-height: none; }
+.studio-zoom-controls { position: absolute; right: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 2px; border: 1px solid #475569; border-radius: 8px; background: #0f172aeb; padding: 3px; color: #e2e8f0; font-size: 12px; box-shadow: 0 2px 8px #0003; }
+.studio-zoom-controls button { min-width: 28px; height: 28px; border-radius: 5px; padding: 0 7px; }
+.studio-zoom-controls button:hover { background: #334155; }
+.studio-zoom-controls button:disabled { opacity: .35; }
+.studio-zoom-controls button:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 1px; }
+.studio-zoom-controls output { min-width: 36px; text-align: center; font-size: 11px; }
+.studio-statusbar { display: flex; flex: 0 0 auto; min-width: 0; flex-wrap: wrap; align-items: center; gap: 2px 12px; padding: 2px 4px; color: #64748b; font-size: 11px; line-height: 16px; }
+.studio-status-message { flex: 1 1 160px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-status-message.is-error { white-space: normal; overflow: visible; }
+@media (min-width: 1024px) {
+  .studio-canvas-area { flex: 1 1 0; min-height: 0; height: auto; }
+}
+.studio-workspace.is-expanded .studio-canvas-area { flex: 1 1 0; min-height: 0; height: auto; }
+.studio-section-summary { display: flex; align-items: center; gap: 6px; min-height: 22px; color: #a9bbe1; font-size: 12px; cursor: pointer; list-style: none; }
 .studio-section-summary::-webkit-details-marker { display: none; }
 .studio-section-summary::after { content: '展开'; margin-left: auto; flex-shrink: 0; font-size: 11px; color: #c8bbff; }
-.studio-settings-section[open] > .studio-section-summary { margin-bottom: 8px; }
+.studio-settings-section[open] > .studio-section-summary { margin-bottom: 5px; }
 .studio-settings-section[open] > .studio-section-summary::after { content: '收起'; }
+.studio-settings-section > p { line-height: 1.45; }
 .studio-dialog { margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; padding: 0; background: white; color: #334155; box-shadow: 0 20px 80px #0f172a40; }
 .studio-dialog::backdrop { background: #0f172a99; }
 .studio-proof-dialog { width: min(1100px, calc(100vw - 24px)); height: calc(100dvh - 32px); max-width: none; max-height: none; }
@@ -1461,7 +1526,7 @@ async function copyFooterNumber(): Promise<void> {
 .studio-shortcut-dialog kbd { display: inline-block; margin: 4px 0 0 8px; border: 1px solid #e2e8f0; border-radius: 5px; background: #f8fafc; padding: 2px 6px; font-family: inherit; font-size: 11px; font-weight: 400; }
 .studio-choice {
   display: flex;
-  min-height: 50px;
+  min-height: 32px;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -1475,7 +1540,9 @@ async function copyFooterNumber(): Promise<void> {
 .studio-choice:hover { border-color: #a78bfa; }
 .studio-choice.is-active { border-color: #a78bfa; background: #a78bfa; color: #fff; }
 .studio-choice:disabled { cursor: not-allowed; opacity: .38; }
-.studio-choice-compact { min-height: 32px; }
+.studio-choice-compact { min-height: 28px; }
+.studio-paper-choice { flex-direction: row; gap: 6px; padding: 2px 4px; white-space: nowrap; }
+.studio-mode-choice { min-height: 36px; gap: 1px; padding: 2px; }
 .studio-input {
   height: 32px;
   min-width: 0;
@@ -1522,7 +1589,7 @@ async function copyFooterNumber(): Promise<void> {
 .studio-drag-handle:focus-visible, .studio-remove-button:focus-visible { outline: 2px solid #c4b5fd; outline-offset: 1px; }
 .studio-drag-handle:disabled, .studio-remove-button:disabled { opacity: .4; }
 .studio-asset-lock:disabled { opacity: .45; }
-.studio-toolbar { display: flex; min-height: 38px; align-items: center; justify-content: center; border: 1px solid #d7dcf0; border-radius: 8px; padding: 4px; color: #334155; font-size: 12px; font-weight: 600; text-align: center; }
+.studio-toolbar { display: flex; min-height: 32px; align-items: center; justify-content: center; border: 1px solid #d7dcf0; border-radius: 7px; background: white; padding: 3px 8px; color: #334155; font-size: 12px; font-weight: 600; text-align: center; white-space: nowrap; }
 .studio-toolbar.is-primary { border-color: #a78bfa; background: #a78bfa; color: #fff; }
 .studio-toolbar:disabled { opacity: .4; }
 .studio-canvas.bg-checker { background-color: white; background-image: linear-gradient(45deg,#ddd 25%,transparent 25%),linear-gradient(-45deg,#ddd 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#ddd 75%),linear-gradient(-45deg,transparent 75%,#ddd 75%); background-size: 20px 20px; background-position: 0 0,0 10px,10px -10px,-10px 0; }

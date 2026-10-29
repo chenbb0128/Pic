@@ -9,8 +9,11 @@ export function selectPlacementsInBox(placements: Placement[], start: PointMm, e
   const right = Math.max(start.xMm, end.xMm)
   const top = Math.min(start.yMm, end.yMm)
   const bottom = Math.max(start.yMm, end.yMm)
-  return placements.flatMap((slot, index) => index >= lockedCount && slot.xMm >= left && slot.yMm >= top &&
-    slot.xMm + slot.widthMm <= right && slot.yMm + slot.heightMm <= bottom ? [index] : [])
+  return placements.flatMap((slot, index) => {
+    const centerX = slot.xMm + slot.widthMm / 2
+    const centerY = slot.yMm + slot.heightMm / 2
+    return index >= lockedCount && centerX >= left && centerX <= right && centerY >= top && centerY <= bottom ? [index] : []
+  })
 }
 
 export function distributePlacements(placements: Placement[], indices: number[], axis: 'x' | 'y', paper: PaperSize, lockedCount = 0, contourFor?: PlacementContour): Placement[] {

@@ -18,7 +18,7 @@ describe('overflow artboards', () => {
       fillRect() {}, strokeRect() {}, setLineDash() {} }
   }
 
-  it('底部编号：默认启用，显示独立输入、复制和含编号的输出尺寸', async () => {
+  it('底部编号：默认启用，在顶部显示输入、复制和含编号的输出尺寸', async () => {
     const app = createSSRApp(Workspace)
     app.component('RouterLink', { render: () => null })
     const html = await renderToString(app)
@@ -27,6 +27,11 @@ describe('overflow artboards', () => {
     expect(html).toContain('复制编号')
     expect(html).toContain('296 × 210 mm')
     expect(html).toContain('右侧另加 3mm')
+    const sidebar = html.match(/<aside\b[\s\S]*?<\/aside>/)![0]
+    expect(sidebar).not.toContain('aria-label="底部编号"')
+    const toolbar = html.match(/<div\b[^>]*aria-label="画板工具栏"[\s\S]*?(?=<div[^>]*aria-label="画布区域")/)![0]
+    expect(toolbar).toContain('aria-label="底部编号"')
+    expect(toolbar).toContain('复制编号')
   })
 
   it('底部编号：复制编号和下单文案均不清空，分块导出绘制编号，编码失败保留输入', async () => {
@@ -85,7 +90,7 @@ describe('overflow artboards', () => {
       expect(state.paper).toEqual({ widthMm: 108, heightMm: 108 })
       expect(state.outputPaper).toEqual({ widthMm: 108, heightMm: 111 })
       expect(state.previewHeight).toBe(1233)
-      expect(state.dpiInfo.height).toBe(1311)
+      expect(state.dpiInfo.height).toBe(2622)
       expect(state.layoutPending).toBe(false)
       expect(JSON.stringify(state.placements)).toBe(before)
       state.createRemainingBoard()
@@ -410,14 +415,47 @@ describe('overflow artboards', () => {
     } finally { png.mockRestore(); download.mockRestore(); cleanup(); vi.unstubAllGlobals() }
   })
 
-  it('offers 600 DPI as a preset without a custom DPI input and keeps 300 selected by default', async () => {
+  it('keeps primary actions above the canvas and moves watermark settings into the sidebar', async () => {
+    const app = createSSRApp(Workspace)
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    const sidebar = html.match(/<aside\b[\s\S]*?<\/aside>/)![0]
+    expect(sidebar).toContain('aria-label="预览水印设置"')
+    expect(sidebar).toContain('aria-label="水印文字"')
+    expect(sidebar.match(/<details[^>]*aria-label="预览水印设置"[^>]*>/)![0]).not.toMatch(/\bopen\b/)
+    const toolbar = html.match(/<div\b[^>]*aria-label="画板工具栏"[\s\S]*?(?=<div[^>]*aria-label="画布区域")/)![0]
+    expect(toolbar).toContain('导出 PNG')
+    expect(toolbar).toContain('下载带水印预览图')
+    expect(html).toContain('aria-label="适应窗口"')
+    expect(html).toContain('aria-label="放大画布"')
+    expect(html).toContain('aria-label="全屏画布"')
+    expect(html).toContain('aria-label="画板状态"')
+  })
+
+  it('offers DPI presets without a custom DPI input and keeps 600 selected by default', async () => {
     const app = createSSRApp(Workspace)
     app.component('RouterLink', { render: () => null })
     const html = await renderToString(app)
     expect(html).toMatch(/<button[^>]*title="600 DPI"[^>]*>600<\/button>/)
-    expect(html).toMatch(/<button[^>]*class="[^"]*is-active[^"]*"[^>]*title="300 DPI"[^>]*>300<\/button>/)
+    expect(html).toMatch(/<button[^>]*class="[^"]*is-active[^"]*"[^>]*title="600 DPI"[^>]*>600<\/button>/)
     expect(html).not.toContain('aria-label="自定义 DPI"')
     expect(html).toContain('id="dpi-feedback"')
+  })
+
+  it('selects A5 in portrait by default and still allows a manual landscape orientation', () => {
+    const { state, cleanup } = mountWorkspace()
+    try {
+      state.setPaperPreset('A5')
+      expect(state.orientation).toBe('portrait')
+      expect(state.paper).toEqual({ widthMm: 144, heightMm: 210 })
+      state.setOrientation('landscape')
+      state.setPaperPreset('A5')
+      expect(state.paper).toEqual({ widthMm: 210, heightMm: 144 })
+      state.setPaperPreset('A4')
+      expect(state.orientation).toBe('landscape')
+      state.setPaperPreset('A5')
+      expect(state.paper).toEqual({ widthMm: 144, heightMm: 210 })
+    } finally { cleanup() }
   })
 
   it('defaults both gaps to 4mm before any settings are edited', () => {
@@ -617,6 +655,60 @@ describe('overflow artboards', () => {
       expect(context.drawImage).toHaveBeenCalledExactlyOnceWith(state.assets[0].image, -10, -10, 20, 20)
       expect(state.layoutPending).toBe(true)
     } finally { cleanup() }
+  })
+
+  it('框选图案入口直接显示在顶部', async () => {
+    const app = createSSRApp(Workspace)
+    app.component('RouterLink', { render: () => null })
+    const html = await renderToString(app)
+    const toolbar = html.match(/<div\b[^>]*aria-label="画板工具栏"[\s\S]*?(?=<div[^>]*aria-label="画布区域")/)![0]
+    expect(toolbar).toContain('框选图案')
+  })
+
+  it.each(['mouse', 'touch'])('顶部框选：按中心实时选择，缩放后 Shift 追加，Esc 取消（%s）', async pointerType => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 40, top: 60, width: 216, height: 222 }),
+      setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, getContext: () => null }
+    const event = (x: number, y: number, type = 'pointermove', shiftKey = false) => ({
+      clientX: 40 + x * 2, clientY: 60 + y * 2, pointerId: 1, pointerType, button: 0,
+      isPrimary: true, type, shiftKey, preventDefault() {} })
+    try {
+      state.assets = [asset('one', 3, 10)]
+      state.resetLayout()
+      state.manualPlacements = [10, 35, 70].map(xMm => ({ itemId: 'one', xMm, yMm: 10, widthMm: 10, heightMm: 10 }))
+      state.preview = canvas
+      state.numberingEnabled = true
+      state.overviewOpen = true
+      const before = JSON.stringify(state.placements)
+      state.toggleBoxSelection()
+      expect(state.adjusting).toBe(true)
+      expect(state.adjustTool).toBe('select')
+      expect(state.overviewOpen).toBe(false)
+      state.onPointerDown(event(14, 14, 'pointerdown'))
+      state.onPointerMove(event(41, 16))
+      expect(state.selectedPlacementIndices).toEqual([0, 1])
+      state.onPointerEnd(event(41, 16, 'pointerup'))
+      state.onPointerDown(event(76, 16, 'pointerdown', true))
+      state.onPointerMove(event(74, 14, 'pointermove', true))
+      state.onPointerEnd(event(74, 14, 'pointerup', true))
+      expect(state.selectedPlacementIndices).toEqual([0, 1, 2])
+      state.onPointerDown(event(14, 14, 'pointerdown'))
+      state.onPointerMove(event(16, 16))
+      expect(state.selectedPlacementIndices).toEqual([0])
+      state.onPointerEnd(event(16, 16, 'pointercancel'))
+      expect(state.selectedPlacementIndices).toEqual([])
+      state.onPointerDown(event(14, 14, 'pointerdown'))
+      state.onPointerEnd(event(41, 16, 'pointerup'))
+      expect(JSON.stringify(state.placements)).toBe(before)
+      expect(state.layoutPending).toBe(false)
+      state.onWorkspaceKeydown({ key: 'Escape', preventDefault() {} })
+      expect(state.selectedPlacementIndices).toEqual([])
+      state.toggleBoxSelection()
+      expect(state.adjustTool).toBe('move')
+      state.exporting = true
+      state.toggleBoxSelection()
+      expect(state.adjustTool).toBe('move')
+    } finally { state.preview = null; cleanup() }
   })
 
   it.each(['mouse', 'touch'])('box-selects instances and spaces them without rearranging other images using %s', async pointerType => {
@@ -1192,7 +1284,10 @@ describe('overflow artboards', () => {
     const html = await renderToString(app)
     const between = html.match(/<\/canvas>([\s\S]*?)<section\b[^>]*aria-label="选中图片调整"/)
     expect(between).not.toBeNull()
-    expect(between![1].replace(/<!--[\s\S]*?-->/g, '').trim()).toBe('</div>')
+    expect(between![1]).toContain('aria-label="画布缩放"')
+    const area = html.match(/<div\b[^>]*aria-label="画布区域"[\s\S]*?(?=<section\b[^>]*aria-label="选中图片调整")/)![0]
+    const openContainers = [...area.matchAll(/<\/?div\b[^>]*>/g)].reduce((count, [tag]) => count + (tag.startsWith('</') ? -1 : 1), 0)
+    expect(openContainers).toBe(0)
   })
 
   it('renders every artboard preview and its edit entry in overview mode', async () => {
@@ -1223,7 +1318,7 @@ describe('overflow artboards', () => {
     expect(html).toContain('一键导出全部 PNG')
   })
 
-  it('defaults to 300 DPI and imports original sizes without tying them to export DPI', async () => {
+  it('defaults to 600 DPI and imports original sizes without tying them to export DPI', async () => {
     const { state, cleanup } = mountWorkspace()
     class DecodedImage {
       naturalWidth = 1500
@@ -1235,12 +1330,14 @@ describe('overflow artboards', () => {
     vi.stubGlobal('Image', DecodedImage)
     try {
       expect(state.mode).toBe('custom')
+      expect(state.dpi).toBe(600)
       await state.addFiles([new File(['no metadata'], 'plain.png', { type: 'image/png' })])
-      expect(state.assets[0].widthMm).toBe(127)
-      expect(state.assets[0].heightMm).toBe(63.5)
-      state.dpi = 600
+      expect(state.assets[0].widthMm).toBe(63.5)
+      expect(state.assets[0].heightMm).toBe(31.75)
+      state.dpi = 300
       await nextTick()
-      expect(state.assets[0].widthMm).toBe(127)
+      expect(state.assets[0].widthMm).toBe(63.5)
+      expect(state.assets[0].heightMm).toBe(31.75)
       // A PNG pHYs chunk with 11811 pixels/meter represents 300 DPI.
       const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 46, 35, 0, 0, 46, 35, 1, 0, 0, 0, 0])
       await state.addFiles([new File([png], 'source.png', { type: 'image/png' })])
