@@ -1210,7 +1210,7 @@ describe('overflow artboards', () => {
       })
       app.component('RouterLink', { render: () => null })
       const html = await renderToString(app)
-      const detail = html.match(/<div\b[^>]*class="flex min-h-0 flex-1 flex-col gap-3"[^>]*>/)?.[0]
+      const detail = html.match(/<div\b[^>]*data-studio-view="editor"[^>]*>/)?.[0]
       expect(detail).toBeDefined()
       expect(detail).toContain(`display:${overview ? 'none' : 'flex'}`)
       expect(html).toContain('aria-label="排版实时预览"')

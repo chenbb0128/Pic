@@ -1427,7 +1427,7 @@ async function copyFooterNumber(): Promise<void> {
           </button>
         </div>
       </section>
-      <div :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-2">
+      <div data-studio-view="editor" :style="{ display: overviewOpen ? 'none' : 'flex' }" class="flex min-h-0 flex-1 flex-col gap-2">
       <div class="studio-canvas-area" aria-label="画布区域">
         <div ref="viewport" class="studio-viewport">
           <div ref="sheet" class="studio-canvas-sheet" :style="canvasStyle">
