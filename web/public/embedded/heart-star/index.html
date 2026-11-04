@@ -150,7 +150,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <header class="top"><div class="brand">✦</div><div><h1>爱心星星自动排版</h1><p>图片自动对准图案中心，排好后直接导出高清 PNG</p></div></header>
 <main class="app">
 <section class="panel">
- <div class="field"><div class="label">选择模板 <span class="small">14 款＋自定义</span></div><select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select></div>
+ <div class="field"><div class="label">选择模板 <span class="small">15 款＋自定义</span></div><select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="缤纷糖果.png">缤纷糖果 · A5 竖版</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select></div>
  <div class="field" id="customField" hidden>
   <div class="label">逐排组合 <span class="small">保留原图大小</span></div>
   <p class="custom-help">点击缩略图选择图案的大款／小款，再设置数量。各款保持原模板尺寸，只调整位置和间距。</p>
@@ -242,7 +242,8 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./sky-blue-motifs.js?v=sky-blue-1"></script>
 <script src="./light-blue-motifs.js?v=light-blue-1"></script>
 <script src="./pattern-combos.js?v=patterns-2"></script>
-<script src="./heart-preset.js?v=leopard-spacing-2"></script>
+<script src="./candy-motifs.js?v=candy-ime-2"></script>
+<script src="./heart-preset.js?v=candy-2"></script>
 <script src="./cloud-snapshot.js?v=cloud-1"></script>
 <script src="./cloud-editor.js?v=cloud-1"></script>
 <script src="./cloud-state.js?v=cloud-2"></script>
@@ -534,6 +535,7 @@ Object.assign(customAssets,HeartStarYellow.register(customAssets));
 Object.assign(customAssets,HeartStarSkyBlue.register(customAssets));
 Object.assign(customAssets,HeartStarLightBlue.register(customAssets));
 Object.assign(customAssets,HeartStarPatternCombos.register(customAssets));
+Object.assign(customAssets,HeartStarCandy.register(customAssets));
 HeartStarMotifs.limitSmallHearts(customAssets);
 HeartStarMotifs.limitSmallStars(customAssets);
 HeartStarMotifs.limitIMe(customAssets);
@@ -585,6 +587,7 @@ templates[HeartStarPreset.portraitName]=HeartStarPreset.buildPortrait(customAsse
 templates[HeartStarPreset.macaronName]=HeartStarPreset.buildMacaron(customAssets,buildCustomLayout);
 templates[HeartStarPreset.classicLeopardName]=HeartStarPreset.buildClassicLeopard(customAssets,buildCustomLayout);
 templates[HeartStarPreset.blackPinkCreamLeopardName]=HeartStarPreset.buildBlackPinkCreamLeopard(customAssets,buildCustomLayout);
+templates[HeartStarPreset.candyName]=HeartStarPreset.buildCandy(customAssets,buildCustomLayout);
 sel.addEventListener('change',()=>HeartStarPreset.selectSize(templates[sel.value],widthInput,heightInput));
 const CUSTOM_TEMPLATE='自定义排版.png',customRowBox=document.getElementById('customRows'),customSummary=document.getElementById('customSummary'),customPicker=document.getElementById('customPicker'),originalPhotoHint=document.querySelector('.hint').textContent;
 let customId=0,customRows=[],customDirty=true,customBusy=false,customRequest=0,customTimer,customPickerTarget=null;

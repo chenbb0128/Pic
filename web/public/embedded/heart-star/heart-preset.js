@@ -4,6 +4,7 @@
   const portraitName = 'I-ME横版大头.png', macaronName = '爱心心动马卡龙.png';
   const classicLeopardName = '经典豹纹混合.png';
   const blackPinkCreamLeopardName = '黑粉奶油混合豹纹.png';
+  const candyName = '缤纷糖果.png';
   let previousSize = null;
   function build(assets, arrange) {
     const repeat = (id, count) => Array(count).fill(id);
@@ -102,6 +103,27 @@
     });
     return cfg;
   }
+  function buildCandy(assets, arrange) {
+    const ids = (keys, type, size) => keys.map(key => `candy-${key}-${type}-${size}`);
+    const circles = ids(['cream-pink-dot', 'pink-picnic', 'lavender', 'matcha', 'cream-pink-dot', 'pink-picnic'], 'circle', 20);
+    const hearts = ids(['blue-cocoa', 'strawberry-milk', 'lemon-soda', 'grape-checker', 'peach-heart', 'cream-pink-dot'], 'heart', 20);
+    const large = ['strawberry-star', 'grape-dot', 'peach-sorbet', 'daisy'];
+    const rows = [circles, circles, hearts, hearts, ids(large, 'heart', 30), ids(large, 'star', 30),
+      ids(['pink-flower', 'blue-letter', 'night-stars', 'purple-heart'], 'flower', 30),
+      ids(['cherry-letter', 'cream-garden', 'lavender', 'sunflower'], 'scallop', 30)];
+    const fittedAssets = { ...assets };
+    // Eight rows fit the existing A5 sheet at 29.5 mm with 2 mm gaps and 3 mm margins.
+    // Scale only this preset's large artwork; reusable 30 mm assets stay unchanged.
+    for (const id of new Set(rows.slice(4).flat())) {
+      const asset = assets[id], factor = Math.min(1, 29.5 / Math.max(asset.nativeW, asset.nativeH));
+      fittedAssets[id] = { ...asset, nativeW: asset.nativeW * factor, nativeH: asset.nativeH * factor };
+    }
+    const cfg = buildRows(rows, fittedAssets, arrange, 144, 210);
+    cfg.motifSlots.forEach((meta, i) => Object.assign(meta, {
+      assetId: cfg.placements[i].assetId, type: cfg.slots[i].type, maxSizeMm: cfg.slots[i].row < 4 ? 20 : 29.5,
+    }));
+    return cfg;
+  }
   function initialState(cfg, index) {
     const state = { size: .62, dx: 0, dy: 0, shape: 'template', imageScale: 1, imageDx: 0, imageDy: 0 };
     if (cfg.photoOnlySlots?.includes(index)) {
@@ -132,5 +154,5 @@
       [width.value, height.value] = previousSize;previousSize = null;
     }
   }
-  globalThis.HeartStarPreset = { name, portraitName, macaronName, classicLeopardName, blackPinkCreamLeopardName, build, buildPortrait, buildMacaron, buildClassicLeopard, buildBlackPinkCreamLeopard, initialState, source, selectSize };
+  globalThis.HeartStarPreset = { name, portraitName, macaronName, classicLeopardName, blackPinkCreamLeopardName, candyName, build, buildPortrait, buildMacaron, buildClassicLeopard, buildBlackPinkCreamLeopard, buildCandy, initialState, source, selectSize };
 })();
