@@ -7,6 +7,11 @@ function setup() {
   const scope: any = {}
   new Function('globalThis', catalogSource)(scope)
   const assets = { ...JSON.parse(toolHtml.match(/const customAssets=(\{[^\n]+\});/)![1]!), ...scope.HeartStarMotifCatalog.assets }
+  const partyPath = new URL('../../public/embedded/heart-star/party-motifs.js', import.meta.url)
+  if (existsSync(partyPath)) {
+    new Function('globalThis', readFileSync(partyPath, 'utf8'))(scope)
+    Object.assign(assets, scope.HeartStarParty.register(assets))
+  }
   for (const [file, api] of [['ive-motifs.js', 'HeartStarIVE'], ['brown-motifs.js', 'HeartStarBrown'], ['pink-motifs.js', 'HeartStarPink'], ['red-motifs.js', 'HeartStarRed'], ['caramel-leopard-motifs.js', 'HeartStarCaramelLeopard'], ['autumn-maple-leopard-motifs.js', 'HeartStarAutumnMapleLeopard'], ['black-pink-leopard-motifs.js', 'HeartStarBlackPinkLeopard'], ['cream-pink-leopard-motifs.js', 'HeartStarCreamPinkLeopard'], ['light-blue-motifs.js', 'HeartStarLightBlue'], ['pattern-combos.js', 'HeartStarPatternCombos']]) {
     new Function('globalThis', readFileSync(new URL(`../../public/embedded/heart-star/${file}`, import.meta.url), 'utf8'))(scope)
     Object.assign(assets, scope[api!].register(assets))
@@ -22,6 +27,49 @@ function setup() {
 }
 
 describe('heart-star independent 210×144 template', () => {
+  it('adds the reference-inspired eight-row party preset with 40 centered motifs and safe A5 spacing', () => {
+    const { api, assets, build } = setup()
+    expect(typeof api.buildParty).toBe('function')
+    const before = JSON.stringify(assets), cfg = api.buildParty(assets, build)
+    const expected = [
+      ['pink-dot-heart-small', 'pink-dot-heart-small', 'pink-dot-heart-small', 'white-pink-dot-heart-small', 'white-pink-dot-heart-small', 'white-pink-dot-heart-small'],
+      ['pink-dot-heart-small', 'pink-dot-heart-small', 'pink-dot-heart-small', 'white-pink-dot-heart-small', 'white-pink-dot-heart-small', 'white-pink-dot-heart-small'],
+      ['rose-heart-small', 'rose-heart-small', 'rose-heart-small', 'polka-heart-small', 'polka-heart-small', 'polka-heart-small'],
+      ['rose-heart-small', 'rose-heart-small', 'rose-heart-small', 'polka-heart-small', 'polka-heart-small', 'polka-heart-small'],
+      ['rose-heart', 'pink-glow-heart', 'yellow-grid-heart', 'blue-grid-heart'],
+      ['rose-heart', 'pink-glow-heart', 'yellow-grid-heart', 'blue-grid-heart'],
+      ['ime-rose', 'ime-pink-star', 'ime-polka', 'ime-hot-pink'],
+      ['ime-rose', 'ime-pink-star', 'ime-polka', 'ime-hot-pink'],
+    ]
+    expect(cfg).toMatchObject({ preset: true, widthMm: 144, heightMm: 210, w: 1440, h: 2100 })
+    expect(cfg.slots).toHaveLength(40)
+    const rows = expected.map((_, r) => cfg.placements.filter((_: any, i: number) => cfg.slots[i].row === r))
+    expect(rows.map((row: any[]) => row.map(p => p.assetId))).toEqual(expected)
+    rows.forEach((row: any[], r: number) => {
+      expect(row[0].x).toBeCloseTo(cfg.w - row.at(-1).x - row.at(-1).w)
+      row.forEach((p, column) => {
+        const a = assets[p.assetId], i = cfg.placements.indexOf(p)
+        expect(p.w / p.h).toBeCloseTo(a.nativeW / a.nativeH)
+        if (r < 4) expect(p.w).toBeCloseTo(195)
+        else {
+          expect(Math.max(p.w, p.h) / 10).toBeLessThanOrEqual(27.5 + 1e-10)
+          expect(cfg.motifSlots[i].maxSizeMm).toBe(27.5)
+        }
+        expect(p.x).toBeGreaterThanOrEqual(29.999)
+        expect(p.y).toBeGreaterThanOrEqual(29.999)
+        expect(p.x + p.w).toBeLessThanOrEqual(1410.001)
+        expect(p.y + p.h).toBeLessThanOrEqual(2070.001)
+        if (column) expect(p.x - row[column - 1].x - row[column - 1].w).toBeGreaterThanOrEqual(19.999)
+        expect(cfg.slots[i].backgroundPart).toBe(r >= 6 ? 'heart' : undefined)
+        expect(existsSync(new URL('../../public/embedded/heart-star/' + a.src.replace('./', '').split('?')[0], import.meta.url))).toBe(true)
+      })
+      if (r) expect(Math.min(...row.map(p => p.y)) - Math.max(...rows[r - 1].map(p => p.y + p.h))).toBeGreaterThanOrEqual(19.999)
+    })
+    expect(JSON.stringify(assets)).toBe(before)
+    expect(toolHtml).toContain(`<option value="${api.partyName}">甜心派对 · A5 竖版</option>`)
+    expect(toolHtml).toContain('templates[HeartStarPreset.partyName]=HeartStarPreset.buildParty(customAssets,buildCustomLayout);')
+  })
+
   it('adds a separate black-pink and cream-pink leopard preset with equal quantities and the classic mixed geometry', () => {
     const { api, assets, build } = setup()
     const before = JSON.stringify(assets)

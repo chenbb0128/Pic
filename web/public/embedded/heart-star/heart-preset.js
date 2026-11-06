@@ -5,6 +5,7 @@
   const classicLeopardName = '经典豹纹混合.png';
   const blackPinkCreamLeopardName = '黑粉奶油混合豹纹.png';
   const candyName = '缤纷糖果.png';
+  const partyName = '甜心派对.png';
   let previousSize = null;
   function build(assets, arrange) {
     const repeat = (id, count) => Array(count).fill(id);
@@ -103,6 +104,25 @@
     });
     return cfg;
   }
+  function buildParty(assets, arrange) {
+    const repeat = (id, count) => Array(count).fill(id);
+    const smallA = [...repeat('pink-dot-heart-small', 3), ...repeat('white-pink-dot-heart-small', 3)];
+    const smallB = [...repeat('rose-heart-small', 3), ...repeat('polka-heart-small', 3)];
+    const large = ['rose-heart', 'pink-glow-heart', 'yellow-grid-heart', 'blue-grid-heart'];
+    const letters = ['ime-rose', 'ime-pink-star', 'ime-polka', 'ime-hot-pink'];
+    const rows = [smallA, smallA, smallB, smallB, large, large, letters, letters];
+    const fittedAssets = { ...assets };
+    for (const id of new Set(rows.slice(4).flat())) {
+      const asset = assets[id], factor = Math.min(1, 27.5 / Math.max(asset.nativeW, asset.nativeH));
+      fittedAssets[id] = { ...asset, nativeW: asset.nativeW * factor, nativeH: asset.nativeH * factor };
+    }
+    const cfg = buildRows(rows, fittedAssets, arrange, 144, 210);
+    cfg.motifSlots.forEach((meta, i) => Object.assign(meta, {
+      assetId: cfg.placements[i].assetId, type: cfg.slots[i].type,
+      ...(cfg.slots[i].row >= 4 ? { maxSizeMm: 27.5 } : {}),
+    }));
+    return cfg;
+  }
   function buildCandy(assets, arrange) {
     const ids = (keys, type, size) => keys.map(key => `candy-${key}-${type}-${size}`);
     const circles = ids(['cream-pink-dot', 'pink-picnic', 'lavender', 'matcha', 'cream-pink-dot', 'pink-picnic'], 'circle', 20);
@@ -154,5 +174,5 @@
       [width.value, height.value] = previousSize;previousSize = null;
     }
   }
-  globalThis.HeartStarPreset = { name, portraitName, macaronName, classicLeopardName, blackPinkCreamLeopardName, candyName, build, buildPortrait, buildMacaron, buildClassicLeopard, buildBlackPinkCreamLeopard, buildCandy, initialState, source, selectSize };
+  globalThis.HeartStarPreset = { name, portraitName, macaronName, classicLeopardName, blackPinkCreamLeopardName, candyName, partyName, build, buildPortrait, buildMacaron, buildClassicLeopard, buildBlackPinkCreamLeopard, buildCandy, buildParty, initialState, source, selectSize };
 })();
