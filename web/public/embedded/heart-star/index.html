@@ -148,6 +148,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <body>
 <link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
 <link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-1">
+<link rel="stylesheet" href="./product-preview.css?v=product-1">
 <header class="editor-toolbar" aria-label="排版工具栏">
  <div class="editor-toolbar-row">
  <div class="preview-head"><strong id="previewTitle">♡ 爱心星星排版</strong><span id="dimensions">正在载入模板…</span></div>
@@ -231,6 +232,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./solid-background-quick.js?v=quick-1"></script>
 <script src="./photo-thumbnails.js?v=thumbs-2"></script>
 <script src="./preview-watermark.js?v=picture-preview-4"></script>
+<script src="./product-preview.js?v=product-1"></script>
 <script src="./editor-interactions.js?v=right-numbering-3"></script>
 <script src="./motif-catalog.js?v=motifs-1"></script>
 <script src="./row-layout.js?v=row-1"></script>
@@ -282,10 +284,21 @@ const watermarkControls=document.createElement('div');watermarkControls.classNam
 HeartStarWatermark.create({surface:previewSurface,enabled:document.getElementById('watermarkEnabled'),text:document.getElementById('watermarkText'),opacity:document.getElementById('watermarkOpacity'),value:document.getElementById('watermarkOpacityValue')});
 const watermarkDownload=document.getElementById('downloadWatermarked');watermarkDownload.disabled=true;watermarkDownload.addEventListener('click',()=>exportPng(true));
 const watermarkDownloads=document.createElement('div');watermarkDownloads.className='watermark-downloads';watermarkControls.append(document.getElementById('exportFilename'),watermarkDownloads);watermarkDownloads.append(watermarkDownload,download);
+const productPreviewButton=document.createElement('button');productPreviewButton.type='button';productPreviewButton.className='btn product-preview-button';productPreviewButton.id='productPreview';productPreviewButton.textContent='商品展示图';watermarkDownloads.prepend(productPreviewButton);
+HeartStarProductPreview.mount({button:productPreviewButton,capture:productPreviewSnapshot,report:say});
 const picturePreviewButton=document.createElement('button');picturePreviewButton.type='button';picturePreviewButton.className='preview-tool picture-preview-button';picturePreviewButton.textContent='预览图';picturePreviewButton.setAttribute('aria-haspopup','dialog');picturePreviewButton.setAttribute('aria-expanded','false');document.querySelector('.preview-tools').append(picturePreviewButton);
 const pictureDialog=document.createElement('dialog');pictureDialog.className='picture-dialog';pictureDialog.setAttribute('aria-labelledby','picturePreviewTitle');pictureDialog.innerHTML='<div class="picture-dialog-head"><h2 id="picturePreviewTitle">预览图</h2><button type="button" class="preview-tool" aria-label="关闭预览图">✕</button></div><div class="picture-dialog-content"></div>';document.body.append(pictureDialog);
 HeartStarWatermark.createDialog({button:picturePreviewButton,dialog:pictureDialog,close:pictureDialog.querySelector('button'),content:pictureDialog.querySelector('.picture-dialog-content'),render:picturePreviewSnapshot,onError:message=>say(message,true)});
 function picturePreviewSnapshot(){const cfg=templates[sel.value];if(canvas.hidden||exportBusy||photoUploadBusy||replacementBusy||slotBackgrounds.busy()||motifEditor.busy()||(cfg.custom&&(customBusy||customDirty))||(cfg.text&&fontBusy))throw new Error('请等待模板和图片准备完成后再预览。');if(!outputConfig())throw new Error('请输入有效的宽度和高度。');try{draw(false);return HeartStarWatermark.preview(canvas,document.getElementById('watermarkEnabled').checked)}finally{draw()}}
+function productPreviewSnapshot(){
+ if(!selectionBoard().ready||fontBusy||solidBackgroundEditor?.busy())throw new Error('请等待模板和图片准备完成后再生成商品展示图。');
+ if(templates[sel.value].text&&!states.some(state=>state.text?.trim()))throw new Error('请先输入并应用文案。');
+ try{
+  draw(false);const d=renderConfig(),source=document.createElement('canvas');source.width=d.contentPxW;source.height=d.contentPxH;
+  source.getContext('2d').drawImage(canvas,0,0,d.contentPxW,d.contentPxH,0,0,d.contentPxW,d.contentPxH);
+  return{canvas:source,name:sel.value.replace(/\.png$/i,'')};
+ }finally{draw()}
+}
 function resizePreview(){if(canvas.hidden||!canvas.width||!canvas.height)return;const padding=28,availableW=Math.max(1,stage.clientWidth-padding),availableH=Math.max(1,stage.clientHeight-padding),fit=Math.min(availableW/canvas.width,availableH/canvas.height);previewSize={w:Math.max(1,Math.round(canvas.width*fit*previewScale)),h:Math.max(1,Math.round(canvas.height*fit*previewScale))};canvas.style.width=previewSize.w+'px';canvas.style.height=previewSize.h+'px';previewSurface.style.width=previewSize.w+'px';previewSurface.style.height=previewSize.h+'px'}
 function setPreviewScale(value){const old=canvas.getBoundingClientRect(),bounds=stage.getBoundingClientRect(),centerX=bounds.left+stage.clientWidth/2,centerY=bounds.top+stage.clientHeight/2,anchorX=old.width?(centerX-old.left)/old.width:.5,anchorY=old.height?(centerY-old.top)/old.height:.5;previewScale=zoomLevels.includes(Number(value))?Number(value):1;previewZoom.value=String(previewScale);zoomOut.disabled=previewScale===zoomLevels[0];resizePreview();const next=canvas.getBoundingClientRect();stage.scrollLeft+=next.left+anchorX*next.width-centerX;stage.scrollTop+=next.top+anchorY*next.height-centerY;if(previewScale===1){stage.scrollLeft=0;stage.scrollTop=0}}
 function changePreviewZoom(step){setPreviewScale(zoomLevels[Math.max(0,Math.min(zoomLevels.length-1,zoomLevels.indexOf(previewScale)+step))])}

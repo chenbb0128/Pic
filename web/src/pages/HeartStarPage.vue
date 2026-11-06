@@ -10,7 +10,7 @@ const checkingAccess = ref(false)
 const locking = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=top-toolbar-1`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=product-preview-1`
 const editorFrame = ref<HTMLIFrameElement | null>(null)
 const toolbarReady = ref(false)
 function onEditorMessage(event: MessageEvent): void {
