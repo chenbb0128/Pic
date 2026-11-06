@@ -10,13 +10,26 @@ const checkingAccess = ref(false)
 const locking = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=tool-session-1`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=top-toolbar-1`
 const editorFrame = ref<HTMLIFrameElement | null>(null)
+const toolbarReady = ref(false)
+function onEditorMessage(event: MessageEvent): void {
+  if (!editorFrame.value?.contentWindow || event.source !== editorFrame.value.contentWindow || event.origin !== window.location.origin) return
+  if (event.data?.type !== 'heart-star-toolbar') return
+  if (event.data.action === 'ready') toolbarReady.value = true
+  else if (event.data.action === 'shortcuts') openShortcutGuide()
+  else if (event.data.action === 'lock') void lock()
+}
 function onBeforeUnload(event: BeforeUnloadEvent): void {
   if (heartStarNeedsSave(editorFrame.value)) { event.preventDefault(); event.returnValue = '' }
 }
 if (inject(matchedRouteKey, undefined)) onBeforeRouteLeave(() => canLeaveHeartStar(editorFrame.value, message => window.confirm(message)))
-onBeforeUnmount(() => { if (typeof window !== 'undefined') window.removeEventListener?.('beforeunload', onBeforeUnload) })
+onBeforeUnmount(() => {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener?.('beforeunload', onBeforeUnload)
+    window.removeEventListener?.('message', onEditorMessage)
+  }
+})
 const shortcutGuide = ref<HTMLDialogElement | null>(null)
 const shortcutGroups = [
   { title: '选择图案', items: [
@@ -50,6 +63,7 @@ function onShortcutBackdrop(event: MouseEvent): void {
 
 onMounted(async () => {
   if (typeof window !== 'undefined') window.addEventListener?.('beforeunload', onBeforeUnload)
+  if (typeof window !== 'undefined') window.addEventListener?.('message', onEditorMessage)
   checkingAccess.value = true
   try { unlocked.value = await hasHeartStarAccess() }
   catch (cause) { error.value = cause instanceof Error ? cause.message : '访问验证失败，请重试。' }
@@ -60,6 +74,7 @@ async function unlock(): Promise<void> {
   if (checkingAccess.value) return
   error.value = ''
   loading.value = true
+  toolbarReady.value = false
   checkingAccess.value = true
   try {
     await rememberHeartStarAccess(password.value)
@@ -76,6 +91,7 @@ async function lock(): Promise<void> {
   try {
     await clearHeartStarAccess()
     unlocked.value = false
+    toolbarReady.value = false
     password.value = ''
     loading.value = true
   } catch (cause) { error.value = cause instanceof Error ? cause.message : '锁定失败，请重试。当前编辑已保留。' }
@@ -102,7 +118,7 @@ async function lock(): Promise<void> {
     </div>
   </section>
   <section v-else class="flex h-[calc(100dvh-64px)] min-h-[420px] w-full min-w-0 flex-1 flex-col bg-[#faf8f9] lg:h-auto lg:min-h-0">
-    <div class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-pink-100 bg-white px-4 py-3">
+    <div v-if="!toolbarReady" class="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-pink-100 bg-white px-4 py-3">
       <div class="min-w-0">
         <h1 class="text-sm font-bold text-slate-900">♡ 爱心星星排版</h1>
         <p class="mt-1 text-[11px] text-slate-500">保留原尺寸 · 照片填充 · 文案排版</p>

@@ -169,6 +169,35 @@ describe('heart and star tool access', () => {
     } finally { app.unmount(); vi.unstubAllGlobals() }
   })
 
+  it('accepts toolbar actions only from its own same-origin editing iframe', async () => {
+    const Page = await getPage()
+    vi.stubGlobal('window', { location: { origin: 'https://pic.example' }, confirm: vi.fn(() => false) })
+    const app = renderer.createApp({ ...Page, render: () => null })
+    app.provide(ssrContextKey, {})
+    const vm = app.mount({})
+    const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
+    const source = markRaw({ postMessage: vi.fn() })
+    const dialog = markRaw({ open: false, showModal: vi.fn() })
+    try {
+      await vi.waitFor(() => expect(state.checkingAccess).toBe(false))
+      state.password = '87654321'
+      await state.unlock()
+      state.editorFrame = markRaw({ contentWindow: source })
+      state.shortcutGuide = dialog
+      const message = { origin: 'https://pic.example', source, data: { type: 'heart-star-toolbar', action: 'ready' } }
+      state.onEditorMessage({ ...message, origin: 'https://other.example' })
+      state.onEditorMessage({ ...message, source: {} })
+      expect(state.toolbarReady).toBe(false)
+      state.onEditorMessage(message)
+      expect(state.toolbarReady).toBe(true)
+      state.onEditorMessage({ ...message, data: { type: 'heart-star-toolbar', action: 'shortcuts' } })
+      expect(dialog.showModal).toHaveBeenCalledOnce()
+      state.onEditorMessage({ ...message, data: { type: 'heart-star-toolbar', action: 'lock' } })
+      expect(window.confirm).toHaveBeenCalledOnce()
+      expect(state.unlocked).toBe(true)
+    } finally { app.unmount() }
+  })
+
   it('restores access when returning to the page and forgets it after relocking', async () => {
     const Page = await getPage()
     const mountPage = () => {
