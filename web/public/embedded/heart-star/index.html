@@ -156,7 +156,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
  <div class="preview-numbering"><label class="label" for="footerText" title="导出统一放底部 · 另加 3 mm（横版编辑时在右侧）">排版编号</label><label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label><div class="footer-text-row"><input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号，正式下载后清空" aria-label="本次排版编号" required><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div>
  <div class="preview-tools"><button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button><select class="preview-zoom" id="previewZoom" aria-label="预览缩放比例"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select></div>
  </div>
- <div class="editor-toolbar-actions" hidden><button type="button" class="btn" data-editor-action="shortcuts" aria-haspopup="dialog">快捷键指南</button><button type="button" class="btn" data-editor-action="lock">重新锁定</button></div>
+ <div class="editor-toolbar-actions" hidden><button type="button" class="btn" data-editor-action="shortcuts" aria-haspopup="dialog">快捷键指南</button></div>
  </div>
  <div class="editor-toolbar-secondary">
  <output class="small footer-filename" id="exportFilename" for="footerText template numberingEnabled"></output>
@@ -833,4 +833,4 @@ var sharedLibrary=HeartStarCloud.mount({getSnapshot:getCloudSnapshot,applySnapsh
  pendingEdit:()=>templates[sel.value].text&&copyDraftDirty?'文案尚未应用，请先点击“应用”再保存。':'',
  setBusy:busy=>{document.querySelector('.app').inert=busy;document.querySelector('.editor-toolbar').inert=busy},report:say});
 </script>
-<script src="./editor-toolbar.js?v=toolbar-1"></script></body></html>
+<script src="./editor-toolbar.js?v=toolbar-2"></script></body></html>

@@ -1,16 +1,15 @@
 <script setup lang="ts">
 import { inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
-import { clearHeartStarAccess, hasHeartStarAccess, rememberHeartStarAccess } from '../services/heartStarAccess'
+import { hasHeartStarAccess, rememberHeartStarAccess } from '../services/heartStarAccess'
 import { canLeaveHeartStar, heartStarNeedsSave } from '../services/heartStarLeave'
 
 const password = ref('')
 const unlocked = ref(false)
 const checkingAccess = ref(false)
-const locking = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=product-preview-1`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=toolbar-actions-2`
 const editorFrame = ref<HTMLIFrameElement | null>(null)
 const toolbarReady = ref(false)
 function onEditorMessage(event: MessageEvent): void {
@@ -18,7 +17,6 @@ function onEditorMessage(event: MessageEvent): void {
   if (event.data?.type !== 'heart-star-toolbar') return
   if (event.data.action === 'ready') toolbarReady.value = true
   else if (event.data.action === 'shortcuts') openShortcutGuide()
-  else if (event.data.action === 'lock') void lock()
 }
 function onBeforeUnload(event: BeforeUnloadEvent): void {
   if (heartStarNeedsSave(editorFrame.value)) { event.preventDefault(); event.returnValue = '' }
@@ -83,20 +81,6 @@ async function unlock(): Promise<void> {
   finally { password.value = ''; checkingAccess.value = false }
 }
 
-async function lock(): Promise<void> {
-  if (locking.value) return
-  if (!window.confirm('重新锁定会清空此工具内尚未下载的编辑内容，确定继续吗？')) return
-  error.value = ''
-  locking.value = true
-  try {
-    await clearHeartStarAccess()
-    unlocked.value = false
-    toolbarReady.value = false
-    password.value = ''
-    loading.value = true
-  } catch (cause) { error.value = cause instanceof Error ? cause.message : '锁定失败，请重试。当前编辑已保留。' }
-  finally { locking.value = false }
-}
 </script>
 
 <template>
@@ -125,7 +109,6 @@ async function lock(): Promise<void> {
       </div>
       <div class="ml-auto flex shrink-0 items-center gap-2">
         <button type="button" aria-haspopup="dialog" aria-controls="heart-star-shortcut-guide" class="min-h-10 rounded-lg border border-pink-200 bg-pink-50 px-3 text-xs font-semibold text-pink-700 hover:bg-pink-100" @click="openShortcutGuide">快捷键指南</button>
-        <button type="button" :disabled="locking" class="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50" @click="lock">{{ locking ? '正在锁定…' : '重新锁定' }}</button>
       </div>
     </div>
     <p v-if="error" class="shrink-0 px-4 py-2 text-xs text-rose-600" role="status">{{ error }}</p>

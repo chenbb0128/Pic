@@ -7,7 +7,7 @@
   actions.hidden = false;
   actions.addEventListener('click', event => {
     const action = event.target.closest('[data-editor-action]')?.dataset.editorAction;
-    if (action) window.parent.postMessage({ type: 'heart-star-toolbar', action }, window.location.origin);
+    if (action === 'shortcuts') window.parent.postMessage({ type: 'heart-star-toolbar', action }, window.location.origin);
   });
   window.parent.postMessage({ type: 'heart-star-toolbar', action: 'ready' }, window.location.origin);
 })();

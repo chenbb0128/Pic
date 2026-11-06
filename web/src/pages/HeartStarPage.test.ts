@@ -145,30 +145,6 @@ describe('heart and star tool access', () => {
     } finally { app.unmount() }
   })
 
-  it('clears the entered password and confirms before discarding the tool on relock', async () => {
-    const Page = await getPage()
-    const app = renderer.createApp({ ...Page, render: () => null })
-    app.provide(ssrContextKey, {})
-    const vm = app.mount({})
-    const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
-    const confirm = vi.fn().mockReturnValue(false)
-    vi.stubGlobal('window', { confirm })
-    try {
-      await vi.waitFor(() => expect(state.checkingAccess).toBe(false))
-      state.password = '87654321'
-      await state.unlock()
-      await nextTick()
-      expect(state.unlocked).toBe(true)
-      expect(state.password).toBe('')
-      await state.lock()
-      expect(state.unlocked).toBe(true)
-      confirm.mockReturnValue(true)
-      await state.lock()
-      expect(state.unlocked).toBe(false)
-      expect(state.error).toBe('')
-    } finally { app.unmount(); vi.unstubAllGlobals() }
-  })
-
   it('accepts toolbar actions only from its own same-origin editing iframe', async () => {
     const Page = await getPage()
     vi.stubGlobal('window', { location: { origin: 'https://pic.example' }, confirm: vi.fn(() => false) })
@@ -193,12 +169,14 @@ describe('heart and star tool access', () => {
       state.onEditorMessage({ ...message, data: { type: 'heart-star-toolbar', action: 'shortcuts' } })
       expect(dialog.showModal).toHaveBeenCalledOnce()
       state.onEditorMessage({ ...message, data: { type: 'heart-star-toolbar', action: 'lock' } })
-      expect(window.confirm).toHaveBeenCalledOnce()
+      expect(window.confirm).not.toHaveBeenCalled()
       expect(state.unlocked).toBe(true)
+      expect(state.password).toBe('')
+      expect(vi.mocked(fetch).mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false)
     } finally { app.unmount() }
   })
 
-  it('restores access when returning to the page and forgets it after relocking', async () => {
+  it('restores access when returning to the page', async () => {
     const Page = await getPage()
     const mountPage = () => {
       const app = renderer.createApp({ ...Page, render: () => null })
@@ -206,7 +184,6 @@ describe('heart and star tool access', () => {
       const vm = app.mount({})
       return { app, state: (vm.$ as unknown as { setupState: Record<string, any> }).setupState }
     }
-    vi.stubGlobal('window', { confirm: () => true })
     const first = mountPage()
     try {
       await vi.waitFor(() => expect(first.state.checkingAccess).toBe(false))
@@ -218,34 +195,6 @@ describe('heart and star tool access', () => {
     const returned = mountPage()
     try {
       await vi.waitFor(() => expect(returned.state.unlocked).toBe(true))
-      await returned.state.lock()
-      expect(returned.state.unlocked).toBe(false)
     } finally { returned.app.unmount() }
-
-    const locked = mountPage()
-    try {
-      await vi.waitFor(() => expect(locked.state.checkingAccess).toBe(false))
-      expect(locked.state.unlocked).toBe(false)
-    } finally { locked.app.unmount() }
-  })
-
-  it('preserves the editor if the server cannot revoke its session', async () => {
-    const Page = await getPage()
-    const app = renderer.createApp({ ...Page, render: () => null })
-    app.provide(ssrContextKey, {})
-    const vm = app.mount({})
-    const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
-    vi.stubGlobal('window', { confirm: () => true })
-    try {
-      await vi.waitFor(() => expect(state.checkingAccess).toBe(false))
-      state.password = '87654321'
-      await state.unlock()
-      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('network down')))
-      await state.lock()
-      expect(state.unlocked).toBe(true)
-      expect(state.checkingAccess).toBe(false)
-      expect(state.locking).toBe(false)
-      expect(state.error).toContain('服务暂不可用')
-    } finally { app.unmount() }
   })
 })

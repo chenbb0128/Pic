@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { clearHeartStarAccess, hasHeartStarAccess, rememberHeartStarAccess } from './heartStarAccess'
+import { hasHeartStarAccess, rememberHeartStarAccess } from './heartStarAccess'
 
 describe('server verified heart-star access', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -43,15 +43,6 @@ describe('server verified heart-star access', () => {
   it('rejects a static HTML fallback instead of treating it as an authenticated session', async () => {
     vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => new Response('<html>SPA fallback</html>')))
     await expect(hasHeartStarAccess()).rejects.toThrow('服务')
-  })
-
-  it('revokes the server session when locking and propagates logout failures', async () => {
-    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 0, data: null })))
-    vi.stubGlobal('fetch', fetcher)
-    await clearHeartStarAccess()
-    expect(fetcher).toHaveBeenCalledWith('/api/v1/session', expect.objectContaining({ method: 'DELETE', credentials: 'same-origin' }))
-    fetcher.mockRejectedValue(new TypeError('network down'))
-    await expect(clearHeartStarAccess()).rejects.toThrow('服务')
   })
 
   it('still unlocks with a server cookie when browser storage is unavailable', async () => {

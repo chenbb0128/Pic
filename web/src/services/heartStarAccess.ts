@@ -17,12 +17,6 @@ async function sessionRequest(method: string, path = '/session', password?: stri
   return body.data
 }
 
-export async function clearHeartStarAccess(): Promise<void> {
-  try { await sessionRequest('DELETE') }
-  catch (error) { if ((error as { status?: number }).status !== 401) throw error }
-  clearLegacyAccess()
-}
-
 export async function hasHeartStarAccess(): Promise<boolean> {
   clearLegacyAccess()
   try { await sessionRequest('GET'); return true }
