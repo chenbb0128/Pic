@@ -10,6 +10,8 @@ function setup() {
   const paint = {
     fillStyle: '', globalCompositeOperation: 'source-over',
     save() {}, restore() {}, translate() {}, rotate() {},
+    beginPath() {}, rect(...args: number[]) { calls.push(['clipRect', ...args]) }, clip() {},
+    measureText: (text: string) => ({ width: text.length * 20 }),
     drawImage(...args: any[]) { calls.push(['image', ...args]) },
     fillRect(...args: number[]) { calls.push(['fill', this.fillStyle, this.globalCompositeOperation, ...args]) },
     fillText(...args: any[]) { calls.push(['text', this.globalCompositeOperation, ...args]) },
@@ -49,12 +51,20 @@ describe('heart-star universal product images', () => {
     expect(calls.find(call => call[0] === 'fill')).toEqual(['fill', color, 'destination-over', 0, 0, 1198, 1600])
   })
 
-  it('clips optional watermarks to the artwork so surrounding transparent space stays transparent', () => {
+  it.each([[1000, 1400], [1400, 1000]])('keeps the watermark below %s × %s artwork, within the bottom padding', (width, height) => {
     const { feature, calls } = setup()
-    feature.compose({ width: 1000, height: 1400 }, { background: 'transparent', watermark: true, text: '门店展示', opacity: 40 })
+    const output = feature.compose({ width, height }, { background: 'transparent', watermark: true, text: '门店展示', opacity: 40 })
+    const box = feature.layout(width, height, 6)
     const marks = calls.filter(call => call[0] === 'text')
-    expect(marks.length).toBeGreaterThan(0)
-    expect(marks.every(call => call[1] === 'source-atop' && call[2] === '门店展示')).toBe(true)
+    expect(marks).toHaveLength(1)
+    expect(marks[0][1]).toBe('source-over')
+    expect(marks[0][2]).toBe('门店展示')
+    expect(marks[0][3]).toBe(output.width / 2)
+    expect(marks[0][4]).toBeGreaterThan(box.y + box.artHeight)
+    expect(marks[0][4]).toBeLessThan(output.height)
+    const clip = calls.find(call => call[0] === 'clipRect')
+    expect(clip[2]).toBeGreaterThanOrEqual(Math.ceil(box.y + box.artHeight))
+    expect(clip[2] + clip[4]).toBe(output.height)
     expect(calls.filter(call => call[0] === 'fill')).toHaveLength(0)
   })
 

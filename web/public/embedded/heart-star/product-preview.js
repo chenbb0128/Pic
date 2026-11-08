@@ -45,17 +45,17 @@
     paint.drawImage(source, box.x, box.y, box.artWidth, box.artHeight);
     if (settings.watermark) {
       paint.save();
-      // Preserve all existing alpha, including transparent gaps and white motif details.
-      paint.globalCompositeOperation = 'source-atop';
-      const scale = output.width / 800, stepX = Math.max(280, settings.text.length * 15 + 30) * scale, stepY = 180 * scale;
-      const columnStep = Math.min(stepX, box.artWidth), rowStep = Math.min(stepY, box.artHeight);
+      // Reserve a separate footer for the watermark; never paint over the artwork.
+      const top = Math.ceil(box.y + box.artHeight) + 2, height = output.height - top;
+      paint.beginPath(); paint.rect(0, top, output.width, height); paint.clip();
+      paint.globalCompositeOperation = 'source-over';
       paint.fillStyle = `rgba(102,112,133,${settings.opacity / 100})`;
-      paint.font = `600 ${16 * scale}px "Microsoft YaHei",sans-serif`; paint.textAlign = 'center'; paint.textBaseline = 'middle';
-      for (let y = box.y + rowStep / 2, row = 0; y < box.y + box.artHeight; y += rowStep, row++) {
-        for (let x = box.x + columnStep * (row % 2 ? .2 : .65); x < box.x + box.artWidth; x += columnStep) {
-          paint.save(); paint.translate(x, y); paint.rotate(-Math.PI / 7); paint.fillText(settings.text, 0, 0); paint.restore();
-        }
-      }
+      let size = Math.min(26, height * .45);
+      paint.font = `600 ${size}px "Microsoft YaHei",sans-serif`;
+      const measured = paint.measureText(settings.text).width, maxWidth = Math.max(1, output.width - 24);
+      if (measured > maxWidth) size *= maxWidth / measured;
+      paint.font = `600 ${size}px "Microsoft YaHei",sans-serif`; paint.textAlign = 'center'; paint.textBaseline = 'middle';
+      paint.fillText(settings.text, output.width / 2, top + height / 2);
       paint.restore();
     }
     if (BACKGROUNDS[settings.background]) {
@@ -73,7 +73,7 @@
       <div class="product-layout"><section class="product-settings" aria-label="展示设置">
         <label for="productBackground">展示背景</label><select id="productBackground"><option value="cream">奶油白</option><option value="pink">浅粉色</option><option value="transparent">透明 PNG</option></select>
         <label for="productPadding">四周留白 <output id="productPaddingValue">6%</output></label><input id="productPadding" type="range" min="2" max="12" step="1" value="6">
-        <label class="product-watermark-toggle"><input id="productWatermarkEnabled" type="checkbox" checked>展示水印</label>
+        <label class="product-watermark-toggle"><input id="productWatermarkEnabled" type="checkbox" checked>展示水印（下方留白）</label>
         <label for="productWatermarkText">水印文字</label><input id="productWatermarkText" type="text" maxlength="40" autocomplete="off">
         <label for="productWatermarkOpacity">水印浓度 <output id="productWatermarkOpacityValue">40%</output></label><input id="productWatermarkOpacity" type="range" min="8" max="50" step="1" value="40">
         <p class="product-settings-note">所有模板通用，设置自动记住。透明背景在预览中显示为棋盘格，下载图片不含棋盘格。</p>

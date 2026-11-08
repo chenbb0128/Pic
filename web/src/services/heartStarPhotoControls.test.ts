@@ -19,6 +19,31 @@ function setup() {
 }
 
 describe('heart-star portrait fine tuning', () => {
+  it('shows photo shape controls for image templates and hides them for text templates', () => {
+    const nodes = new Map<string, any>()
+    const node = (id: string): any => {
+      if (!nodes.has(id)) nodes.set(id, { hidden: false, textContent: '', closest: () => node(id + ':field'), prepend() {} })
+      return nodes.get(id)
+    }
+    const env = {
+      templates: { test: { text: false } }, sel: { value: 'test' },
+      document: { getElementById: node, querySelector: node },
+      sizeNumber: node('sizeNumber'), drop: node('drop'), clip: node('clip'),
+      selectionField: {}, selectionNext: {}, selectionHome: { insertBefore() {} }, originalPhotoHint: '',
+    }
+    const start = html.indexOf('function updateTemplateFields(')
+    const source = html.slice(start, html.indexOf('function wrapCopy(', start))
+    const update = new Function('env', `with(env){${source};return updateTemplateFields}`)(env)
+    update()
+    expect(node('clip:field').hidden).toBe(false)
+    env.templates.test.text = true
+    update()
+    expect(node('clip:field').hidden).toBe(true)
+    env.templates.test.text = false
+    update()
+    expect(node('clip:field').hidden).toBe(false)
+  })
+
   it('shows centered position sliders and updates only selected photos without moving artwork', () => {
     const { env, feature, element } = setup(), untouched = structuredClone(env.states[1])
     feature.updatePhotoControls()

@@ -25,7 +25,9 @@ function setup() {
     slotBackgrounds: { update() {}, busy: () => false, hasAny: () => true },
     backgroundDrag: { update() {} },
     motifEditor: { source: (base: any) => base, busy: () => false }, updateMotifControls() {},
-    HeartStarBackground: { drawTemplate() {}, frame: (cfg: any, _source: any, states: any[], i: number) => states[i]?.motif?.frame || cfg.slots[i] },
+    HeartStarBackground: { drawTemplate() {}, photoOnly: () => false, photoAreas() {},
+      photoFrame: (...args: any[]) => env.HeartStarBackground.frame(...args),
+      frame: (cfg: any, _source: any, states: any[], i: number) => states[i]?.motif?.frame || cfg.slots[i] },
     ctx: { clearRect() {}, save() {}, beginPath() {}, clip() {}, restore() {},
       rect(...args: number[]) { paints.push(args) }, scale() {} },
     drawFooter() {}, updatePhotoControls() {}, download: {}, watermarkDownload: {}, states: [],
@@ -34,7 +36,7 @@ function setup() {
     cancelAnimationFrame() {}, numberingEnabled: { checked: true }, footerText: { value: 'test', focus() {} }, customBusy: false, customDirty: false,
     hasSlotPhotos: () => false, addDpiMetadata: async (blob: Blob, dpi: number) => { snapshots.push(dpi); return blob },
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} }, setTimeout() {}, say() {},
-    currentSlots: () => env.templates.test.slots, slotFrame: (i: number) => env.templates.test.slots[i],
+    currentSlots: () => env.templates.test.slots, slotFrame: (i: number) => env.templates.test.slots[i], slotPhoto: () => null,
   }
   const source = section('function renderConfig(', 'function loadTemplate(') +
     section('function draw(showSelection', 'function chooseAtCanvas(') +
@@ -48,6 +50,30 @@ function setup() {
 }
 
 describe('heart-star lightweight preview', () => {
+  it('renders and measures clipped and fitted photos independently of the current checkbox and selection', () => {
+    const { env, feature } = setup()
+    env.templates.test.slots = [{ x: 50, y: 50, w: 40, h: 40, type: 'heart' }, { x: 150, y: 50, w: 40, h: 40, type: 'star' }]
+    env.states = [{ size: .62, dx: 0, dy: 0, clip: true }, { size: .62, dx: 0, dy: 0, clip: false }]
+    env.selectedSlots = new Set([1]); env.clip.checked = false
+    const clipped: string[] = [], fitted: number[] = []
+    env.slotPhoto = () => ({ width: 100, height: 100 })
+    env.slotShape = (slot: any) => slot.type
+    env.clipPath = (_ctx: any, type: string) => clipped.push(type)
+    env.ctx.drawImage = () => {}
+    env.HeartStarBackground.has = () => false
+    env.HeartStarBackground.drawFittedPhoto = (_ctx: any, _cfg: any, _source: any, _states: any[], index: number) => fitted.push(index)
+    env.HeartStarBackground.photoFrame = (cfg: any, _source: any, _states: any[], index: number) => ({ ...cfg.slots[index], w: 25 })
+    expect(feature.slotFrame(0).w).toBe(40)
+    expect(feature.slotFrame(1).w).toBe(25)
+    feature.draw(false)
+    expect(clipped).toEqual(['heart'])
+    expect(fitted).toEqual([1])
+    env.selectedSlots = new Set([0]); env.clip.checked = true
+    feature.draw(false, true)
+    expect(clipped).toEqual(['heart', 'heart'])
+    expect(fitted).toEqual([1, 1])
+  })
+
   it('keeps landscape drawing and hit testing inside the content, excluding the right numbering strip', () => {
     const { env, feature, output, paints } = setup()
     Object.assign(output, { w: 210, h: 144, totalW: 213, totalH: 144, pxW: 5031, pxH: 3402,

@@ -1,5 +1,8 @@
 (() => {
   'use strict';
+  function restorePhotoClips(states, legacyClip) {
+    return states.map(state => ({ ...state, clip: typeof state.clip === 'boolean' ? state.clip : legacyClip === true }));
+  }
   function capture({ name, cfg, base, states, photoAt, catalog, settings, customRows, copy }) {
     const keys = ['w', 'h', 'slots', 'placements', 'widthMm', 'heightMm', 'contentOffsetX', 'photoTypes', 'text', 'custom'];
     const template = Object.fromEntries(keys.filter(k => cfg[k] !== undefined).map(k => [k, cfg[k]]));
@@ -32,5 +35,5 @@
     if (cfg.text && (!data.copy?.style || !Array.isArray(data.copy.jobs) || !data.copy.layout || data.states.some(st => typeof st.text !== 'string'))) bad();
     return data;
   }
-  globalThis.HeartStarCloudEditor = { capture, validate };
+  globalThis.HeartStarCloudEditor = { capture, validate, restorePhotoClips };
 })();

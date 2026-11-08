@@ -87,7 +87,7 @@ describe('heart-star selected photo upload', () => {
 
   it.each(['transparent', 'outline', 'cropped'])('keeps the existing transforms in the separate %s mode', type => {
     const s = setup([1])
-    if (type === 'cropped') s.env.clip.checked = true
+    if (type === 'cropped') Object.assign(s.states[1]!, { clip: true })
     else Object.assign(s.states[1]!, { background: { type } })
     const before = structuredClone(s.states)
     s.upload([s.file('unchanged')])
