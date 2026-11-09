@@ -11,6 +11,7 @@ function setup() {
   const env: any = {
     widthInput: { value: '144' }, heightInput: { value: '210' }, dpiInput: { value: '600' },
     footerHeightMm: 3, numberingEnabled: { checked: true }, footerText: { value: '订单001', focus() {} },
+    footerPrefix: { value: 'ch' }, sheetTotal: { value: '1' }, sheetIndex: { value: '1' },
     sel: { value: 'heart.png' }, templates: { 'heart.png': {} },
     exportBusy: false, customBusy: false, customDirty: false, slotBackgrounds: { busy: () => false },
     motifEditor: { busy: () => false },
@@ -38,7 +39,7 @@ function setup() {
     section('function outputConfig(', 'function updateCanvasSize(') +
     section('async function exportPng(', 'const customAssets=') +
     section('async function getCloudResult(', 'var sharedLibrary=')
-  const feature = new Function('env', `with(env){${source};return {outputConfig,renderConfig,drawFooter,pngFilename,exportPng,getCloudResult}}`)(env)
+  const feature = new Function('env', `with(env){${source};return {outputConfig,renderConfig,drawFooter,pngFilename,exportPng,getCloudResult,composeFooterNumber,localDateLabel}}`)(env)
   env.outputConfig = feature.outputConfig
   env.renderConfig = feature.renderConfig
   return { env, feature, downloads, messages, paintedText, metadata, geometry, snapshots }
@@ -56,22 +57,24 @@ describe('heart-star numbering and DPI export', () => {
       contentPxH: 1082, footerPxW: 22, footerPxH: 0 })
     feature.drawFooter(d)
     expect(geometry).toEqual([['rect', 4961, 0, 70, 3402], ['translate', 4996, 0], ['rotate', Math.PI / 2]])
-    expect(paintedText).toEqual(['订单001'])
+    const label = feature.composeFooterNumber()
+    expect(paintedText).toEqual([label])
     await feature.exportPng()
-    expect(downloads).toEqual(['订单001_heart_144x213mm_600dpi.png'])
+    expect(downloads).toEqual([`${label}_heart_144x213mm_600dpi.png`])
   })
 
   it('rotates landscape PNG clockwise without scaling and redraws the footer upright at the bottom', async () => {
     const { env, feature, snapshots, geometry, paintedText, metadata } = setup()
     env.widthInput.value = '210'
     env.heightInput.value = '144'
+    const label = feature.composeFooterNumber()
     await feature.exportPng()
     expect(snapshots).toEqual([[3402, 5031]])
     expect(geometry).toEqual([
       ['translate', 3402, 0], ['rotate', Math.PI / 2], ['drawImage', env.canvas, 0, 0],
       ['clearRect', 0, 4961, 3402, 70], ['rect', 0, 4961, 3402, 70],
     ])
-    expect(paintedText).toEqual(['订单001'])
+    expect(paintedText).toEqual([label])
     expect(metadata).toEqual([600])
     expect([env.canvas.width, env.canvas.height]).toEqual([1600, 1082])
   })
@@ -93,11 +96,12 @@ describe('heart-star numbering and DPI export', () => {
     env.heightInput.value = '144'
     const watermarks: number[][] = []
     env.HeartStarWatermark.preview = (source: any) => { watermarks.push([source.width, source.height]); return source }
+    const label = feature.composeFooterNumber()
     await feature.exportPng(true)
     expect(watermarks).toEqual([[1082, 1600]])
     expect(snapshots).toEqual([[1082, 1600]])
     expect(geometry).toContainEqual(['clearRect', 0, 1578, 1082, 22])
-    expect(downloads[0]).toBe('订单001_heart_144x213mm_600dpi_水印预览.png')
+    expect(downloads[0]).toBe(`${label}_heart_144x213mm_600dpi_水印预览.png`)
     expect(env.footerText.value).toBe('订单001')
   })
 
@@ -146,6 +150,24 @@ describe('heart-star numbering and DPI export', () => {
     expect(env.footerText.value).toBe('订单001')
   })
 
+  it('composes the prefix, date and sheet counts into the printed number and filename', async () => {
+    const { env, feature, paintedText, downloads } = setup()
+    env.footerPrefix.value = 'yy'
+    env.sheetTotal.value = '3'
+    env.sheetIndex.value = '2'
+    const label = feature.composeFooterNumber()
+    expect(label).toBe(`yy-${feature.localDateLabel()}-订单001 共3张·第2张`)
+    feature.drawFooter(feature.outputConfig())
+    expect(paintedText).toEqual([label])
+    await feature.exportPng()
+    expect(downloads[0]).toBe(`${label}_heart_144x213mm_600dpi.png`)
+    // Sheet info prints only when both counts are valid; unknown prefixes fall back to ch.
+    env.footerText.value = '订单003'
+    env.footerPrefix.value = 'zz'
+    env.sheetIndex.value = ''
+    expect(feature.composeFooterNumber()).toBe(`ch-${feature.localDateLabel()}-订单003`)
+  })
+
   it('rejects an empty or whitespace-only number before starting a formal export', async () => {
     const { env, feature, downloads, messages } = setup()
     env.footerText.value = '  '
@@ -157,8 +179,9 @@ describe('heart-star numbering and DPI export', () => {
 
   it('clears the number after a successful formal download and requires a new one for the next order', async () => {
     const { env, feature, downloads } = setup()
+    const label = feature.composeFooterNumber()
     await feature.exportPng()
-    expect(downloads).toEqual(['订单001_heart_144x213mm_600dpi.png'])
+    expect(downloads).toEqual([`${label}_heart_144x213mm_600dpi.png`])
     expect(env.footerText.value).toBe('')
     await feature.exportPng()
     expect(downloads).toHaveLength(1)

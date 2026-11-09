@@ -33,7 +33,7 @@ function setup() {
     drawFooter() {}, updatePhotoControls() {}, download: {}, watermarkDownload: {}, states: [],
     exportBusy: false, photoUploadBusy: false, replacementBusy: false,
     photoFrameRequest: 0, requestAnimationFrame(callback: () => void) { scheduled.push(callback); return scheduled.length },
-    cancelAnimationFrame() {}, numberingEnabled: { checked: true }, footerText: { value: 'test', focus() {} }, customBusy: false, customDirty: false,
+    cancelAnimationFrame() {}, numberingEnabled: { checked: true }, footerText: { value: 'test', focus() {} }, composeFooterNumber: () => 'test', customBusy: false, customDirty: false,
     hasSlotPhotos: () => false, addDpiMetadata: async (blob: Blob, dpi: number) => { snapshots.push(dpi); return blob },
     URL: { createObjectURL: () => 'blob:test', revokeObjectURL() {} }, setTimeout() {}, say() {},
     currentSlots: () => env.templates.test.slots, slotFrame: (i: number) => env.templates.test.slots[i], slotPhoto: () => null,

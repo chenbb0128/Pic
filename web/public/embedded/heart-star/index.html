@@ -29,9 +29,14 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 .footer-text-row{display:flex;align-items:center;gap:8px}
 .footer-text-row input{min-width:0;flex:1;height:38px;border:1px solid var(--line);border-radius:8px;padding:0 10px;color:var(--ink);background:#fff;font-size:14px}
 .footer-text-row input:focus{outline:2px solid var(--pink);outline-offset:1px}
+.footer-text-row select{flex:none;height:38px;border:1px solid var(--line);border-radius:8px;padding:0 4px;color:var(--ink);background:#fff;font-size:13px}
+.footer-text-row select:focus{outline:2px solid var(--pink);outline-offset:1px}
+.footer-text-row .sheet-field{display:flex;align-items:center;gap:4px;flex:none;font-size:12px;color:var(--ink);white-space:nowrap}
+.footer-text-row input[type="number"]{flex:none;width:52px;padding:0 4px;text-align:center;font-size:13px}
+.footer-text-row input:disabled,.footer-text-row select:disabled{opacity:.4}
 .footer-filename{display:block;margin-top:7px;overflow-wrap:anywhere;user-select:text;line-height:1.5}
 .preview-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;flex:none;margin-bottom:6px}.preview-toolbar>.preview-numbering{flex:0 1 480px;min-width:0;margin:0}.preview-toolbar>.preview-tools{display:contents}.preview>.footer-filename{flex:none;margin:0 0 10px;font-size:11px}@media(max-width:500px){.preview>.footer-filename{display:none}}
-.preview-numbering{display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:6px 12px;flex:none;margin-bottom:12px}.preview-numbering>.label{margin:0;white-space:nowrap}.preview-numbering>.check{align-items:center;white-space:nowrap}.preview-numbering .footer-text-row{min-width:0;width:100%;max-width:320px}.preview-numbering .footer-filename{grid-column:1/-1;margin:0;font-size:11px}@media(max-width:500px){.preview-numbering{grid-template-columns:auto 1fr;gap:6px 10px;margin-bottom:8px}.preview-numbering .footer-text-row{grid-column:1/-1}.preview-numbering .footer-filename{display:none}}
+.preview-numbering{display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:6px 12px;flex:none;margin-bottom:12px}.preview-numbering>.label{margin:0;white-space:nowrap}.preview-numbering>.check{align-items:center;white-space:nowrap}.preview-numbering .footer-text-row{min-width:0;width:100%;max-width:470px}.preview-numbering .footer-filename{grid-column:1/-1;margin:0;font-size:11px}@media(max-width:500px){.preview-numbering{grid-template-columns:auto 1fr;gap:6px 10px;margin-bottom:8px}.preview-numbering .footer-text-row{grid-column:1/-1}.preview-numbering .footer-filename{display:none}}
 .size-summary{display:grid;gap:9px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line);font-size:12px;line-height:1.5}
 .size-summary>div{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.25fr);align-items:start;gap:8px}
 .size-summary-label{color:var(--muted)}
@@ -153,7 +158,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
  <div class="editor-toolbar-row">
  <div class="preview-head"><strong id="previewTitle">♡ 爱心星星排版</strong><span id="dimensions">正在载入模板…</span></div>
  <div class="preview-toolbar">
- <div class="preview-numbering"><label class="label" for="footerText" title="导出统一放底部 · 另加 3 mm（横版编辑时在右侧）">排版编号</label><label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label><div class="footer-text-row"><input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号，正式下载后清空" aria-label="本次排版编号" required><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div>
+ <div class="preview-numbering"><label class="label" for="footerText" title="导出统一放底部 · 另加 3 mm（横版编辑时在右侧）">排版编号</label><label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label><div class="footer-text-row"><select id="footerPrefix" aria-label="编号前缀" title="编号前缀"><option value="ch" selected>ch</option><option value="yy">yy</option><option value="x">x</option></select><input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号，正式下载后清空" aria-label="本次排版编号" required><label class="sheet-field" title="本订单总张数">共<input id="sheetTotal" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="总张数">张</label><label class="sheet-field" title="当前是第几张">第<input id="sheetIndex" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="当前张数">张</label><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div>
  <div class="preview-tools"><button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button><select class="preview-zoom" id="previewZoom" aria-label="预览缩放比例"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select></div>
  </div>
  <div class="editor-toolbar-actions" hidden><button type="button" class="btn" data-editor-action="shortcuts" aria-haspopup="dialog">快捷键指南</button></div>
@@ -416,27 +421,31 @@ function finishPhotoDrag(event){if(!photoDrag||(event&&event.pointerId!==photoDr
 photoScale.addEventListener('input',()=>setPhotoScale(photoScale.value));photoScaleNumber.addEventListener('change',()=>setPhotoScale(photoScaleNumber.value));photoScaleNumber.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();setPhotoScale(photoScaleNumber.value);photoScaleNumber.blur()}});photoOffsetX.addEventListener('input',()=>setPhotoOffset('x',photoOffsetX.value));photoOffsetY.addEventListener('input',()=>setPhotoOffset('y',photoOffsetY.value));document.getElementById('resetPhoto').addEventListener('click',resetSelectedPhoto);document.querySelectorAll('[data-photo-move]').forEach(button=>button.addEventListener('click',()=>{const [x,y]=button.dataset.photoMove.split(',').map(Number),step=Number(document.getElementById('photoMoveStep').value);if(x)setPhotoOffset('x',x*step,true);if(y)setPhotoOffset('y',y*step,true)}));photoDragMode.addEventListener('change',()=>{finishPhotoDrag();ignorePhotoClick=false;updatePhotoControls()});canvas.addEventListener('pointerdown',startPhotoDrag);canvas.addEventListener('pointermove',movePhotoDrag);canvas.addEventListener('pointerup',finishPhotoDrag);canvas.addEventListener('pointercancel',finishPhotoDrag);canvas.addEventListener('lostpointercapture',finishPhotoDrag);
 function say(t,error=false){const s=document.getElementById('status');s.textContent=t;s.className='status'+(error?' error':'')}
 function currentSlots(){return templates[sel.value].slots}
-const footerHeightMm=3,footerText=document.getElementById('footerText'),numberingEnabled=document.getElementById('numberingEnabled');
+const footerHeightMm=3,footerText=document.getElementById('footerText'),numberingEnabled=document.getElementById('numberingEnabled'),footerPrefix=document.getElementById('footerPrefix'),sheetTotal=document.getElementById('sheetTotal'),sheetIndex=document.getElementById('sheetIndex');
 function localDateLabel(){const date=new Date();return String(date.getFullYear())+String(date.getMonth()+1).padStart(2,'0')+String(date.getDate()).padStart(2,'0')}
-function pngFilename(name=sel.value,label=numberingEnabled.checked?footerText.value:'',d=outputConfig()){
+function normalizeSheetCount(value){const n=Math.floor(Number(value));return Number.isFinite(n)&&n>=1?Math.min(999,n):''}
+function composeFooterNumber(){const text=footerText.value;if(!text.trim())return'';const prefix=['ch','yy','x'].includes(footerPrefix.value)?footerPrefix.value:'ch',total=normalizeSheetCount(sheetTotal.value),index=normalizeSheetCount(sheetIndex.value);return`${prefix}-${localDateLabel()}-${text}${total===''||index===''?'':` 共${total}张·第${index}张`}`}
+function pngFilename(name=sel.value,label=numberingEnabled.checked?composeFooterNumber():'',d=outputConfig()){
  d=portraitConfig(d);
  const cleaned=label.trim().replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g,'_'),encoder=new TextEncoder(),dimensions=d?`_${Number(d.totalW.toFixed(3))}x${Number(d.totalH.toFixed(3))}mm_${d.dpi}dpi`:'',suffix=`_${name.replace(/\.png$/i,'')}${dimensions}.png`,limit=Math.min(180,240-encoder.encode(suffix).length);let safe='',bytes=0;
  for(const char of cleaned){const size=encoder.encode(char).length;if(bytes+size>limit)break;safe+=char;bytes+=size}
  safe=safe.replace(/[. ]+$/g,'')||localDateLabel();return `${safe}${suffix}`;
 }
 function drawFooter(d,paint=ctx){
- const text=footerText.value;if(!numberingEnabled.checked||!(d.footerPxW||d.footerPxH)||!text)return;const right=d.footerSide==='right',padding=d.dpi/25.4,maxWidth=Math.max(1,(right?d.pxH:d.pxW)-2*padding);let size=d.dpi/25.4*1.8;
+ const text=composeFooterNumber();if(!numberingEnabled.checked||!(d.footerPxW||d.footerPxH)||!text)return;const right=d.footerSide==='right',padding=d.dpi/25.4,maxWidth=Math.max(1,(right?d.pxH:d.pxW)-2*padding);let size=d.dpi/25.4*1.8;
  paint.save();paint.beginPath();if(right)paint.rect(d.contentPxW,0,d.footerPxW,d.pxH);else paint.rect(0,d.contentPxH,d.pxW,d.footerPxH);paint.clip();if(right){paint.translate(d.contentPxW+d.footerPxW/2,0);paint.rotate(Math.PI/2)}paint.fillStyle='#28252d';paint.textAlign='left';paint.textBaseline='middle';paint.direction='ltr';paint.font=`400 ${size}px "PingFang SC","Microsoft YaHei",sans-serif`;
  const measured=paint.measureText(text).width;if(measured>maxWidth){size*=maxWidth/measured;paint.font=`400 ${size}px "PingFang SC","Microsoft YaHei",sans-serif`}
  paint.fillText(text,padding,right?0:d.contentPxH+d.footerPxH/2);paint.restore();
 }
 async function copyFooterLabel(){
- const text=footerText.value;if(!text.trim()){footerText.focus();say('请先输入编号。',true);return}
+ const text=composeFooterNumber();if(!text.trim()){footerText.focus();say('请先输入编号。',true);return}
  try{if(!navigator.clipboard?.writeText)throw new Error('clipboard unavailable');await navigator.clipboard.writeText(text);say('编号已复制。')}
  catch{footerText.focus();footerText.select();try{if(!document.execCommand('copy'))throw new Error('copy unavailable');say('编号已复制。')}catch{say('已选中编号，请手动复制。')}}
 }
 footerText.value='';footerText.addEventListener('input',()=>{document.getElementById('exportFilename').textContent=pngFilename();draw()});
-numberingEnabled.addEventListener('change',()=>{footerText.disabled=!numberingEnabled.checked;footerText.required=numberingEnabled.checked;document.getElementById('copyFooterText').disabled=!numberingEnabled.checked;draw()});
+for(const control of [footerPrefix,sheetTotal,sheetIndex])control.addEventListener('input',()=>{document.getElementById('exportFilename').textContent=pngFilename();draw()});
+for(const control of [sheetTotal,sheetIndex])control.addEventListener('change',()=>{control.value=normalizeSheetCount(control.value)});
+numberingEnabled.addEventListener('change',()=>{const enabled=numberingEnabled.checked;footerText.disabled=!enabled;footerText.required=enabled;footerPrefix.disabled=!enabled;sheetTotal.disabled=!enabled;sheetIndex.disabled=!enabled;document.getElementById('copyFooterText').disabled=!enabled;draw()});
 document.getElementById('copyFooterText').addEventListener('click',copyFooterLabel);
 function outputConfig(){const w=Number(widthInput.value),h=Number(heightInput.value),dpi=Number(dpiInput.value);if(!Number.isFinite(w)||!Number.isFinite(h)||w<20||h<20||w>1000||h>1000||![150,300,500,600].includes(dpi))return null;const footer=numberingEnabled.checked?footerHeightMm:0,footerSide=w>h?'right':'bottom',totalW=w+(footerSide==='right'?footer:0),totalH=h+(footerSide==='bottom'?footer:0),contentPxW=Math.round(w/25.4*dpi),contentPxH=Math.round(h/25.4*dpi),pxW=Math.round(totalW/25.4*dpi),pxH=Math.round(totalH/25.4*dpi);return{w,h,dpi,totalW,totalH,footerSide,pxW,contentPxW,contentPxH,pxH,footerPxW:pxW-contentPxW,footerPxH:pxH-contentPxH}}
 function renderConfig(fullResolution=false){const d=outputConfig();if(!d||fullResolution)return d;const ratio=Math.min(1,1600/Math.max(d.pxW,d.pxH)),pxW=Math.max(2,Math.round(d.pxW*ratio)),pxH=Math.max(2,Math.round(d.pxH*ratio)),contentPxW=d.footerPxW?Math.max(1,Math.min(pxW-1,Math.round(d.contentPxW*ratio))):pxW,contentPxH=d.footerPxH?Math.max(1,Math.min(pxH-1,Math.round(d.contentPxH*ratio))):pxH;return{...d,dpi:d.dpi*ratio,pxW,pxH,contentPxW,contentPxH,footerPxW:pxW-contentPxW,footerPxH:pxH-contentPxH}}
@@ -532,19 +541,19 @@ async function exportPng(withWatermark=false){
  if(motifEditor.busy()){say('请等待图案更换完成。',true);return}
  if(slotBackgrounds.busy()){say('请等待背景图片读取完成。',true);return}
  if(templates[sel.value].custom&&(customBusy||customDirty)){say('请先完成自定义排版。',true);return}
- const proof=withWatermark===true,name=sel.value,numbered=numberingEnabled.checked,label=numbered?footerText.value:'';
+ const proof=withWatermark===true,name=sel.value,numbered=numberingEnabled.checked,label=numbered?composeFooterNumber():'';
  if(!proof&&numbered&&!label.trim()){footerText.focus();say('请先输入本次编号后再下载。',true);return}
  exportBusy=true;draw();
  try{
   if(templates[name].text){clearTimeout(fontInputTimer);const copySnapshot=JSON.stringify([states,copyStyle,copyLayout]);await prepareCopyFont();if(copySnapshot!==JSON.stringify([states,copyStyle,copyLayout]))throw new Error('文案或字体已更新，请重新下载。')}
-  if(numberingEnabled.checked!==numbered||(numbered&&footerText.value!==label))throw new Error('编号设置已更新，请重新下载。');
+  if(numberingEnabled.checked!==numbered||(numbered&&composeFooterNumber()!==label))throw new Error('编号设置已更新，请重新下载。');
   if(sel.value!==name)throw new Error('模板已切换，请重新下载。');
   if(templates[name].text&&!states.some(st=>st.text&&st.text.trim()))throw new Error('请输入文案。');
   const d=outputConfig();if(!d)throw new Error('请输入有效的宽度、高度和打印精度。');
   draw(false,!proof);const portrait=portraitCanvas(canvas,renderConfig(!proof)),output=proof?HeartStarWatermark.preview(portrait):portrait;
   const blob=await new Promise(resolve=>output.toBlob(resolve,'image/png'));if(!blob)throw new Error('PNG 生成失败');
   const finalBlob=proof?blob:await addDpiMetadata(blob,d.dpi);
-  if(numberingEnabled.checked!==numbered||(numbered&&footerText.value!==label))throw new Error('编号设置已更新，请重新下载。');
+  if(numberingEnabled.checked!==numbered||(numbered&&composeFooterNumber()!==label))throw new Error('编号设置已更新，请重新下载。');
   const a=document.createElement('a');a.href=URL.createObjectURL(finalBlob);a.download=pngFilename(name,label,d).replace(/\.png$/i,proof?'_水印预览.png':'.png');a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
   if(!proof&&numbered)footerText.value='';
   say(proof?`带水印预览图已导出：${a.download}，${output.width} × ${output.height} px（白底预览，非印刷文件）。`:`PNG 已导出：${a.download}，${output.width} × ${output.height} px，${d.dpi} DPI。${numbered?'编号输入框已清空。':''}`)
@@ -781,7 +790,7 @@ function getCloudSnapshot(){
  const cfg=templates[sel.value];
  return HeartStarCloudEditor.capture({name:sel.value,cfg,base,states,photoAt:slotPhoto,catalog:motifEditor.catalog(),customRows,
   copy:cfg.text?copySnapshot():null,settings:{width:Number(widthInput.value),height:Number(heightInput.value),dpi:Number(dpiInput.value),
-   clip:false,numberingEnabled:numberingEnabled.checked,footerText:footerText.value,
+   clip:false,numberingEnabled:numberingEnabled.checked,footerText:footerText.value,footerPrefix:footerPrefix.value,sheetTotal:sheetTotal.value,sheetIndex:sheetIndex.value,
    watermarkEnabled:document.getElementById('watermarkEnabled').checked,watermarkText:document.getElementById('watermarkText').value,
    watermarkOpacity:Number(document.getElementById('watermarkOpacity').value),selected:[...selectedSlots]}});
 }
@@ -805,7 +814,8 @@ function applyCloudSnapshot(data){
  sel.value=key;if(!cfg.text){base=source;if(!cfg.custom)templateSources[key]=source.src}
  widthInput.value=String(settings.width);heightInput.value=String(settings.height);dpiInput.value=String(settings.dpi);
  numberingEnabled.checked=!!settings.numberingEnabled;footerText.value=settings.footerText||'';
- footerText.disabled=!numberingEnabled.checked;footerText.required=numberingEnabled.checked;document.getElementById('copyFooterText').disabled=!numberingEnabled.checked;
+ footerPrefix.value=['ch','yy','x'].includes(settings.footerPrefix)?settings.footerPrefix:'ch';{const total=normalizeSheetCount(settings.sheetTotal),index=normalizeSheetCount(settings.sheetIndex);sheetTotal.value=total===''?1:total;sheetIndex.value=index===''?1:index}
+ footerText.disabled=!numberingEnabled.checked;footerText.required=numberingEnabled.checked;footerPrefix.disabled=!numberingEnabled.checked;sheetTotal.disabled=!numberingEnabled.checked;sheetIndex.disabled=!numberingEnabled.checked;document.getElementById('copyFooterText').disabled=!numberingEnabled.checked;
  for(const [id,value] of [['watermarkEnabled',settings.watermarkEnabled],['watermarkText',settings.watermarkText],['watermarkOpacity',settings.watermarkOpacity]]){
   const control=document.getElementById(id);if(value!==undefined){if(control.type==='checkbox')control.checked=value;else control.value=String(value);control.dispatchEvent(new Event('input'))}
  }
