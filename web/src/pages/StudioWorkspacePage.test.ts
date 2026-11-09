@@ -3,6 +3,7 @@ import { renderToString } from 'vue/server-renderer'
 import { describe, expect, it, vi } from 'vitest'
 import Workspace from './StudioWorkspacePage.vue'
 import * as studioImage from '../services/studioImage'
+import { composeFooterText } from '../services/studioNumbering'
 
 // Exercise the actual page handlers without rendering a browser canvas.
 const renderer = createRenderer<object, object>({
@@ -24,6 +25,13 @@ describe('overflow artboards', () => {
     const html = await renderToString(app)
     expect(html.match(/<input[^>]*aria-label="启用底部编号"[^>]*>/)?.[0]).toContain('checked')
     expect(html).toMatch(/<input[^>]*aria-label="底部编号"[^>]*required/)
+    for (const label of ['总张数', '当前张数']) {
+      const field = html.match(new RegExp(`<input[^>]*aria-label="${label}"[^>]*>`))?.[0]
+      expect(field).toContain('type="number"')
+      expect(field).toContain('value="1"')
+    }
+    expect(html).toMatch(/<select[^>]*aria-label="编号前缀"[^>]*>/)
+    for (const prefix of ['ch', 'yy', 'x']) expect(html).toMatch(new RegExp(`<option value="${prefix}"[^>]*>${prefix}</option>`))
     expect(html).toContain('复制编号')
     expect(html).toContain('296 × 210 mm')
     expect(html).toContain('右侧另加 3mm')
@@ -55,11 +63,11 @@ describe('overflow artboards', () => {
       state.dpi = 1000
       await nextTick()
       await state.copyFooterNumber()
-      expect(written).toEqual(['订单A'])
+      expect(written).toEqual([composeFooterText('ch', '订单A')])
       expect(state.footerText).toBe('订单A')
       await state.generate()
       expect(output).toEqual([[11654, 8268]])
-      expect(context.fillText.mock.lastCall![0]).toBe('订单A')
+      expect(context.fillText.mock.lastCall![0]).toBe(composeFooterText('ch', '订单A'))
       await state.copyOrDownload()
       expect(state.footerText).toBe('订单A')
       expect(state.orderCopied).toBe(true)
@@ -111,6 +119,104 @@ describe('overflow artboards', () => {
     } finally { cleanup() }
   })
 
+  it('底部编号：前缀 ch/yy/x 和当天日期组合进编号并随画板独立保存，非法值回退 ch', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    try {
+      state.assets = [asset('one', 5)]
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerPrefix = 'yy'
+      state.footerText = '0125'
+      await state.copyFooterNumber()
+      expect(written).toEqual([composeFooterText('yy', '0125')])
+      expect(written[0]).toMatch(/^yy-\d{8}-0125$/)
+      state.footerPrefix = 'x'
+      await state.copyFooterNumber()
+      expect(written).toEqual([composeFooterText('yy', '0125'), composeFooterText('x', '0125')])
+      state.footerPrefix = 'bad' as unknown as 'ch'
+      await state.copyFooterNumber()
+      expect(written).toEqual([composeFooterText('yy', '0125'), composeFooterText('x', '0125'), composeFooterText('ch', '0125')])
+      state.footerPrefix = 'x'
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.footerText).toBe('')
+      state.footerPrefix = 'ch'
+      state.footerText = '0126'
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.footerPrefix).toBe('x')
+      expect(state.footerText).toBe('0125')
+      state.selectBoard(1)
+      await nextTick()
+      expect(state.footerPrefix).toBe('ch')
+      expect(state.footerText).toBe('0126')
+    } finally { cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('底部编号：总张数和当前张数拼进编号，排剩余画板自动递增当前张', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    const context = footerContext()
+    const canvas = { width: 1080, height: 1110, getContext: () => context,
+      getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 111 }) }
+    vi.stubGlobal('document', { createElement: () => ({ width: 0, height: 0, getContext: () => context }) })
+    try {
+      state.assets = [asset('one', 5)]
+      state.resetLayout()
+      state.numberingEnabled = true
+      state.footerText = '0125'
+      state.sheetTotal = 2
+      state.sheetIndex = 1
+      state.watermarkEnabled = false
+      state.preview = canvas
+      await nextTick()
+      state.renderPreview()
+      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '0125', { total: 2, index: 1 }),
+        expect.any(Number), expect.any(Number))
+      await state.copyFooterNumber()
+      expect(written).toEqual([composeFooterText('ch', '0125', { total: 2, index: 1 })])
+      expect(written[0]).toMatch(/^ch-\d{8}-0125 共2张·第1张$/)
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.footerText).toBe('')
+      expect(state.sheetTotal).toBe(2)
+      expect(state.sheetIndex).toBe(2)
+      state.footerText = '0125'
+      await state.copyFooterNumber()
+      expect(written[1]).toMatch(/^ch-\d{8}-0125 共2张·第2张$/)
+      state.selectBoard(0)
+      await nextTick()
+      expect(state.sheetIndex).toBe(1)
+      expect(state.sheetTotal).toBe(2)
+      expect(state.footerText).toBe('0125')
+    } finally { state.preview = null; cleanup(); vi.unstubAllGlobals() }
+  })
+
+  it('底部编号：张数默认共1张第1张，排剩余自动递增并补足总张数', async () => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const written: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (text: string) => { written.push(text) } } })
+    try {
+      // Restore the fresh-page defaults the fixture cleared.
+      state.sheetTotal = 1
+      state.sheetIndex = 1
+      state.numberingEnabled = true
+      state.footerText = '0125'
+      await state.copyFooterNumber()
+      expect(written[0]).toMatch(/^ch-\d{8}-0125 共1张·第1张$/)
+      state.assets = [asset('one', 5)]
+      state.resetLayout()
+      state.createRemainingBoard()
+      await nextTick()
+      expect(state.footerText).toBe('')
+      expect(state.sheetTotal).toBe(2)
+      expect(state.sheetIndex).toBe(2)
+    } finally { cleanup(); vi.unstubAllGlobals() }
+  })
+
   it('底部编号：主预览、总览、弹窗和坐标使用完整高度，编号区域不参与框选', async () => {
     const { state, asset, cleanup } = mountWorkspace()
     const context = footerContext()
@@ -128,15 +234,15 @@ describe('overflow artboards', () => {
       state.preview = canvas
       await nextTick()
       state.renderPreview()
-      expect(context.fillText).toHaveBeenLastCalledWith('订单A', 10, 1095)
+      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '订单A'), 10, 1095)
       expect(context.drawImage).toHaveBeenLastCalledWith(state.assets[0].image, -100, -100, 200, 200)
       const thumbnail = { width: 0, height: 0, getContext: () => context }
       state.setOverviewCanvas(0, thumbnail)
       expect([thumbnail.width, thumbnail.height]).toEqual([389, 400])
-      expect(context.fillText).toHaveBeenLastCalledWith('订单A', 389 / 108, 109.5 * 400 / 111)
+      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '订单A'), 389 / 108, 109.5 * 400 / 111)
       const proof = state.createProofCanvas()
       expect([proof.width, proof.height]).toEqual([1557, 1600])
-      expect(context.fillText).toHaveBeenLastCalledWith('订单A', 1557 / 108, 109.5 * 1600 / 111)
+      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '订单A'), 1557 / 108, 109.5 * 1600 / 111)
       expect(state.pointMm({ clientX: 10, clientY: 100 }, canvas)).toEqual({ xMm: 10, yMm: 100 })
       state.onPointerDown({ button: 0, clientX: 10, clientY: 110, pointerId: 1, preventDefault() {} })
       expect(state.boxSelection).toBeNull()
@@ -265,7 +371,7 @@ describe('overflow artboards', () => {
       await nextTick()
       download.mockImplementationOnce(() => {}).mockImplementationOnce(() => { throw new Error('下载失败') })
       await state.exportAllBoards()
-      expect(output).toEqual([{ width: 1080, height: 1110, text: '订单A' }, { width: 540, height: 555, text: '订单B' }])
+      expect(output).toEqual([{ width: 1080, height: 1110, text: composeFooterText('ch', '订单A') }, { width: 540, height: 555, text: composeFooterText('ch', '订单B') }])
       expect(state.boards[0].footerText).toBe('')
       expect(state.footerText).toBe('订单B')
       expect(state.status).toContain('1/2')
@@ -1223,6 +1329,9 @@ describe('overflow artboards', () => {
     const vm = app.mount({})
     const state = (vm.$ as unknown as { setupState: Record<string, any> }).setupState
     state.numberingEnabled = false
+    // Fresh boards default to 共1张·第1张; most fixtures opt out to keep footers minimal.
+    state.sheetTotal = ''
+    state.sheetIndex = ''
     state.useContours = false
     state.preset = 'custom'
     state.customWidth = 108

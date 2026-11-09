@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { drawStudioFooter, numberedPaper } from './studioNumbering'
+import { composeFooterText, drawStudioFooter, normalizeFooterPrefix, normalizeSheetCount, numberedPaper } from './studioNumbering'
 
 describe('底部编号绘制', () => {
   it('adds 3mm on the right of landscape paper without changing the content paper', () => {
@@ -26,6 +26,32 @@ describe('底部编号绘制', () => {
     expect(context.font).toContain('12.78px')
     expect(context.resetTransform).not.toHaveBeenCalled()
     expect(context.restore).toHaveBeenCalledOnce()
+  })
+
+  it('composes the ch/yy/x prefix, Shanghai date and optional sheet counts, falling back to ch', () => {
+    const day = new Date('2026-11-09T04:30:00Z')
+    expect(composeFooterText('ch', '0125', undefined, day)).toBe('ch-20261109-0125')
+    expect(composeFooterText('yy', '订单A', undefined, day)).toBe('yy-20261109-订单A')
+    expect(composeFooterText('x', '0125', { total: 3, index: 1 }, day)).toBe('x-20261109-0125 共3张·第1张')
+    expect(composeFooterText(undefined, '0125', { total: 3, index: 1 }, day)).toBe('ch-20261109-0125 共3张·第1张')
+    expect(composeFooterText('bad', '0125', undefined, day)).toBe('ch-20261109-0125')
+    expect(composeFooterText('yy', '', { total: 3, index: 1 }, day)).toBe('')
+    // Sheet counts only print when both are valid 1–999 integers.
+    expect(composeFooterText('ch', '0125', { total: 3 }, day)).toBe('ch-20261109-0125')
+    expect(composeFooterText('ch', '0125', { total: 0, index: 1 }, day)).toBe('ch-20261109-0125')
+    expect(composeFooterText('ch', '0125', { total: 2.7, index: 1 }, day)).toBe('ch-20261109-0125 共2张·第1张')
+    // Late UTC evening still belongs to the next Shanghai day.
+    expect(composeFooterText('ch', '0125', undefined, new Date('2026-11-09T18:00:00Z'))).toBe('ch-20261110-0125')
+    expect(composeFooterText('ch', '0125')).toMatch(/^ch-\d{8}-0125( 共\d+张·第\d+张)?$/)
+    expect(normalizeFooterPrefix('yy')).toBe('yy')
+    expect(normalizeFooterPrefix('nope')).toBe('ch')
+    expect(normalizeFooterPrefix(undefined)).toBe('ch')
+    expect(normalizeSheetCount('7')).toBe(7)
+    expect(normalizeSheetCount(2.7)).toBe(2)
+    expect(normalizeSheetCount(1000)).toBe(999)
+    expect(normalizeSheetCount(0)).toBe('')
+    expect(normalizeSheetCount('abc')).toBe('')
+    expect(normalizeSheetCount(undefined)).toBe('')
   })
 
   it('clips text to the extra footer and shrinks long labels without resetting tile transforms', () => {

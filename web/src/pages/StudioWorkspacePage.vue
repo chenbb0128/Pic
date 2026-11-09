@@ -15,7 +15,7 @@ import { canvasPng, downloadBlob, drawImageContained, loadLocalImage, tiledCanva
 import { formatBytes } from '../services/pngExporter'
 import { imageContour } from '../services/imageContour'
 import { drawPreviewWatermark } from '../services/studioWatermark'
-import { drawStudioFooter, numberedPaper } from '../services/studioNumbering'
+import { composeFooterText, DEFAULT_FOOTER_PREFIX, drawStudioFooter, FOOTER_PREFIXES, normalizeFooterPrefix, normalizeSheetCount, numberedPaper, type FooterPrefix } from '../services/studioNumbering'
 
 interface StudioAsset extends LocalImage {
   widthMm: number
@@ -72,7 +72,10 @@ interface StudioBoard {
   customHeight: number
   dpi: number
   numberingEnabled: boolean
+  footerPrefix: FooterPrefix
   footerText: string
+  sheetTotal: number | ''
+  sheetIndex: number | ''
   mode: LayoutMode
   grouping: SmartGrouping
   gapXmm: number
@@ -90,7 +93,10 @@ interface StudioBoard {
 interface BoardScene {
   paper: PaperSize
   numberingEnabled: boolean
+  footerPrefix: FooterPrefix
   footerText: string
+  sheetTotal: number | ''
+  sheetIndex: number | ''
   assets: StudioAsset[]
   placements: Placement[]
 }
@@ -101,7 +107,11 @@ const customWidth = ref(293)
 const customHeight = ref(210)
 const dpi = ref(600)
 const numberingEnabled = ref(true)
+const footerPrefix = ref<FooterPrefix>(DEFAULT_FOOTER_PREFIX)
+const footerPrefixOptions = FOOTER_PREFIXES.map((value) => ({ value, label: value }))
 const footerText = ref('')
+const sheetTotal = ref<number | ''>(1)
+const sheetIndex = ref<number | ''>(1)
 let clearingDownloadedFooter = false
 const mode = ref<LayoutMode>('custom')
 const grouping = ref<SmartGrouping>('free')
@@ -267,7 +277,8 @@ function snapshotBoard(): StudioBoard {
   return {
     preset: preset.value, orientation: orientation.value,
     customWidth: customWidth.value, customHeight: customHeight.value, dpi: dpi.value,
-    numberingEnabled: numberingEnabled.value, footerText: footerText.value,
+    numberingEnabled: numberingEnabled.value, footerPrefix: footerPrefix.value, footerText: footerText.value,
+    sheetTotal: sheetTotal.value, sheetIndex: sheetIndex.value,
     mode: mode.value, grouping: grouping.value, gapXmm: gapXmm.value, gapYmm: gapYmm.value,
     autoGap: autoGap.value, useContours: useContours.value,
     assets: assets.value.map((asset) => ({ ...asset })),
@@ -286,7 +297,10 @@ const overviewBoards = computed(() => boards.value.flatMap((saved, index) => {
     preset: board.preset,
     dpi: board.dpi,
     numberingEnabled: board.numberingEnabled,
+    footerPrefix: normalizeFooterPrefix(board.footerPrefix),
     footerText: board.footerText,
+    sheetTotal: normalizeSheetCount(board.sheetTotal),
+    sheetIndex: normalizeSheetCount(board.sheetIndex),
     paper: orientedPaperSize(board.preset, board.orientation, board.customWidth, board.customHeight),
     assets: board.placedAssets,
     placements: [...flattenGroups(board.groups), ...board.manualPlacements],
@@ -333,7 +347,10 @@ function selectBoard(index: number): void {
     customHeight.value = saved.customHeight
     dpi.value = saved.dpi
     numberingEnabled.value = saved.numberingEnabled
+    footerPrefix.value = normalizeFooterPrefix(saved.footerPrefix)
     footerText.value = saved.footerText
+    sheetTotal.value = normalizeSheetCount(saved.sheetTotal)
+    sheetIndex.value = normalizeSheetCount(saved.sheetIndex)
     mode.value = saved.mode
     grouping.value = saved.grouping
     gapXmm.value = normalizePatternGap(saved.gapXmm)
@@ -370,8 +387,13 @@ function createRemainingBoard(): void {
   assets.value = assets.value.map((asset) => moved.has(asset.id)
     ? { ...asset, quantity: Math.max(0, asset.quantity - moved.get(asset.id)!) } : asset)
   layoutPending.value = pending
+  // The next sheet continues the sequence; the total never falls below the new sheet number.
+  const nextIndex = sheetIndex.value === '' ? '' : Math.min(999, sheetIndex.value + 1)
+  const nextTotal = typeof sheetTotal.value === 'number' && typeof nextIndex === 'number'
+    ? Math.max(sheetTotal.value, nextIndex) : sheetTotal.value
   const nextBoard: StudioBoard = { ...snapshotBoard(), assets: remaining, groups: [], manualPlacements: nextLayout.placements,
-    placedAssets: remaining.map(asset => ({ ...asset })), layoutPending: false, layoutOverflow: nextLayout.overflow, footerText: '' }
+    placedAssets: remaining.map(asset => ({ ...asset })), layoutPending: false, layoutOverflow: nextLayout.overflow, footerText: '',
+    sheetIndex: nextIndex, sheetTotal: nextTotal }
   boards.value = [...boards.value, nextBoard]
   selectBoard(boards.value.length - 1)
   controlsOpen.value = false
@@ -713,7 +735,8 @@ function mergeAllGroups(): void {
 
 function render(context: CanvasRenderingContext2D, width: number, height: number, guides: boolean,
   scene: BoardScene = { paper: paper.value, assets: placedAssets.value, placements: placements.value,
-    numberingEnabled: numberingEnabled.value, footerText: footerText.value }): void {
+    numberingEnabled: numberingEnabled.value, footerPrefix: footerPrefix.value, footerText: footerText.value,
+    sheetTotal: sheetTotal.value, sheetIndex: sheetIndex.value }): void {
   context.clearRect(0, 0, width, height)
   const output = numberedPaper(scene.paper, scene.numberingEnabled)
   const scaleX = width / output.widthMm
@@ -764,7 +787,8 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
     context.strokeRect(x, y, w, h)
     context.restore()
   }
-  drawStudioFooter(context, width, height, scene.paper, scene.numberingEnabled, scene.footerText)
+  drawStudioFooter(context, width, height, scene.paper, scene.numberingEnabled,
+    composeFooterText(scene.footerPrefix, scene.footerText, { total: scene.sheetTotal, index: scene.sheetIndex }))
 }
 
 function renderPreview(): void {
@@ -859,7 +883,7 @@ watch([paper, gapXmm, gapYmm, autoGap, mode, grouping, useContours, assets], () 
 watch([assets, exporting, uploading, controlsOpen], cancelAssetDrag, { flush: 'sync' })
 watch([paper, placements, placedAssets], () => { void nextTick(renderPreview); clearGenerated() })
 watch(dpi, clearGenerated)
-watch([numberingEnabled, footerText], () => {
+watch([numberingEnabled, footerPrefix, footerText, sheetTotal, sheetIndex], () => {
   if (!clearingDownloadedFooter) clearGenerated()
   void nextTick(renderPreview)
 }, { flush: 'sync' })
@@ -1239,7 +1263,21 @@ function clearDownloadedNumber(index: number, text: string): void {
 
 async function copyFooterNumber(): Promise<void> {
   if (!footerText.value.trim()) { status.value = '请先输入底部编号。'; return }
-  status.value = await copyText(footerText.value) ? '底部编号已复制。' : '复制失败，请选中编号后手动复制。'
+  const full = composeFooterText(footerPrefix.value, footerText.value, { total: sheetTotal.value, index: sheetIndex.value })
+  status.value = await copyText(full) ? '底部编号已复制。' : '复制失败，请选中编号后手动复制。'
+}
+
+function onSheetCountChange(kind: 'total' | 'index', event: Event): void {
+  const input = event.target as HTMLInputElement
+  const value = normalizeSheetCount(input.valueAsNumber)
+  if (kind === 'total') sheetTotal.value = value
+  else sheetIndex.value = value
+  // Sync the displayed input too when normalization leaves the ref unchanged.
+  input.value = value === '' ? '' : String(value)
+  const total = kind === 'total' ? value : sheetTotal.value
+  const index = kind === 'index' ? value : sheetIndex.value
+  if (typeof total === 'number' && typeof index === 'number' && index > total)
+    status.value = `当前第 ${index} 张大于总共 ${total} 张，请核对张数。`
 }
 </script>
 
@@ -1277,7 +1315,7 @@ async function copyFooterNumber(): Promise<void> {
         <summary class="studio-section-summary">预览水印</summary>
         <label class="flex min-h-7 items-center gap-2 text-xs text-[#c8bbff]"><input v-model="watermarkEnabled" type="checkbox" />启用预览水印</label>
         <input v-model="watermarkText" type="text" maxlength="40" aria-label="水印文字" :disabled="!watermarkEnabled" placeholder="仅供确认 · 禁止盗用" class="studio-input mt-1 w-full disabled:opacity-40" />
-        <label class="mt-2 flex items-center gap-2 text-xs text-[#a9bbe1]">浓度<input v-model.number="watermarkOpacity" type="range" min="8" max="50" step="1" aria-label="水印浓度" :disabled="!watermarkEnabled" class="min-w-0 flex-1 accent-violet-400 disabled:opacity-40" /><output class="w-8 text-right">{{ watermarkOpacity }}%</output></label>
+        <label class="mt-2 flex items-center gap-2 text-xs text-[#a9bbe1]">浓度<input v-model.number="watermarkOpacity" type="range" min="8" max="50" step="1" aria-label="水印浓度" :disabled="!watermarkEnabled" class="min-w-0 flex-1 accent-[#a78bfa] disabled:opacity-40" /><output class="w-8 text-right">{{ watermarkOpacity }}%</output></label>
         <p class="mt-2 text-[11px] text-[#a9bbe1]">普通 PNG 导出不带水印。</p>
       </details>
       <details open class="studio-settings-section border-b border-[#31415f] px-4 py-2">
@@ -1388,9 +1426,14 @@ async function copyFooterNumber(): Promise<void> {
         <button type="button" class="studio-toolbar" :class="{ 'is-primary': overviewOpen }" :aria-pressed="overviewOpen" :disabled="exporting || uploading" @click="overviewOpen = !overviewOpen">{{ overviewOpen ? '返回画板' : '画板总览' }}</button>
         <div class="studio-numbering-controls" role="group" aria-label="当前画板编号" aria-describedby="studio-numbering-help">
           <label class="flex shrink-0 items-center gap-1 text-xs text-slate-600" title="启用当前画板编号"><input v-model="numberingEnabled" type="checkbox" aria-label="启用底部编号" :disabled="exporting || uploading" class="accent-violet-600" />编号</label>
+          <select v-model="footerPrefix" aria-label="编号前缀" class="studio-numbering-select" :disabled="!numberingEnabled || exporting || uploading">
+            <option v-for="option in footerPrefixOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
           <input v-model="footerText" type="text" aria-label="底部编号" :required="numberingEnabled" maxlength="200" placeholder="输入订单号或客户编号" class="studio-numbering-input" :disabled="!numberingEnabled || exporting || uploading" />
+          <label class="flex shrink-0 items-center gap-1 text-xs text-slate-600" title="本订单总张数">共<input type="number" min="1" max="999" step="1" inputmode="numeric" aria-label="总张数" :value="sheetTotal" :disabled="!numberingEnabled || exporting || uploading" class="studio-numbering-count" @change="onSheetCountChange('total', $event)" />张</label>
+          <label class="flex shrink-0 items-center gap-1 text-xs text-slate-600" title="当前画板是第几张">第<input type="number" min="1" max="999" step="1" inputmode="numeric" aria-label="当前张数" :value="sheetIndex" :disabled="!numberingEnabled || exporting || uploading" class="studio-numbering-count" @change="onSheetCountChange('index', $event)" />张</label>
           <button type="button" class="studio-toolbar shrink-0" :disabled="!numberingEnabled || !footerText.trim() || exporting || uploading" @click="copyFooterNumber">复制编号</button>
-          <span id="studio-numbering-help" class="sr-only">{{ numberingEnabled ? `${paper.widthMm > paper.heightMm ? '右侧' : '底部'}另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加编号区。' }}各画板独立设置。</span>
+          <span id="studio-numbering-help" class="sr-only">{{ numberingEnabled ? `${paper.widthMm > paper.heightMm ? '右侧' : '底部'}另加 3mm，输出 ${outputPaper.widthMm} × ${outputPaper.heightMm} mm；不缩放原图案。可选填总张数和当前张数，会附在编号后。正式下载后清空编号。` : '未启用：按原纸张尺寸输出，不增加编号区。' }}各画板独立设置。</span>
         </div>
         <div class="ml-auto flex flex-wrap items-center gap-1.5">
           <button type="button" class="studio-toolbar is-primary" :disabled="!assets.length || exporting || uploading" @click="resetLayout">✦ 排版</button>
@@ -1423,7 +1466,7 @@ async function copyFooterNumber(): Promise<void> {
             </div>
             <div class="mt-3 flex items-center justify-between gap-2 text-sm"><strong>画板 {{ board.index + 1 }}</strong><span v-if="board.index === activeBoardIndex" class="text-xs text-violet-600">当前画板</span></div>
             <p class="mt-1 text-xs text-slate-500">{{ board.preset }} · {{ board.paper.widthMm }} × {{ board.paper.heightMm }} mm · 已排 {{ board.placements.length }} 个</p>
-            <p v-if="board.numberingEnabled" class="mt-1 break-all text-xs text-violet-600">编号：{{ board.footerText || '待填写' }} · {{ board.paper.widthMm > board.paper.heightMm ? '右侧' : '底部' }}另加 3mm</p>
+            <p v-if="board.numberingEnabled" class="mt-1 break-all text-xs text-violet-600">编号：{{ composeFooterText(board.footerPrefix, board.footerText, { total: board.sheetTotal, index: board.sheetIndex }) || '待填写' }} · {{ board.paper.widthMm > board.paper.heightMm ? '右侧' : '底部' }}另加 3mm</p>
           </button>
         </div>
       </section>
@@ -1510,9 +1553,13 @@ async function copyFooterNumber(): Promise<void> {
 .studio-workspace { background: #f1f5f9; }
 .studio-workspace.is-expanded { position: fixed; inset: 0; z-index: 50; width: 100%; height: 100dvh; padding: 12px; }
 .studio-workspace-toolbar { display: flex; flex: 0 0 auto; min-width: 0; flex-wrap: wrap; align-items: center; gap: 6px; }
-.studio-numbering-controls { display: flex; flex: 1 1 250px; min-width: 0; max-width: 300px; align-items: center; gap: 6px; }
-.studio-numbering-input { flex: 1 1 auto; width: 0; min-width: 100px; height: 32px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; padding: 0 6px; color: #334155; font-size: 12px; }
+.studio-numbering-controls { display: flex; flex: 1 1 250px; min-width: 0; max-width: 460px; align-items: center; gap: 6px; }
+.studio-numbering-input { flex: 1 1 auto; width: 0; min-width: 160px; height: 36px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; padding: 0 8px; color: #334155; font-size: 14px; }
 .studio-numbering-input:disabled { opacity: .4; }
+.studio-numbering-select { flex: 0 0 auto; height: 36px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; padding: 0 4px; color: #334155; font-size: 13px; }
+.studio-numbering-select:disabled { opacity: .4; }
+.studio-numbering-count { width: 46px; height: 36px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; padding: 0 4px; color: #334155; font-size: 13px; text-align: center; }
+.studio-numbering-count:disabled { opacity: .4; }
 .studio-more { position: relative; }
 .studio-more > summary { cursor: pointer; list-style: none; }
 .studio-more > summary::-webkit-details-marker { display: none; }

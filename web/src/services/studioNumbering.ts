@@ -1,5 +1,32 @@
 import type { PaperSize } from '../domain/studio/layout'
 
+export const FOOTER_PREFIXES = ['ch', 'yy', 'x'] as const
+export type FooterPrefix = (typeof FOOTER_PREFIXES)[number]
+export const DEFAULT_FOOTER_PREFIX: FooterPrefix = 'ch'
+
+export function normalizeFooterPrefix(value: unknown): FooterPrefix {
+  return FOOTER_PREFIXES.includes(value as FooterPrefix) ? value as FooterPrefix : DEFAULT_FOOTER_PREFIX
+}
+
+// Sheet counts are optional 1–999 integers; anything else reads as "not filled".
+export function normalizeSheetCount(value: unknown): number | '' {
+  const num = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(num) || num < 1) return ''
+  return Math.min(999, Math.floor(num))
+}
+
+// The prefix, today's date and optional sheet counts are part of the printed number,
+// e.g. ch-20261109-0125 共3张·第1张; blank numbers stay blank.
+export function composeFooterText(prefix: string | undefined, text: string,
+  sheets?: { total?: number | ''; index?: number | '' }, date: Date = new Date()): string {
+  if (!text) return ''
+  const stamp = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date).replace(/-/g, '')
+  const base = `${normalizeFooterPrefix(prefix)}-${stamp}-${text}`
+  const total = normalizeSheetCount(sheets?.total)
+  const index = normalizeSheetCount(sheets?.index)
+  return total === '' || index === '' ? base : `${base} 共${total}张·第${index}张`
+}
+
 export function numberedPaper(paper: PaperSize, enabled: boolean): PaperSize {
   const right = paper.widthMm > paper.heightMm
   return { widthMm: paper.widthMm + (enabled && right ? 3 : 0), heightMm: paper.heightMm + (enabled && !right ? 3 : 0) }
