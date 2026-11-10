@@ -11,7 +11,7 @@
     const repeat = (id, count) => Array(count).fill(id);
     const rows = [
       [...repeat('ime-rose', 3), ...repeat('ime-teal', 3)],
-      [...repeat('ime-mint', 3), ...repeat('ive-spiral', 3)],
+      [...repeat('ime-mint', 3), ...repeat('ime-spiral', 3)],
       [...repeat('rose-heart-small', 3), 'rose-dot-star-small', 'teal-dot-star-small', ...repeat('teal-heart-small', 3)],
       [...repeat('pink-stripe-heart-small', 3), 'mint-star-small', 'white-mint-star-small', ...repeat('mint-plaid-heart-small', 3)],
       [...repeat('purple-white-polka-heart-small', 4), ...repeat('polka-heart-small', 4)],
@@ -32,7 +32,7 @@
   function buildPortrait(assets, arrange) {
     const cfg = buildRows([
       ['ime-pink-stripe', 'ime-red-polka', 'ime-brown-polka', 'ime-rose', 'ime-rose', 'ime-brown-stripe'],
-      ['ime-rose', 'ime-pink-dot', 'ime-light-blue-stripe', 'ive-rose', 'ive-rose', 'ive-rose'],
+      ['ime-rose', 'ime-pink-dot', 'ime-light-blue-stripe', 'ime-rose', 'ime-rose', 'ime-rose'],
       ['pink-dot-heart-small', 'brown-polka-heart-small', 'brown-stripe-heart-small', 'rose-dot-star-small', 'rose-dot-star-small', 'rose-heart-small', 'rose-heart-small', 'pink-dot-heart-small'],
       ['pink-dot-heart-small', 'light-blue-stripe-heart-small', 'light-blue-stripe-heart-small', 'teal-dot-star-small', 'teal-dot-star-small', 'pink-stripe-heart-small', 'red-polka-heart-small', 'rose-heart-small'],
       ['rose-heart-small', 'rose-heart-small', 'teal-heart-small', 'teal-heart-small', 'polka-heart-small', 'rose-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small'],
