@@ -423,6 +423,7 @@ function say(t,error=false){const s=document.getElementById('status');s.textCont
 function currentSlots(){return templates[sel.value].slots}
 const footerHeightMm=3,footerText=document.getElementById('footerText'),numberingEnabled=document.getElementById('numberingEnabled'),footerPrefix=document.getElementById('footerPrefix'),sheetTotal=document.getElementById('sheetTotal'),sheetIndex=document.getElementById('sheetIndex');
 function localDateLabel(){const date=new Date();return String(date.getFullYear())+String(date.getMonth()+1).padStart(2,'0')+String(date.getDate()).padStart(2,'0')}
+const FOOTER_INSTRUCTION='使用说明：单个剪裁使用，具体操作可咨询';
 function normalizeSheetCount(value){const n=Math.floor(Number(value));return Number.isFinite(n)&&n>=1?Math.min(999,n):''}
 function composeFooterNumber(){const text=footerText.value;if(!text.trim())return'';const prefix=['ch','yy','x'].includes(footerPrefix.value)?footerPrefix.value:'ch',total=normalizeSheetCount(sheetTotal.value),index=normalizeSheetCount(sheetIndex.value);return`${prefix}-${localDateLabel()}-${text}${total===''||index===''?'':` 共${total}张·第${index}张`}`}
 function pngFilename(name=sel.value,label=numberingEnabled.checked?composeFooterNumber():'',d=outputConfig()){
@@ -432,10 +433,15 @@ function pngFilename(name=sel.value,label=numberingEnabled.checked?composeFooter
  safe=safe.replace(/[. ]+$/g,'')||localDateLabel();return `${safe}${suffix}`;
 }
 function drawFooter(d,paint=ctx){
- const text=composeFooterNumber();if(!numberingEnabled.checked||!(d.footerPxW||d.footerPxH)||!text)return;const right=d.footerSide==='right',padding=d.dpi/25.4,maxWidth=Math.max(1,(right?d.pxH:d.pxW)-2*padding);let size=d.dpi/25.4*1.8;
- paint.save();paint.beginPath();if(right)paint.rect(d.contentPxW,0,d.footerPxW,d.pxH);else paint.rect(0,d.contentPxH,d.pxW,d.footerPxH);paint.clip();if(right){paint.translate(d.contentPxW+d.footerPxW/2,0);paint.rotate(Math.PI/2)}paint.fillStyle='#28252d';paint.textAlign='left';paint.textBaseline='middle';paint.direction='ltr';paint.font=`400 ${size}px "PingFang SC","Microsoft YaHei",sans-serif`;
- const measured=paint.measureText(text).width;if(measured>maxWidth){size*=maxWidth/measured;paint.font=`400 ${size}px "PingFang SC","Microsoft YaHei",sans-serif`}
- paint.fillText(text,padding,right?0:d.contentPxH+d.footerPxH/2);paint.restore();
+ const text=composeFooterNumber();if(!numberingEnabled.checked||!(d.footerPxW||d.footerPxH)||!text)return;const right=d.footerSide==='right',padding=d.dpi/25.4,stripLength=right?d.pxH:d.pxW,maxWidth=Math.max(1,stripLength-2*padding),baseline=right?0:d.contentPxH+d.footerPxH/2;const family='"PingFang SC","Microsoft YaHei",sans-serif',baseSize=d.dpi/25.4*1.8;let size=baseSize;
+ paint.save();paint.beginPath();if(right)paint.rect(d.contentPxW,0,d.footerPxW,d.pxH);else paint.rect(0,d.contentPxH,d.pxW,d.footerPxH);paint.clip();if(right){paint.translate(d.contentPxW+d.footerPxW/2,0);paint.rotate(Math.PI/2)}paint.fillStyle='#28252d';paint.textAlign='left';paint.textBaseline='middle';paint.direction='ltr';paint.font=`400 ${size}px ${family}`;
+ const measured=paint.measureText(text).width;if(measured>maxWidth){size*=maxWidth/measured;paint.font=`400 ${size}px ${family}`}
+ paint.fillText(text,padding,baseline);
+ let noteSize=baseSize;paint.font=`700 ${noteSize}px ${family}`;let noteWidth=paint.measureText(FOOTER_INSTRUCTION).width;
+ const numberEnd=padding+Math.min(measured,maxWidth),stripEnd=stripLength-padding;let left=Math.max(stripLength/2-noteWidth/2,numberEnd+padding);const available=stripEnd-left;
+ if(available<=0){paint.font=`400 ${size}px ${family}`}
+ else{if(noteWidth>available){noteSize*=available/noteWidth;paint.font=`700 ${noteSize}px ${family}`;noteWidth=paint.measureText(FOOTER_INSTRUCTION).width;left=stripEnd-noteWidth}paint.textAlign='center';paint.fillText(FOOTER_INSTRUCTION,left+noteWidth/2,baseline)}
+ paint.restore();
 }
 async function copyFooterLabel(){
  const text=composeFooterNumber();if(!text.trim()){footerText.focus();say('请先输入编号。',true);return}

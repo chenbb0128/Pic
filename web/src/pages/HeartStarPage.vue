@@ -9,7 +9,7 @@ const unlocked = ref(false)
 const checkingAccess = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=footer-prefix-sheets-1`
+const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=footer-note-1`
 const editorFrame = ref<HTMLIFrameElement | null>(null)
 const toolbarReady = ref(false)
 function onEditorMessage(event: MessageEvent): void {

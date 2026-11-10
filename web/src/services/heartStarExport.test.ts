@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import toolHtml from '../../public/embedded/heart-star/index.html?raw'
 
+const NOTE = '使用说明：单个剪裁使用，具体操作可咨询'
+
 function section(start: string, end: string) {
   const index = toolHtml.indexOf(start)
   return toolHtml.slice(index, toolHtml.indexOf(end, index))
@@ -58,7 +60,7 @@ describe('heart-star numbering and DPI export', () => {
     feature.drawFooter(d)
     expect(geometry).toEqual([['rect', 4961, 0, 70, 3402], ['translate', 4996, 0], ['rotate', Math.PI / 2]])
     const label = feature.composeFooterNumber()
-    expect(paintedText).toEqual([label])
+    expect(paintedText).toEqual([label, NOTE])
     await feature.exportPng()
     expect(downloads).toEqual([`${label}_heart_144x213mm_600dpi.png`])
   })
@@ -74,7 +76,7 @@ describe('heart-star numbering and DPI export', () => {
       ['translate', 3402, 0], ['rotate', Math.PI / 2], ['drawImage', env.canvas, 0, 0],
       ['clearRect', 0, 4961, 3402, 70], ['rect', 0, 4961, 3402, 70],
     ])
-    expect(paintedText).toEqual([label])
+    expect(paintedText).toEqual([label, NOTE])
     expect(metadata).toEqual([600])
     expect([env.canvas.width, env.canvas.height]).toEqual([1600, 1082])
   })
@@ -158,7 +160,7 @@ describe('heart-star numbering and DPI export', () => {
     const label = feature.composeFooterNumber()
     expect(label).toBe(`yy-${feature.localDateLabel()}-订单001 共3张·第2张`)
     feature.drawFooter(feature.outputConfig())
-    expect(paintedText).toEqual([label])
+    expect(paintedText).toEqual([label, NOTE])
     await feature.exportPng()
     expect(downloads[0]).toBe(`${label}_heart_144x213mm_600dpi.png`)
     // Sheet info prints only when both counts are valid; unknown prefixes fall back to ch.

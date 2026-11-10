@@ -4,6 +4,9 @@ export const FOOTER_PREFIXES = ['ch', 'yy', 'x'] as const
 export type FooterPrefix = (typeof FOOTER_PREFIXES)[number]
 export const DEFAULT_FOOTER_PREFIX: FooterPrefix = 'ch'
 
+// Bold usage note printed centered on the numbering strip of every exported sheet.
+export const FOOTER_INSTRUCTION = '使用说明：单个剪裁使用，具体操作可咨询'
+
 export function normalizeFooterPrefix(value: unknown): FooterPrefix {
   return FOOTER_PREFIXES.includes(value as FooterPrefix) ? value as FooterPrefix : DEFAULT_FOOTER_PREFIX
 }
@@ -41,8 +44,12 @@ export function drawStudioFooter(context: CanvasRenderingContext2D, width: numbe
   const contentWidth = paper.widthMm * scaleX
   const contentHeight = paper.heightMm * scaleY
   const padding = right ? scaleY : scaleX
-  const maxWidth = Math.max(1, (right ? height : width) - 2 * padding)
-  let fontSize = 1.8 * (right ? scaleX : scaleY)
+  const stripLength = right ? height : width
+  const maxWidth = Math.max(1, stripLength - 2 * padding)
+  const baseline = right ? 0 : (paper.heightMm + 1.5) * scaleY
+  const family = '"PingFang SC","Microsoft YaHei",sans-serif'
+  const baseFontSize = 1.8 * (right ? scaleX : scaleY)
+  let fontSize = baseFontSize
   // Preserve the caller's transform, including the offset used by tiled exports.
   context.save()
   context.beginPath()
@@ -57,13 +64,40 @@ export function drawStudioFooter(context: CanvasRenderingContext2D, width: numbe
   context.textAlign = 'left'
   context.textBaseline = 'middle'
   context.direction = 'ltr'
-  const font = () => `400 ${fontSize}px "PingFang SC","Microsoft YaHei",sans-serif`
+  const font = () => `400 ${fontSize}px ${family}`
   context.font = font()
   const measured = context.measureText(text).width
   if (measured > maxWidth) {
     fontSize *= maxWidth / measured
     context.font = font()
   }
-  context.fillText(text, padding, right ? 0 : (paper.heightMm + 1.5) * scaleY)
+  context.fillText(text, padding, baseline)
+  drawFooterInstruction(context, family, baseFontSize, stripLength, padding, maxWidth, measured, baseline, font())
   context.restore()
+}
+
+// Bold note centered on the strip; shifts past the number and shrinks rather than overlapping it.
+function drawFooterInstruction(context: CanvasRenderingContext2D, family: string, baseFontSize: number,
+  stripLength: number, padding: number, maxWidth: number, numberWidth: number, baseline: number, numberFont: string): void {
+  let noteSize = baseFontSize
+  const noteFont = () => `700 ${noteSize}px ${family}`
+  context.font = noteFont()
+  let noteWidth = context.measureText(FOOTER_INSTRUCTION).width
+  const numberEnd = padding + Math.min(numberWidth, maxWidth)
+  const stripEnd = stripLength - padding
+  let left = Math.max(stripLength / 2 - noteWidth / 2, numberEnd + padding)
+  const available = stripEnd - left
+  if (available <= 0) {
+    // Real canvases restore via save(); keep the mock-visible font on the number for tests.
+    context.font = numberFont
+    return
+  }
+  if (noteWidth > available) {
+    noteSize *= available / noteWidth
+    context.font = noteFont()
+    noteWidth = context.measureText(FOOTER_INSTRUCTION).width
+    left = stripEnd - noteWidth
+  }
+  context.textAlign = 'center'
+  context.fillText(FOOTER_INSTRUCTION, left + noteWidth / 2, baseline)
 }

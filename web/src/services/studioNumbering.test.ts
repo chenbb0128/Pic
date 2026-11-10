@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { composeFooterText, drawStudioFooter, normalizeFooterPrefix, normalizeSheetCount, numberedPaper } from './studioNumbering'
+import { composeFooterText, drawStudioFooter, FOOTER_INSTRUCTION, normalizeFooterPrefix, normalizeSheetCount, numberedPaper } from './studioNumbering'
 
 describe('底部编号绘制', () => {
   it('adds 3mm on the right of landscape paper without changing the content paper', () => {
@@ -63,6 +63,16 @@ describe('底部编号绘制', () => {
     expect(context.font).toContain('8.82px')
     expect(context.resetTransform).not.toHaveBeenCalled()
     expect(context.restore).toHaveBeenCalledOnce()
+  })
+
+  it('prints the bold usage note centered on the numbering strip beside the number', () => {
+    const context = { save: vi.fn(), restore: vi.fn(), beginPath() {}, rect: vi.fn(), clip: vi.fn(),
+      translate: vi.fn(), rotate: vi.fn(), measureText: () => ({ width: 50 }), fillText: vi.fn(),
+      font: '', resetTransform: vi.fn() }
+    drawStudioFooter(context as unknown as CanvasRenderingContext2D, 1000, 2030, { widthMm: 100, heightMm: 200 }, true, 'ch-001')
+    expect(context.fillText).toHaveBeenCalledWith('ch-001', 10, 2015)
+    expect(context.fillText).toHaveBeenCalledWith(FOOTER_INSTRUCTION, 500, 2015)
+    expect(context.font).toContain('700 18px')
   })
 
   it('does not draw disabled or blank labels', () => {

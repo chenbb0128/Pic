@@ -67,7 +67,7 @@ describe('overflow artboards', () => {
       expect(state.footerText).toBe('订单A')
       await state.generate()
       expect(output).toEqual([[11654, 8268]])
-      expect(context.fillText.mock.lastCall![0]).toBe(composeFooterText('ch', '订单A'))
+      expect(context.fillText.mock.calls.some(call => call[0] === composeFooterText('ch', '订单A'))).toBe(true)
       await state.copyOrDownload()
       expect(state.footerText).toBe('订单A')
       expect(state.orderCopied).toBe(true)
@@ -174,7 +174,7 @@ describe('overflow artboards', () => {
       state.preview = canvas
       await nextTick()
       state.renderPreview()
-      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '0125', { total: 2, index: 1 }),
+      expect(context.fillText).toHaveBeenCalledWith(composeFooterText('ch', '0125', { total: 2, index: 1 }),
         expect.any(Number), expect.any(Number))
       await state.copyFooterNumber()
       expect(written).toEqual([composeFooterText('ch', '0125', { total: 2, index: 1 })])
@@ -234,15 +234,15 @@ describe('overflow artboards', () => {
       state.preview = canvas
       await nextTick()
       state.renderPreview()
-      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '订单A'), 10, 1095)
+      expect(context.fillText).toHaveBeenCalledWith(composeFooterText('ch', '订单A'), 10, 1095)
       expect(context.drawImage).toHaveBeenLastCalledWith(state.assets[0].image, -100, -100, 200, 200)
       const thumbnail = { width: 0, height: 0, getContext: () => context }
       state.setOverviewCanvas(0, thumbnail)
       expect([thumbnail.width, thumbnail.height]).toEqual([389, 400])
-      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '订单A'), 389 / 108, 109.5 * 400 / 111)
+      expect(context.fillText).toHaveBeenCalledWith(composeFooterText('ch', '订单A'), 389 / 108, 109.5 * 400 / 111)
       const proof = state.createProofCanvas()
       expect([proof.width, proof.height]).toEqual([1557, 1600])
-      expect(context.fillText).toHaveBeenLastCalledWith(composeFooterText('ch', '订单A'), 1557 / 108, 109.5 * 1600 / 111)
+      expect(context.fillText).toHaveBeenCalledWith(composeFooterText('ch', '订单A'), 1557 / 108, 109.5 * 1600 / 111)
       expect(state.pointMm({ clientX: 10, clientY: 100 }, canvas)).toEqual({ xMm: 10, yMm: 100 })
       state.onPointerDown({ button: 0, clientX: 10, clientY: 110, pointerId: 1, preventDefault() {} })
       expect(state.boxSelection).toBeNull()
@@ -353,7 +353,9 @@ describe('overflow artboards', () => {
     const context = footerContext()
     const output: { width: number; height: number; text: string }[] = []
     const png = vi.spyOn(studioImage, 'canvasPng').mockImplementation(async canvas => {
-      output.push({ width: canvas.width, height: canvas.height, text: context.fillText.mock.lastCall![0] })
+      // The second-to-last fillText is the number; the usage note follows it on the same strip.
+      const calls = context.fillText.mock.calls
+      output.push({ width: canvas.width, height: canvas.height, text: calls[calls.length - 2]![0] })
       return new Blob(['png'])
     })
     const download = vi.spyOn(studioImage, 'downloadBlob').mockImplementation(() => {})
