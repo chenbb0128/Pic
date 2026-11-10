@@ -182,7 +182,7 @@ describe('heart-star independent 210×144 template', () => {
     const cfg = api.build(assets, build)
     const expected = [
       ['ime-rose', 'ime-rose', 'ime-rose', 'ime-teal', 'ime-teal', 'ime-teal'],
-      ['ime-mint', 'ime-mint', 'ime-mint', 'ime-spiral', 'ime-spiral', 'ime-spiral'],
+      ['ime-mint', 'ime-mint', 'ime-mint', 'ive-spiral', 'ive-spiral', 'ive-spiral'],
       ['rose-heart-small', 'rose-heart-small', 'rose-heart-small', 'rose-dot-star-small', 'teal-dot-star-small', 'teal-heart-small', 'teal-heart-small', 'teal-heart-small'],
       ['pink-stripe-heart-small', 'pink-stripe-heart-small', 'pink-stripe-heart-small', 'mint-star-small', 'white-mint-star-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small', 'mint-plaid-heart-small'],
       ['purple-white-polka-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small', 'polka-heart-small', 'polka-heart-small', 'polka-heart-small', 'polka-heart-small'],
@@ -205,7 +205,7 @@ describe('heart-star independent 210×144 template', () => {
     expect(cfg).toMatchObject({ w: 2100, h: 1440, widthMm: 210, heightMm: 144 })
     const expected = [
       ['ime-pink-stripe', 'ime-red-polka', 'ime-brown-polka', 'ime-rose', 'ime-rose', 'ime-brown-stripe'],
-      ['ime-rose', 'ime-pink-dot', 'ime-light-blue-stripe', 'ime-rose', 'ime-rose', 'ime-rose'],
+      ['ime-rose', 'ime-pink-dot', 'ime-light-blue-stripe', 'ive-rose', 'ive-rose', 'ive-rose'],
       ['pink-dot-heart-small', 'brown-polka-heart-small', 'brown-stripe-heart-small', 'rose-dot-star-small', 'rose-dot-star-small', 'rose-heart-small', 'rose-heart-small', 'pink-dot-heart-small'],
       ['pink-dot-heart-small', 'light-blue-stripe-heart-small', 'light-blue-stripe-heart-small', 'teal-dot-star-small', 'teal-dot-star-small', 'pink-stripe-heart-small', 'red-polka-heart-small', 'rose-heart-small'],
       ['rose-heart-small', 'rose-heart-small', 'teal-heart-small', 'teal-heart-small', 'polka-heart-small', 'rose-heart-small', 'purple-white-polka-heart-small', 'purple-white-polka-heart-small'],
