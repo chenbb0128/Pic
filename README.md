@@ -83,12 +83,12 @@ MySQL 集成测试需设置 `PIC_TEST_DSN` 指向专用测试库（本机为 `pi
 
 ## 发布与备份边界
 
-生产发布配置统一由同级 `zdzq-deployment-config` 仓库管理，应用仓库只维护 Dockerfile、代码、迁移和开发配置。现有根 Dockerfile／NAS 流程仍只发布静态前端，不会自动上线 Go API；本轮新增的后端发布配置位于部署仓库 `projects/pic/candidate/backend/`，目前是**禁用候选，未修改线上**。不要直接使用开发 Compose 发布，也不要把整个候选目录覆盖到生产。
+生产发布配置统一由同级 `zdzq-deployment-config` 仓库管理，应用仓库只维护 Dockerfile、代码、迁移和开发配置。根 Dockerfile／NAS 流程发布静态前端；**Go API 已上线**（2026-11 验证：`https://pic-api.pdurl.cn/ready` 返回就绪，`https://pic.pdurl.cn/api/v1/` 同源转发生效），部署仓库中原"禁用候选"的后端发布配置已启用。不要直接使用开发 Compose 发布，也不要把整个候选目录覆盖到生产。
 
 后端接入沿用 NAS → Jenkins → ACR → 腾讯云 `124.220.53.160`，不是把生产服务放在 NAS。前端仍为 `https://pic.pdurl.cn`；浏览器使用同源 `/api/v1/` 转发到 API，独立后端域名为 `https://pic-api.pdurl.cn`，不需要给前端硬编码跨域地址或放宽 Cookie。
 
 API 和迁移使用 `server/deployments/Dockerfile` 分别以 `TARGET=api` / `TARGET=migrate` 构建，注入 `APP_SHA`、`CONFIG_SHA` 标签，独立 Jenkins 入口发布双版本 tag 并锁定 ACR digest。distroless API 可运行 `/app/app -healthcheck` 检查本容器固定8080端口的 `/ready`，无需安装 curl 或 shell。原前端发布入口和四参数 SSH 协议保持不变。
 
-生产复用共享 MySQL 的独立 Pic 库、API/迁移独立账号，不新增项目级数据库容器。私有图片目录为 `/opt/apps/pic/data/assets`，由非 root API 用户65532写入，原图、模板图和结果图都保留；不经 Nginx 静态开放。密钥、共享账号、数据库 DSN 仅在受保护生产文件／Credentials，不能提交 Git。上线前仍需生产拓扑复核、账号与备份恢复演练、独立 SSH、DNS/证书和明确生产变更授权。
+生产复用共享 MySQL 的独立 Pic 库、API/迁移独立账号，不新增项目级数据库容器。私有图片目录为 `/opt/apps/pic/data/assets`，由非 root API 用户65532写入，原图、模板图和结果图都保留；不经 Nginx 静态开放。密钥、共享账号、数据库 DSN 仅在受保护生产文件／Credentials，不能提交 Git。变更生产前仍需复核拓扑、账号与备份恢复演练、独立 SSH、DNS/证书和明确的生产变更授权。
 
 上线前需要同时备份 MySQL 和原始图片目录／卷，并验证成对恢复；只备份数据库不能恢复照片。候选发布脚本在迁移前暂停本项目 API 做数据库／图片配对备份，失败尝试恢复上一版 API 与环境，不自动执行 Goose down。第一期不含定时／异地备份、历史版本、编辑审计、实时协作，也尚未接入自动排版页面。

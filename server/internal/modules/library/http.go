@@ -30,17 +30,25 @@ type Options struct {
 	Username, Password, SessionKey, Origin, DataDir string
 	ToolPassword                                    string
 	SecureCookie                                    bool
+	PicWishAPIKey                                   string
+	PicWishURL                                      string
+	PicWishDailyLimit                               int
 }
 type attempts struct {
 	Count int
 	Until time.Time
 }
 type handler struct {
-	store      Store
-	opts       Options
-	credential string
-	mu         sync.Mutex
-	attempts   map[string]attempts
+	store       Store
+	opts        Options
+	credential  string
+	mu          sync.Mutex
+	attempts    map[string]attempts
+	picWish     *http.Client
+	cutoutSem   chan struct{}
+	cutoutMu    sync.Mutex
+	cutoutDay   string
+	cutoutCount int
 }
 
 func NewHandler(store Store, opts Options) (http.Handler, error) {
@@ -54,6 +62,14 @@ func NewHandler(store Store, opts Options) (http.Handler, error) {
 	if opts.ToolPassword != "" && len(opts.ToolPassword) < 8 {
 		return nil, fmt.Errorf("PIC_TOOL_PASSWORD must be at least 8 bytes")
 	}
+	if opts.PicWishURL == "" {
+		opts.PicWishURL = picWishDefaultURL
+	}
+	if parsed, parseErr := url.Parse(opts.PicWishURL); parseErr != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+		return nil, fmt.Errorf("PIC_PICWISH_API_URL must be an absolute http(s) origin")
+	} else {
+		opts.PicWishURL = parsed.Scheme + "://" + parsed.Host
+	}
 	if err := os.MkdirAll(opts.DataDir, 0700); err != nil {
 		return nil, err
 	}
@@ -62,7 +78,8 @@ func NewHandler(store Store, opts Options) (http.Handler, error) {
 	if opts.ToolPassword != "" {
 		mac.Write([]byte("\x00" + opts.ToolPassword))
 	}
-	h := &handler{store: store, opts: opts, credential: hex.EncodeToString(mac.Sum(nil)), attempts: map[string]attempts{}}
+	h := &handler{store: store, opts: opts, credential: hex.EncodeToString(mac.Sum(nil)), attempts: map[string]attempts{},
+		picWish: &http.Client{Timeout: picWishClientTimeout}, cutoutSem: make(chan struct{}, cutoutConcurrency)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/session", h.login)
 	mux.HandleFunc("POST /api/v1/tool-session", h.toolLogin)
@@ -72,6 +89,7 @@ func NewHandler(store Store, opts Options) (http.Handler, error) {
 	mux.HandleFunc("DELETE /api/v1/session", h.logout)
 	mux.HandleFunc("POST /api/v1/assets", h.upload)
 	mux.HandleFunc("GET /api/v1/assets/{id}", h.download)
+	mux.HandleFunc("POST /api/v1/photos/cutout", h.cutout)
 	for _, collection := range []string{"projects", "templates"} {
 		kind := strings.TrimSuffix(collection, "s")
 		prefix := "/api/v1/" + collection
