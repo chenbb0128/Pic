@@ -93,7 +93,7 @@ describe('heart-star universal product images', () => {
     const body = toolHtml.slice(start, toolHtml.indexOf('function resizePreview(', start))
     const draws: any[] = [], copies: any[] = []
     const env: any = {
-      selectionBoard: () => ({ ready: true }), fontBusy: false, solidBackgroundEditor: undefined,
+      selectionBoard: () => ({ ready: true }), fontBusy: false, solidBackgroundEditor: undefined, aiCutoutEditor: undefined,
       sel: { value: '示例.png' }, templates: { '示例.png': {} }, states: [],
       canvas: { width, height }, renderConfig: () => ({ contentPxW, contentPxH }),
       draw: (...args: any[]) => draws.push(args),
