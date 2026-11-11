@@ -34,6 +34,7 @@ type cutoutUpstream struct {
 	sawKey  string
 	sawSync string
 	sawType string
+	sawCrop string
 	sawFile bool
 }
 
@@ -49,6 +50,7 @@ func newCutoutUpstream(t *testing.T) *cutoutUpstream {
 			up.mu.Lock()
 			up.sawKey = r.Header.Get("X-API-KEY")
 			up.sawSync, up.sawType = r.FormValue("sync"), r.FormValue("type")
+			up.sawCrop = r.FormValue("crop")
 			up.sawFile = len(r.MultipartForm.File["image_file"]) > 0
 			status, state := up.status, up.state
 			up.mu.Unlock()
@@ -164,8 +166,8 @@ func TestCutoutSegmentSuccessCacheAndAssetDownload(t *testing.T) {
 	if reply.Data.Width != 4 || reply.Data.Height != 3 {
 		t.Fatalf("expected result dimensions 4x3, got %dx%d", reply.Data.Width, reply.Data.Height)
 	}
-	if up.sawKey != "test-key" || up.sawSync != "1" || up.sawType != "stamp" || !up.sawFile {
-		t.Fatalf("upstream request missing key/sync/type/file: %q %q %q %v", up.sawKey, up.sawSync, up.sawType, up.sawFile)
+	if up.sawKey != "test-key" || up.sawSync != "1" || up.sawType != "person" || up.sawCrop != "1" || !up.sawFile {
+		t.Fatalf("upstream request missing key/sync/type/crop/file: %q %q %q %q %v", up.sawKey, up.sawSync, up.sawType, up.sawCrop, up.sawFile)
 	}
 	if hits := atomic.LoadInt32(&up.hits); hits != 2 { // segmentation + result download
 		t.Fatalf("expected 2 upstream hits, got %d", hits)

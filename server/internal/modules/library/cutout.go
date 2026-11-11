@@ -20,6 +20,7 @@ import (
 
 // PicWish segmentation upstream. sync=1 keeps a single round trip; the 1-hour
 // result link is downloaded immediately and re-served from our private assets.
+// type=person recognises people; crop=1 trims the result to the subject edges.
 const (
 	picWishDefaultURL     = "https://techsz.aoscdn.com"
 	picWishClientTimeout  = 90 * time.Second
@@ -172,7 +173,7 @@ func (h *handler) picWishSegment(ctx context.Context, data []byte, format string
 	if _, err = file.Write(data); err != nil {
 		return segmentResult{}, err
 	}
-	for field, value := range map[string]string{"sync": "1", "type": "stamp", "return_type": "1", "output_type": "2", "crop": "0", "format": "png"} {
+	for field, value := range map[string]string{"sync": "1", "type": "person", "return_type": "1", "output_type": "2", "crop": "1", "format": "png"} {
 		if err = writer.WriteField(field, value); err != nil {
 			return segmentResult{}, err
 		}
