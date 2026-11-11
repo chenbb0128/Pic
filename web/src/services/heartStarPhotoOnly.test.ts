@@ -179,7 +179,7 @@ describe('heart-star photo-only modes', () => {
     const states = [{ size: .62, dx: 0, dy: 0, imageScale: 1 }]
     api.apply(states, [0], { type: 'transparent' })
     let legacyClips = 0
-    const env: any = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, photoThumbnails: undefined,
+    const env: any = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, aiCutoutEditor: undefined, photoThumbnails: undefined,
       photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg }, states,
       slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false }, updateMotifControls() {},
       updateCanvasSize: () => true, canvas: { width: 100, height: 60 }, ctx: target.ctx,

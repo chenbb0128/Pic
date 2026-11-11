@@ -508,7 +508,7 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true){
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
  });
- ctx.restore();drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();photoThumbnails?.update();
+ ctx.restore();drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoThumbnails?.update();
  download.disabled=exportBusy||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
  watermarkDownload.disabled=download.disabled;
  sharedLibrary?.changed();
