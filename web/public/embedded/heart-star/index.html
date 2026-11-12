@@ -17,7 +17,10 @@ html{height:100%}
 body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
 .top{width:100%;flex:none}
 .app{width:100%;flex:1;min-height:0;align-items:stretch;margin-bottom:16px;grid-template-columns:minmax(0,1fr) 320px}
-.app>.panel{grid-row:1;grid-column:2;height:100%;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
+.app>.panel{grid-row:1;grid-column:2;height:100%;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;--panel-pad:22px}
+@media(min-width:600px) and (max-width:850px) and (max-height:500px){.app>.panel{--panel-pad:16px}}
+@media(max-width:500px){.app>.panel{--panel-pad:18px}}
+.app>.panel>.field:first-child{position:sticky;top:0;z-index:7;background:#fff;margin:calc(var(--panel-pad)*-1) calc(var(--panel-pad)*-1) 16px;padding:var(--panel-pad) var(--panel-pad) 12px;border-bottom:1px solid var(--line)}
 .app>.preview{grid-row:1;grid-column:1;height:100%;min-height:0;min-width:0;overflow:hidden}
 .app>.preview>.stage{flex:1;min-height:0;height:auto}
 .preview-head,.preview-tools,.footer-note{flex:none}
