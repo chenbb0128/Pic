@@ -263,6 +263,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./candy-motifs.js?v=candy-ime-2"></script>
 <script src="./party-motifs.js?v=party-1"></script>
 <script src="./heart-preset.js?v=party-1"></script>
+<script src="./template-link.js?v=1"></script>
 <script src="./cloud-snapshot.js?v=cloud-1"></script>
 <script src="./cloud-editor.js?v=clip-2"></script>
 <script src="./cloud-state.js?v=cloud-2"></script>
@@ -781,6 +782,7 @@ const backgroundDrag=HeartStarBackground.createDrag({canvas,mode:backgroundDragM
 document.getElementById('replaceHeartMotif').addEventListener('click',openHeartMotifPicker);
 document.getElementById('restoreHeartMotif').addEventListener('click',()=>{if(!exportBusy&&!motifEditor.busy())motifEditor.restore(motifEditor.selection())});
 HeartStarInteractions.createSections([...document.querySelectorAll('.panel > .field:not(#photoFrameField)')]);
+if(HeartStarTemplateLink.selectInitial(sel,templates,window.location.search))HeartStarPreset.selectSize(templates[sel.value],widthInput,heightInput);
 const clearSelectionButton=document.getElementById('clearSelection');
 clearSelectionButton.textContent='清空选择 (Esc)';clearSelectionButton.title='取消全部选中（Esc）';clearSelectionButton.setAttribute('aria-keyshortcuts','Escape');
 HeartStarInteractions.createShortcuts({target:document,canClear:()=>selectedSlots.size>0&&!photoDrag&&!backgroundDrag.dragging()&&selectionBoard().ready,onClear:()=>clearSelectionButton.click()});

@@ -3,13 +3,14 @@ import { inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { matchedRouteKey, onBeforeRouteLeave } from 'vue-router'
 import { hasHeartStarAccess, rememberHeartStarAccess } from '../services/heartStarAccess'
 import { canLeaveHeartStar, heartStarNeedsSave } from '../services/heartStarLeave'
+import { heartStarToolUrl } from '../services/heartStarTemplateLink'
 
 const password = ref('')
 const unlocked = ref(false)
 const checkingAccess = ref(false)
 const error = ref('')
 const loading = ref(true)
-const toolUrl = `${import.meta.env.BASE_URL}embedded/heart-star/index.html?v=ai-cutout-4`
+const toolUrl = heartStarToolUrl(import.meta.env.BASE_URL, typeof window === 'undefined' ? '' : window.location.search)
 const editorFrame = ref<HTMLIFrameElement | null>(null)
 const toolbarReady = ref(false)
 function onEditorMessage(event: MessageEvent): void {

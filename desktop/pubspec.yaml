@@ -1,0 +1,18 @@
+name: pic_order_desktop
+description: Windows 订单原图与制作模板整理工具。
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: '>=3.11.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
