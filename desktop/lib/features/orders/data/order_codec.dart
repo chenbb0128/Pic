@@ -26,6 +26,7 @@ class OrderCodec {
               if (image.filePath != null) 'filePath': image.filePath,
               'originalVerified': image.originalVerified,
               'templateIds': image.templateIds.toList()..sort(),
+              'templateQuantities': image.templateQuantities,
             },
         ],
       });
@@ -64,6 +65,13 @@ class OrderCodec {
                 .cast<String>()
                 .map(canonicalTemplateId)
                 .toSet(),
+            templateQuantities: {
+              for (final entry
+                  in ((image['templateQuantities'] as Map<String, dynamic>?) ??
+                          const <String, dynamic>{})
+                      .entries)
+                canonicalTemplateId(entry.key): entry.value as int,
+            },
           ),
         );
       }

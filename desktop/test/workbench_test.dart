@@ -110,21 +110,30 @@ void main() {
     await tester.tap(find.text('导入图片'));
     await settleIo();
     expect(find.text('制作模板'), findsOneWidget);
-    for (final label in ['缤纷糖果 · A5 竖版', '爱心＋星星混合款']) {
+    for (final label in ['A08 缤纷糖果版', 'A03 爱心+星星混合版']) {
       await tester.ensureVisible(find.widgetWithText(FilterChip, label));
       await tester.tap(find.text(label));
       await settleIo();
     }
+    final increase = find.byTooltip('增加 A03 爱心+星星混合版 份数');
+    expect(increase, findsOneWidget);
+    await tester.ensureVisible(increase);
+    await tester.tap(increase);
+    await settleIo();
+    await tester.tap(increase);
+    await settleIo();
+    await tester.tap(find.byTooltip('减少 A03 爱心+星星混合版 份数'));
+    await settleIo();
     final reopened = await tester.runAsync(
       () => repository.load(controller.current!.id),
     );
     expect(reopened!.images.single.templateIds, {'缤纷糖果.png', '模板混合.png'});
-    expect(find.textContaining('2 份制作任务'), findsOneWidget);
+    expect(find.textContaining('3 份制作任务'), findsOneWidget);
     await tester.ensureVisible(find.text('去制作'));
     await tester.tap(find.text('去制作'));
     await tester.pumpAndSettle();
     await tester.tap(
-      find.widgetWithText(PopupMenuItem<TemplateDefinition>, '缤纷糖果 · A5 竖版'),
+      find.widgetWithText(PopupMenuItem<TemplateDefinition>, 'A08 缤纷糖果版'),
     );
     await tester.pumpAndSettle();
     expect(desktop.openedTemplate, '缤纷糖果.png');
@@ -151,6 +160,29 @@ void main() {
     expect(savedBytes, sourceBytes);
     expect(await tester.runAsync(transfer.exists), isFalse);
     expect(await tester.runAsync(source.exists), isTrue);
+
+    // Deleting a photo requires confirmation and persists only the remaining one.
+    controller.selectImage(afterDrop.images.first.id);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.byTooltip('删除图片'));
+    await tester.tap(find.byTooltip('删除图片'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(controller.current!.images, hasLength(2));
+    expect(controller.current!.taskCount, 3);
+    await tester.tap(find.byTooltip('删除图片'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除'));
+    await settleIo();
+    expect(controller.current!.images.single.id, afterDrop.images.last.id);
+    expect(controller.selectedImage!.id, afterDrop.images.last.id);
+    expect(controller.current!.taskCount, 0);
+    expect(find.textContaining('1 张图片 · 0 份制作任务'), findsOneWidget);
+    final afterImageDelete = (await tester.runAsync(
+      () => repository.load(afterDrop.id),
+    ))!;
+    expect(afterImageDelete.images.single.id, afterDrop.images.last.id);
 
     // Cancel keeps the active order; confirm removes it without deleting photos.
     await tester.tap(find.byTooltip('删除订单'));

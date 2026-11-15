@@ -76,7 +76,10 @@ class OrderImageList extends StatelessWidget {
                         image.templateIds.isEmpty
                             ? '待分配'
                             : image.templateIds
-                                  .map(controller.templateName)
+                                  .map(
+                                    (id) =>
+                                        '${controller.templateName(id)} ×${image.templateQuantities[id]}',
+                                  )
                                   .join('、'),
                         textAlign: TextAlign.right,
                         maxLines: 1,

@@ -83,6 +83,95 @@ void main() {
     expect(empty.error, contains('订单'));
   });
 
+  test('同图同模板可设置多份，重开保留份数且切换其他模板不重置', () async {
+    final image = controller.selectedImage!;
+    final path = controller.imagePath(image);
+    expect(await controller.setTemplateQuantity('A03', 3), isTrue);
+    expect(await controller.setTemplate('A08', true), isTrue);
+    expect(controller.current!.taskCount, 4);
+    expect(controller.selectedImage!.templateQuantities, {
+      '模板混合.png': 3,
+      '缤纷糖果.png': 1,
+    });
+    expect(await controller.setTemplate('A08', false), isTrue);
+    expect(controller.current!.taskCount, 3);
+    expect(await controller.setTemplate('A03', true), isTrue);
+    await controller.openOrder(controller.current!.id);
+    expect(controller.selectedImage!.templateQuantities, {'模板混合.png': 3});
+    expect(controller.current!.images, hasLength(1));
+    expect(controller.imagePath(controller.selectedImage!), path);
+    await controller.importPaths([path], ImageSource.localFile);
+    expect(controller.selectedImage!.templateIds, isEmpty);
+    controller.selectImage(image.id);
+    expect(await controller.setTemplateQuantity('A03', 0), isTrue);
+    expect(controller.current!.taskCount, 0);
+    expect(controller.current!.unassignedCount, 2);
+    expect(
+      (await repository.load(controller.current!.id)).images.first.templateIds,
+      isEmpty,
+    );
+  });
+
+  test('份数保存失败或数量无效时保留原份数，可重试', () async {
+    await controller.setTemplateQuantity('A03', 2);
+    repository.failWrites = true;
+    expect(await controller.setTemplateQuantity('A03', 3), isFalse);
+    expect(controller.current!.taskCount, 2);
+    expect((await repository.load(controller.current!.id)).taskCount, 2);
+    repository.failWrites = false;
+    expect(await controller.setTemplateQuantity('A03', -1), isFalse);
+    expect(controller.current!.taskCount, 2);
+    expect(await controller.setTemplateQuantity('missing', 2), isFalse);
+    expect(controller.current!.taskCount, 2);
+    expect(await controller.setTemplateQuantity('A03', 3), isTrue);
+    expect(controller.current!.taskCount, 3);
+  });
+
+  test('删除图片同步保存关联和数量，切换相邻图片，删完保留空订单和原图', () async {
+    final orderId = controller.current!.id;
+    final first = controller.selectedImage!;
+    final firstPath = controller.imagePath(first);
+    final bytes = await File(firstPath).readAsBytes();
+    await controller.setTemplate('A03', true);
+    await controller.importPaths([firstPath], ImageSource.localFile);
+    final second = controller.selectedImage!;
+    controller.selectImage(first.id);
+
+    expect(await controller.deleteImage(first.id), isTrue);
+    expect(controller.selectedImage!.id, second.id);
+    expect(controller.current!.taskCount, 0);
+    expect(controller.current!.unassignedCount, 1);
+    expect(controller.orders.single.images.single.id, second.id);
+    expect((await repository.load(orderId)).images.single.id, second.id);
+    expect(await File(firstPath).readAsBytes(), bytes);
+
+    expect(await controller.deleteImage(second.id), isTrue);
+    expect(controller.selectedImage, isNull);
+    expect(controller.current!.id, orderId);
+    expect(controller.current!.images, isEmpty);
+    expect((await repository.load(orderId)).images, isEmpty);
+    expect(await File(second.filePath!).readAsBytes(), bytes);
+  });
+
+  test('删除图片失败或编号不存在时保留图片和模板关联，可重试', () async {
+    await controller.setTemplate('A03', true);
+    final image = controller.selectedImage!;
+    repository.failWrites = true;
+    expect(await controller.deleteImage(image.id), isFalse);
+    expect(controller.error, contains('disk full'));
+    expect(controller.selectedImage!.id, image.id);
+    expect(controller.current!.taskCount, 1);
+    expect(
+      (await repository.load(controller.current!.id)).images.single.templateIds,
+      {'模板混合.png'},
+    );
+    repository.failWrites = false;
+    expect(await controller.deleteImage('missing'), isFalse);
+    expect(controller.current!.images.single.id, image.id);
+    expect(await controller.deleteImage(image.id), isTrue);
+    expect(controller.error, isNull);
+  });
+
   test('删除保留旧版原图且不影响其他订单，失败时保持当前订单', () async {
     final currentId = controller.current!.id;
     final legacy = await repository.create('旧订单');

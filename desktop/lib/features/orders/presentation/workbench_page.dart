@@ -129,6 +129,46 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     }
   }
 
+  Future<void> _deleteImage(OrderImage image) async {
+    if (controller.busy || _choosingFiles || _settingsOpen || _confirmingDelete)
+      return;
+    final orderId = controller.current?.id;
+    setState(() => _confirmingDelete = true);
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          title: const Text('删除图片'),
+          content: Text('${image.originalName}\n\n将从当前订单移除这张图片及其模板关联，原图文件保留。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+              ),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('删除'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted || confirmed != true || controller.current?.id != orderId)
+        return;
+      final deleted = await controller.deleteImage(image.id);
+      if (mounted && deleted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('图片已删除，原图文件保留')));
+      }
+    } finally {
+      if (mounted) setState(() => _confirmingDelete = false);
+    }
+  }
+
   Future<void> _deleteOrder(OrderDocument order) async {
     if (controller.busy || _choosingFiles || _settingsOpen || _confirmingDelete)
       return;
@@ -429,6 +469,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
           child: ImageAssignmentPanel(
             controller: controller,
             desktop: widget.desktop,
+            onDelete: _deleteImage,
           ),
         ),
       ],

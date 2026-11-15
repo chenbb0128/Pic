@@ -28,7 +28,7 @@ class AppDependencies {
           root,
           imageRoot: () => storage.imageRoot,
         ),
-        templates: webTemplates,
+        templates: initialTemplates,
       ),
       desktop: WindowsDesktopGateway(
         diagnosticsDirectory: Directory('${root.path}/diagnostics'),

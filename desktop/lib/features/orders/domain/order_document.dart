@@ -33,13 +33,29 @@ class OrderDocument {
 
   int get unassignedCount =>
       images.where((image) => image.templateIds.isEmpty).length;
-  int get taskCount =>
-      images.fold(0, (count, image) => count + image.templateIds.length);
+  int get taskCount => images.fold(
+    0,
+    (count, image) =>
+        count +
+        image.templateQuantities.values.fold(
+          0,
+          (sum, quantity) => sum + quantity,
+        ),
+  );
 
   OrderDocument addImage(OrderImage image) {
     if (images.any((item) => item.id == image.id))
       throw ArgumentError('图片编号重复');
     return _withImages([...images, image]);
+  }
+
+  OrderDocument removeImage(String imageId) {
+    if (!images.any((image) => image.id == imageId))
+      throw ArgumentError('图片不存在');
+    return _withImages([
+      for (final image in images)
+        if (image.id != imageId) image,
+    ]);
   }
 
   OrderDocument assignTemplates(String imageId, Set<String> ids) {
@@ -48,6 +64,22 @@ class OrderDocument {
     return _withImages([
       for (final image in images)
         if (image.id == imageId) image.withTemplates(ids) else image,
+    ]);
+  }
+
+  OrderDocument assignTemplateQuantity(
+    String imageId,
+    String templateId,
+    int quantity,
+  ) {
+    if (!images.any((image) => image.id == imageId))
+      throw ArgumentError('图片不存在');
+    return _withImages([
+      for (final image in images)
+        if (image.id == imageId)
+          image.withTemplateQuantity(templateId, quantity)
+        else
+          image,
     ]);
   }
 

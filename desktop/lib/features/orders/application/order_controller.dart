@@ -62,6 +62,25 @@ class OrderController extends ChangeNotifier {
     }
   });
 
+  Future<bool> deleteImage(String imageId) => _run(() async {
+    final order = _current;
+    if (order == null) throw StateError('请先打开订单');
+    final index = order.images.indexWhere((image) => image.id == imageId);
+    final updated = order.removeImage(imageId);
+    // Remove only the association. Keep the original file and update the UI
+    // only after the new order snapshot is saved successfully.
+    await repository.save(updated);
+    _current = updated;
+    _orders = [updated, ..._orders.where((item) => item.id != updated.id)];
+    if (_selectedImageId == imageId) {
+      _selectedImageId = updated.images.isEmpty
+          ? null
+          : updated
+                .images[index < updated.images.length ? index : index - 1]
+                .id;
+    }
+  });
+
   void selectImage(String id) {
     if (_busy || !(_current?.images.any((image) => image.id == id) ?? false))
       return;
@@ -91,23 +110,30 @@ class OrderController extends ChangeNotifier {
     }
   });
 
-  Future<bool> setTemplate(String templateId, bool enabled) => _run(() async {
-    final image = selectedImage;
-    if (image == null || _current == null) throw StateError('请先选择图片');
-    final id = canonicalTemplateId(templateId);
-    if (!templates.any((template) => template.id == id))
-      throw ArgumentError('模板不存在');
-    final ids = image.templateIds.map(canonicalTemplateId).toSet();
-    if (enabled) {
-      ids.add(id);
-    } else {
-      ids.remove(id);
-    }
-    final updated = _current!.assignTemplates(image.id, ids);
-    await repository.save(updated);
-    _current = updated;
-    _orders = [updated, ..._orders.where((order) => order.id != updated.id)];
-  });
+  Future<bool> setTemplate(String templateId, bool enabled) =>
+      setTemplateQuantity(
+        templateId,
+        enabled
+            ? selectedImage?.templateQuantities[canonicalTemplateId(
+                    templateId,
+                  )] ??
+                  1
+            : 0,
+      );
+
+  Future<bool> setTemplateQuantity(String templateId, int quantity) => _run(
+    () async {
+      final image = selectedImage;
+      if (image == null || _current == null) throw StateError('请先选择图片');
+      final id = canonicalTemplateId(templateId);
+      if (!templates.any((template) => template.id == id))
+        throw ArgumentError('模板不存在');
+      final updated = _current!.assignTemplateQuantity(image.id, id, quantity);
+      await repository.save(updated);
+      _current = updated;
+      _orders = [updated, ..._orders.where((order) => order.id != updated.id)];
+    },
+  );
 
   String imagePath(OrderImage image) =>
       repository.imagePath(_current!.id, image);

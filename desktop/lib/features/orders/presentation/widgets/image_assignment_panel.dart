@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../../../platform/desktop_gateway.dart';
 import '../../../templates/template_definition.dart';
 import '../../application/order_controller.dart';
+import '../../domain/order_image.dart';
 import 'file_drag_source.dart';
 
 class ImageAssignmentPanel extends StatefulWidget {
@@ -12,9 +13,11 @@ class ImageAssignmentPanel extends StatefulWidget {
     super.key,
     required this.controller,
     required this.desktop,
+    required this.onDelete,
   });
   final OrderController controller;
   final DesktopGateway desktop;
+  final ValueChanged<OrderImage> onDelete;
 
   @override
   State<ImageAssignmentPanel> createState() => _ImageAssignmentPanelState();
@@ -93,6 +96,13 @@ class _ImageAssignmentPanelState extends State<ImageAssignmentPanel> {
                 icon: const Icon(Icons.file_download_outlined, size: 18),
                 label: Text(_saving ? '保存中…' : '另存为'),
               ),
+              IconButton(
+                tooltip: '删除图片',
+                icon: const Icon(Icons.delete_outline, size: 20),
+                onPressed: controller.busy || _saving
+                    ? null
+                    : () => widget.onDelete(image),
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -169,6 +179,38 @@ class _ImageAssignmentPanelState extends State<ImageAssignmentPanel> {
                 ),
             ],
           ),
+          for (final template in selectedTemplates)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
+                children: [
+                  Expanded(child: Text(template.name)),
+                  IconButton(
+                    tooltip: '减少 ${template.name} 份数',
+                    icon: const Icon(Icons.remove, size: 18),
+                    onPressed:
+                        controller.busy ||
+                            image.templateQuantities[template.id]! <= 1
+                        ? null
+                        : () => controller.setTemplateQuantity(
+                            template.id,
+                            image.templateQuantities[template.id]! - 1,
+                          ),
+                  ),
+                  Text('${image.templateQuantities[template.id]} 份'),
+                  IconButton(
+                    tooltip: '增加 ${template.name} 份数',
+                    icon: const Icon(Icons.add, size: 18),
+                    onPressed: controller.busy
+                        ? null
+                        : () => controller.setTemplateQuantity(
+                            template.id,
+                            image.templateQuantities[template.id]! + 1,
+                          ),
+                  ),
+                ],
+              ),
+            ),
           if (unknownIds.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 12),
