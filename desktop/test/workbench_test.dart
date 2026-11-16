@@ -138,6 +138,24 @@ void main() {
     await tester.pumpAndSettle();
     expect(desktop.openedTemplate, '缤纷糖果.png');
 
+    final noteField = find.byKey(
+      ValueKey('image-note-${controller.selectedImage!.id}'),
+    );
+    await tester.dragUntilVisible(
+      noteField,
+      find.byKey(const ValueKey('image-assignment-list')),
+      const Offset(0, -300),
+    );
+    await tester.enterText(noteField, '加急：客户要求蓝色模板');
+    await tester.pump(const Duration(milliseconds: 700));
+    await settleIo();
+    expect(
+      (await tester.runAsync(
+        () => repository.load(controller.current!.id),
+      ))!.images.single.note,
+      '加急：客户要求蓝色模板',
+    );
+
     // Emulate native virtual-file staging. Acknowledgement removes the transfer
     // copy; the committed original must remain readable and unassigned.
     final transfer = (await tester.runAsync(
@@ -164,7 +182,11 @@ void main() {
     // Deleting a photo requires confirmation and persists only the remaining one.
     controller.selectImage(afterDrop.images.first.id);
     await tester.pumpAndSettle();
-    await tester.ensureVisible(find.byTooltip('删除图片'));
+    await tester.dragUntilVisible(
+      find.byTooltip('删除图片'),
+      find.byKey(const ValueKey('image-assignment-list')),
+      const Offset(0, 300),
+    );
     await tester.tap(find.byTooltip('删除图片'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('取消'));

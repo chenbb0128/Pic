@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -77,6 +78,7 @@ class _ImageAssignmentPanelState extends State<ImageAssignmentPanel> {
         .toList();
     return LayoutBuilder(
       builder: (context, constraints) => ListView(
+        key: const ValueKey('image-assignment-list'),
         padding: const EdgeInsets.all(20),
         children: [
           Row(
@@ -216,8 +218,129 @@ class _ImageAssignmentPanelState extends State<ImageAssignmentPanel> {
               padding: const EdgeInsets.only(top: 12),
               child: Text('其他已选模板：${unknownIds.join('、')}'),
             ),
+          const SizedBox(height: 20),
+          _ImageNoteEditor(
+            key: ValueKey('note-${image.id}'),
+            controller: controller,
+            image: image,
+          ),
         ],
       ),
     );
   }
+}
+
+class _ImageNoteEditor extends StatefulWidget {
+  const _ImageNoteEditor({
+    super.key,
+    required this.controller,
+    required this.image,
+  });
+
+  final OrderController controller;
+  final OrderImage image;
+
+  @override
+  State<_ImageNoteEditor> createState() => _ImageNoteEditorState();
+}
+
+class _ImageNoteEditorState extends State<_ImageNoteEditor> {
+  late final TextEditingController _textController;
+  Timer? _debounce;
+  bool _dirty = false;
+  bool _saving = false;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _textController = TextEditingController(text: widget.image.note);
+  }
+
+  void _onChanged(String value) {
+    _debounce?.cancel();
+    setState(() {
+      _dirty = value != widget.image.note;
+      _failed = false;
+    });
+    if (_dirty) {
+      _debounce = Timer(const Duration(milliseconds: 600), _save);
+    }
+  }
+
+  Future<void> _save() async {
+    _debounce?.cancel();
+    if (!_dirty || _saving) return;
+    final value = _textController.text;
+    setState(() {
+      _saving = true;
+      _failed = false;
+    });
+    final saved = await widget.controller.setImageNote(widget.image.id, value);
+    if (!mounted) return;
+    final unchanged = value == _textController.text;
+    setState(() {
+      _saving = false;
+      _dirty = !saved || !unchanged;
+      _failed = !saved;
+    });
+    if (saved && !unchanged) {
+      _debounce = Timer(const Duration(milliseconds: 600), _save);
+    }
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    if (_dirty && !_saving) {
+      unawaited(
+        widget.controller.setImageNote(widget.image.id, _textController.text),
+      );
+    }
+    _textController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        children: [
+          Text('图片备注', style: Theme.of(context).textTheme.titleSmall),
+          const Spacer(),
+          if (_saving)
+            const Text('保存中…')
+          else if (_failed)
+            TextButton.icon(
+              onPressed: _save,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('保存失败，重试'),
+            )
+          else if (_dirty)
+            const Text('待保存')
+          else
+            const Text('已保存'),
+        ],
+      ),
+      const SizedBox(height: 8),
+      TextField(
+        key: ValueKey('image-note-${widget.image.id}'),
+        controller: _textController,
+        maxLength: OrderImage.maxNoteLength,
+        minLines: 2,
+        maxLines: 4,
+        textInputAction: TextInputAction.newline,
+        decoration: const InputDecoration(
+          hintText: '例如：客户要求、制作注意事项',
+          border: OutlineInputBorder(),
+        ),
+        onChanged: _onChanged,
+        onTapOutside: (_) {
+          FocusManager.instance.primaryFocus?.unfocus();
+          _save();
+        },
+      ),
+    ],
+  );
 }
