@@ -40,7 +40,7 @@ describe('strawberry template', () => {
     expect(cfg.notice).toBeUndefined()
   })
 
-  it('fits photos at the calibrated head positions instead of the artwork centers and keeps manual tuning', () => {
+  it('fits photos at the calibrated visual centers and keeps manual tuning', () => {
     const cfg = feature().build(), scope: any = {}
     // An explicit photo area must not depend on detecting transparent gutters.
     new Function('globalThis', 'document', backgroundSource)(scope, { createElement() { throw Error('unexpected template pixel scan') } })
