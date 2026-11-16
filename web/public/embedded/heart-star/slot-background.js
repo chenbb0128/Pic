@@ -251,6 +251,9 @@
   }
 
   function photoAreas(cfg, source, states) {
+    if (cfg.slots.every((slot, i) => slot.photoArea && !states[i]?.motif)) {
+      return cfg.slots.map(slot => slot.photoArea);
+    }
     const frames = states.map(state => state.motif?.frame);
     let cached = photoAreaCache.get(source);
     if (!cached || cached.cfg !== cfg || cached.slots !== cfg.slots || cached.placements !== cfg.placements || cached.photoTypes !== cfg.photoTypes ||
@@ -280,6 +283,8 @@
   }
 
   function photoFrame(cfg, source, states, index, image) {
+    const explicit = !states[index]?.motif && cfg.slots[index].photoArea;
+    if (explicit) return { x: explicit.x, y: explicit.y, w: explicit.w / .62, h: explicit.h / .62 };
     let area = photoAreas(cfg, source, states)[index];
     const cached = photoAreaCache.get(source), choices = cached.choices[index];
     if (image && choices?.length) {

@@ -167,7 +167,7 @@
     return sources.get(cfg);
   }
   function selectSize(cfg, width, height) {
-    if (cfg.preset) {
+    if (cfg.preset || (cfg.widthMm && cfg.heightMm)) {
       if (!previousSize) previousSize = [width.value, height.value];
       width.value = String(cfg.widthMm);height.value = String(cfg.heightMm);
     } else if (previousSize) {
