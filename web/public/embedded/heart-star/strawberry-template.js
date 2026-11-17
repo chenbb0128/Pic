@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const name = '草莓.png';
-  const source = './assets/strawberry-template.png?v=2';
+  const source = './assets/strawberry-template.png?v=3';
   function build() {
     // Each entry: artwork [left, top, width, height], photo [cx, cy, width, height].
     // Centers use the filled artwork silhouette, rounded to half a pixel.
@@ -60,11 +60,14 @@
         [[1423, 2138, 223, 213], [1535.5, 2256, 126, 134]],
       ],
     ];
+    // Match the per-row translations baked into the centered PNG. Keep photos
+    // and artwork together without changing their sizes or internal spacing.
+    const rowOffsets = [19, 19, 9, 2.5, 2.5, -7.5, -.5];
     const slots = [], placements = [];
     rows.forEach((entries, row) => entries.forEach(([box, photo], column) => {
-      const [x, y, w, h] = photo;
+      const [originalX, y, w, h] = photo, x = originalX + rowOffsets[row];
       slots.push({ x, y, w: w / .62, h: h / .62, type: 'rect', row, column, photoArea: { x, y, w, h } });
-      placements.push({ x: box[0], y: box[1], w: box[2], h: box[3] });
+      placements.push({ x: box[0] + rowOffsets[row], y: box[1], w: box[2], h: box[3] });
     }));
     return { w: 1748, h: 2480, widthMm: 148, heightMm: 210, slots, placements, motifSlots: [] };
   }

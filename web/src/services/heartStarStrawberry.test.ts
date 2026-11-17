@@ -59,6 +59,23 @@ describe('strawberry template', () => {
     expect(calls[0].slice(1)).toEqual([area.x + 10 - area.h / 4, area.y - 5 - area.h / 2, area.h / 2, area.h])
   })
 
+  it('centers every row across the sheet and keeps photo frames inside their artwork', () => {
+    const cfg = feature().build()
+    for (let row = 0; row < 7; row++) {
+      const ids = cfg.slots.flatMap((slot: any, index: number) => slot.row === row ? [index] : [])
+      const left = Math.min(...ids.map((i: number) => cfg.placements[i].x))
+      const right = cfg.w - Math.max(...ids.map((i: number) => cfg.placements[i].x + cfg.placements[i].w))
+      // Some source boxes include a one-pixel transparent fringe.
+      expect(Math.abs(left - right)).toBeLessThanOrEqual(1)
+      for (const i of ids) {
+        const photo = cfg.slots[i].photoArea, artwork = cfg.placements[i]
+        expect(cfg.slots[i].x).toBe(photo.x)
+        expect(photo.x - photo.w / 2).toBeGreaterThanOrEqual(artwork.x)
+        expect(photo.x + photo.w / 2).toBeLessThanOrEqual(artwork.x + artwork.w)
+      }
+    }
+  })
+
   it('selects A5 dimensions and restores previous user dimensions when leaving the new template', () => {
     const scope: any = {}, width = { value: '160' }, height = { value: '220' }
     new Function('globalThis', presetSource)(scope)
