@@ -3,6 +3,7 @@ import type { PaperSize } from '../domain/studio/layout'
 export const FOOTER_PREFIXES = ['ch', 'yy', 'x'] as const
 export type FooterPrefix = (typeof FOOTER_PREFIXES)[number]
 export const DEFAULT_FOOTER_PREFIX: FooterPrefix = 'ch'
+export type NumberingSide = 'top' | 'bottom' | 'left' | 'right'
 
 // Bold usage note printed centered on the numbering strip of every exported sheet.
 export const FOOTER_INSTRUCTION = '使用说明：单个剪裁使用，具体操作可咨询'
@@ -36,29 +37,33 @@ export function numberedPaper(paper: PaperSize, enabled: boolean): PaperSize {
 }
 
 export function drawStudioFooter(context: CanvasRenderingContext2D, width: number, height: number,
-  paper: PaperSize, enabled: boolean, text: string): void {
+  paper: PaperSize, enabled: boolean, text: string,
+  options?: { side: NumberingSide; stripMm: number }): void {
   if (!enabled || !text) return
-  const output = numberedPaper(paper, enabled), right = paper.widthMm > paper.heightMm
+  const side = options?.side ?? (paper.widthMm > paper.heightMm ? 'right' : 'bottom')
+  const stripMm = options?.stripMm ?? 3
+  const vertical = side === 'right' || side === 'left'
+  const output = { widthMm: paper.widthMm + (vertical ? stripMm : 0), heightMm: paper.heightMm + (vertical ? 0 : stripMm) }
   const scaleX = width / output.widthMm
   const scaleY = height / output.heightMm
   const contentWidth = paper.widthMm * scaleX
   const contentHeight = paper.heightMm * scaleY
-  const padding = right ? scaleY : scaleX
-  const stripLength = right ? height : width
+  const padding = vertical ? scaleY : scaleX
+  const stripLength = vertical ? height : width
   const maxWidth = Math.max(1, stripLength - 2 * padding)
-  const baseline = right ? 0 : (paper.heightMm + 1.5) * scaleY
+  const baseline = vertical ? 0 : (side === 'top' ? stripMm / 2 : paper.heightMm + stripMm / 2) * scaleY
   const family = '"PingFang SC","Microsoft YaHei",sans-serif'
-  const baseFontSize = 1.8 * (right ? scaleX : scaleY)
+  const baseFontSize = Math.min(1.8, stripMm * .6) * (vertical ? scaleX : scaleY)
   let fontSize = baseFontSize
   // Preserve the caller's transform, including the offset used by tiled exports.
   context.save()
   context.beginPath()
-  if (right) context.rect(contentWidth, 0, width - contentWidth, height)
-  else context.rect(0, contentHeight, width, height - contentHeight)
+  if (vertical) context.rect(side === 'left' ? 0 : contentWidth, 0, width - contentWidth, height)
+  else context.rect(0, side === 'top' ? 0 : contentHeight, width, height - contentHeight)
   context.clip()
-  if (right) {
-    context.translate((paper.widthMm + 1.5) * scaleX, 0)
-    context.rotate(Math.PI / 2)
+  if (vertical) {
+    context.translate((side === 'left' ? stripMm / 2 : paper.widthMm + stripMm / 2) * scaleX, side === 'left' ? height : 0)
+    context.rotate(side === 'left' ? -Math.PI / 2 : Math.PI / 2)
   }
   context.fillStyle = '#28252d'
   context.textAlign = 'left'
