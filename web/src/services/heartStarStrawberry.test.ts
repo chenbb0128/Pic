@@ -18,7 +18,7 @@ describe('strawberry template', () => {
     const api = feature(), cfg = api.build()
     const bytes = readFileSync(new URL('../../public/embedded/heart-star/' + api.source.split('?')[0].replace('./', ''), import.meta.url))
     expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([cfg.w, cfg.h])
-    expect([cfg.w, cfg.h, cfg.widthMm, cfg.heightMm]).toEqual([1748, 2480, 148, 210])
+    expect([cfg.w, cfg.h, cfg.widthMm, cfg.heightMm]).toEqual([1701, 2480, 144, 210])
     expect(cfg.slots).toHaveLength(36)
     expect(Array.from({ length: 7 }, (_, row) => cfg.slots.filter((slot: any) => slot.row === row).length)).toEqual([4, 4, 6, 6, 6, 5, 5])
     cfg.slots.forEach((slot: any, i: number) => {
@@ -59,7 +59,7 @@ describe('strawberry template', () => {
     expect(calls[0].slice(1)).toEqual([area.x + 10 - area.h / 4, area.y - 5 - area.h / 2, area.h / 2, area.h])
   })
 
-  it('centers every row across the sheet and keeps photo frames inside their artwork', () => {
+  it('centers every row with more than 5 mm on each side and keeps photo frames inside their artwork', () => {
     const cfg = feature().build()
     for (let row = 0; row < 7; row++) {
       const ids = cfg.slots.flatMap((slot: any, index: number) => slot.row === row ? [index] : [])
@@ -67,6 +67,8 @@ describe('strawberry template', () => {
       const right = cfg.w - Math.max(...ids.map((i: number) => cfg.placements[i].x + cfg.placements[i].w))
       // Some source boxes include a one-pixel transparent fringe.
       expect(Math.abs(left - right)).toBeLessThanOrEqual(1)
+      expect(left / cfg.w * cfg.widthMm).toBeGreaterThan(5)
+      expect(right / cfg.w * cfg.widthMm).toBeGreaterThan(5)
       for (const i of ids) {
         const photo = cfg.slots[i].photoArea, artwork = cfg.placements[i]
         expect(cfg.slots[i].x).toBe(photo.x)
@@ -76,11 +78,26 @@ describe('strawberry template', () => {
     }
   })
 
-  it('selects A5 dimensions and restores previous user dimensions when leaving the new template', () => {
+  it('shrinks artwork and photos by 5% in both print dimensions from the original 148 mm layout', () => {
+    const cfg = feature().build(), artwork = cfg.placements[28], photo = cfg.slots[28].photoArea
+    // Pixel rounding at 300 DPI must not visibly distort uploaded photos.
+    expect(Math.abs((cfg.widthMm / cfg.w) / (cfg.heightMm / cfg.h) - 1)).toBeLessThan(.001)
+    // First whole strawberry: original artwork 229 x 236 px, photo 126 x 134 px.
+    expect(artwork.w / cfg.w * cfg.widthMm).toBeCloseTo(229 / 1748 * 148 * .95)
+    expect(artwork.h / cfg.h * cfg.heightMm).toBeCloseTo(236 / 2480 * 210 * .95)
+    expect(photo.w / cfg.w * cfg.widthMm).toBeCloseTo(126 / 1748 * 148 * .95)
+    expect(photo.h / cfg.h * cfg.heightMm).toBeCloseTo(134 / 2480 * 210 * .95)
+  })
+
+  it('selects the shared 144 mm export width and restores previous user dimensions when leaving the template', () => {
     const scope: any = {}, width = { value: '160' }, height = { value: '220' }
     new Function('globalThis', presetSource)(scope)
     scope.HeartStarPreset.selectSize(feature().build(), width, height)
-    expect([width.value, height.value]).toEqual(['148', '210'])
+    expect([width.value, height.value]).toEqual(['144', '210'])
+    const outputSource = toolHtml.slice(toolHtml.indexOf('function outputConfig('), toolHtml.indexOf('function renderConfig('))
+    const output = new Function('widthInput', 'heightInput', 'dpiInput', 'numberingEnabled', 'footerHeightMm',
+      `${outputSource};return outputConfig();`)(width, height, { value: '600' }, { checked: true }, 3)
+    expect(output).toMatchObject({ totalW: 144, totalH: 213, pxW: 3402, pxH: 5031 })
     scope.HeartStarPreset.selectSize({ preset: true, widthMm: 210, heightMm: 144 }, width, height)
     expect([width.value, height.value]).toEqual(['210', '144'])
     scope.HeartStarPreset.selectSize({}, width, height)
@@ -88,11 +105,11 @@ describe('strawberry template', () => {
   })
 
   it('preserves calibrated frames without a temporary notice through a shared editable snapshot', async () => {
-    const scope: any = {}, cfg = feature().build(), image = { naturalWidth: 1748, naturalHeight: 2480 }
+    const scope: any = {}, cfg = feature().build(), image = { naturalWidth: 1701, naturalHeight: 2480 }
     new Function('globalThis', editorSource)(scope)
     new Function('globalThis', snapshotSource)(scope)
     const editor = scope.HeartStarCloudEditor, states = cfg.slots.map(() => ({ size: .62, dx: 0, dy: 0 }))
-    const settings = { width: 148, height: 210, dpi: 300 }
+    const settings = { width: 144, height: 210, dpi: 300 }
     const captured = editor.capture({ name: feature().name, cfg, base: image, states, photoAt: () => null, catalog: [], settings })
     const codec = scope.HeartStarCloudSnapshot.create({ isImage: (value: any) => value === image,
       upload: async () => ({ fileId: '1'.repeat(32) }), loadImage: async () => image })

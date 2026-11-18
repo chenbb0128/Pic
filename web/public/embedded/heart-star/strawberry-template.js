@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const name = '草莓.png';
-  const source = './assets/strawberry-template.png?v=3';
+  const source = './assets/strawberry-template.png?v=4';
   function build() {
     // Each entry: artwork [left, top, width, height], photo [cx, cy, width, height].
     // Centers use the filled artwork silhouette, rounded to half a pixel.
@@ -60,16 +60,24 @@
         [[1423, 2138, 223, 213], [1535.5, 2256, 126, 134]],
       ],
     ];
-    // Match the per-row translations baked into the centered PNG. Keep photos
-    // and artwork together without changing their sizes or internal spacing.
+    // The PNG includes both the row centering and the following sheet transform.
+    // Shrink the original 148 x 210 mm layout by 5% in physical units, then center
+    // it on a 144 x 210 mm sheet. Use the matching 300 DPI canvas proportions so
+    // dynamically uploaded photos also retain their proportions on export.
     const rowOffsets = [19, 19, 9, 2.5, 2.5, -7.5, -.5];
+    const originalW = 1748, w = 1701, h = 2480, widthMm = 144, heightMm = 210;
+    const scaleY = .95, scaleX = scaleY * 148 / widthMm * w / originalW;
+    const moveX = x => w / 2 + (x - originalW / 2) * scaleX;
+    const moveY = y => h / 2 + (y - h / 2) * scaleY;
     const slots = [], placements = [];
     rows.forEach((entries, row) => entries.forEach(([box, photo], column) => {
-      const [originalX, y, w, h] = photo, x = originalX + rowOffsets[row];
-      slots.push({ x, y, w: w / .62, h: h / .62, type: 'rect', row, column, photoArea: { x, y, w, h } });
-      placements.push({ x: box[0] + rowOffsets[row], y: box[1], w: box[2], h: box[3] });
+      const x = moveX(photo[0] + rowOffsets[row]), y = moveY(photo[1]);
+      const photoW = photo[2] * scaleX, photoH = photo[3] * scaleY;
+      slots.push({ x, y, w: photoW / .62, h: photoH / .62, type: 'rect', row, column,
+        photoArea: { x, y, w: photoW, h: photoH } });
+      placements.push({ x: moveX(box[0] + rowOffsets[row]), y: moveY(box[1]), w: box[2] * scaleX, h: box[3] * scaleY });
     }));
-    return { w: 1748, h: 2480, widthMm: 148, heightMm: 210, slots, placements, motifSlots: [] };
+    return { w, h, widthMm, heightMm, slots, placements, motifSlots: [] };
   }
   globalThis.HeartStarStrawberry = { name, source, build };
 })();
