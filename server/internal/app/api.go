@@ -11,6 +11,7 @@ import (
 
 	"github.com/chenbb0128/Pic/server/internal/config"
 	"github.com/chenbb0128/Pic/server/internal/modules/library"
+	"github.com/chenbb0128/Pic/server/internal/modules/paidan"
 	"github.com/chenbb0128/Pic/server/internal/platform/database"
 	platformmetrics "github.com/chenbb0128/Pic/server/internal/platform/metrics"
 	redisclient "github.com/chenbb0128/Pic/server/internal/platform/redis"
@@ -22,6 +23,7 @@ type API struct {
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
 	database        *database.DB
+	paidanDB        *sql.DB
 	redis           *redisclient.Client
 }
 
@@ -100,6 +102,12 @@ func NewAPI(cfg config.Config, logger *slog.Logger) (*API, error) {
 		}
 		return nil, err
 	}
+	paidanHandler, paidanDB, err := paidan.FromEnvironment()
+	if err != nil {
+		logger.Error("paidan configuration unavailable", "error", err)
+		paidanHandler = http.HandlerFunc(paidan.Unavailable)
+	}
+	api := &API{database: db, redis: redis, paidanDB: paidanDB}
 	router, err := httpapi.NewRouter(httpapi.RouterOptions{
 		App:             cfg.App,
 		HTTP:            cfg.HTTP,
@@ -108,14 +116,10 @@ func NewAPI(cfg config.Config, logger *slog.Logger) (*API, error) {
 		ReadinessChecks: checks,
 		Metrics:         metrics,
 		LibraryHandler:  libraryHandler,
+		PaidanHandler:   paidanHandler,
 	})
 	if err != nil {
-		if db != nil {
-			_ = db.Close()
-		}
-		if redis != nil {
-			_ = redis.Close()
-		}
+		_ = api.close()
 		return nil, err
 	}
 
@@ -129,13 +133,10 @@ func NewAPI(cfg config.Config, logger *slog.Logger) (*API, error) {
 		MaxHeaderBytes:    cfg.HTTP.MaxHeaderBytes,
 	}
 
-	return &API{
-		server:          server,
-		logger:          logger,
-		shutdownTimeout: cfg.HTTP.ShutdownTimeout,
-		database:        db,
-		redis:           redis,
-	}, nil
+	api.server = server
+	api.logger = logger
+	api.shutdownTimeout = cfg.HTTP.ShutdownTimeout
+	return api, nil
 }
 
 func (a *API) Run(ctx context.Context) (err error) {
@@ -177,6 +178,11 @@ func (a *API) Run(ctx context.Context) (err error) {
 
 func (a *API) close() error {
 	var err error
+	if a.paidanDB != nil {
+		if closeErr := a.paidanDB.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close paidan mysql: %w", closeErr))
+		}
+	}
 	if a.database != nil {
 		if closeErr := a.database.Close(); closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close mysql: %w", closeErr))

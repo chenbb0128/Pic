@@ -42,3 +42,17 @@ windows/runner/               Flutter 标准宿主和 Windows API 适配
 已验证一张同图未缩放文件与EVA下载的4,798,128字节原图SHA-256及完整字节一致。这个结果只证明当前图片源和样本，不代表所有未知图片源都已适配。
 
 只运行桌面子项目的直接相关测试与静态分析：图片可多模板关联、空订单号拒绝、序列化重开、原文件字节不变且脱离源路径可用、损坏数据不静默丢弃、控制器保存失败保留状态。Windows 宿主构建验证通道可编译；EVA 拖图另做人工验收，不以单元测试代替。
+
+## 排单接入（千帆客服侧，CDP 直连）
+
+千帆客服右键图片点击「进入排单」后，订单素材台**自身**完成捕获与入库（无外部注入器进程）：
+
+- 前置条件：千帆客服工作台以 `--remote-debugging-port=9222` 启动（桌面快捷方式「排单小助手 / 千帆客服工作台(排单版)」负责）。
+- `PaidanCdpInjector` 周期扫描 `http://127.0.0.1:9222/json/list`，对每个客服工作台页面建立 CDP WebSocket 连接，注入内置资产 `assets/paidan_core.js`：右键图片 → 融合进平台菜单的「进入排单」项 → 页面内抓取原图（对 arkgoods 链接去掉 imageView2/ 缩图参数，与 EVA 拖入同款规则）→ 经 `qianfanBridge` binding 回流。
+- 捕获按订单号找单或建单（同号复用）入库，来源标记为 `ImageSource.paidan`；临时文件先写 `incoming/`，成功后删除，失败保留供人工处理。控制器忙时捕获在内存中排队重试（约 10 次 × 2s），持续忙碌则保留文件。
+- 与用户操作串行：`OrderController.ingestPaidan` 与拖入导入共用忙碌保护，不与切单、导入竞争写入。捕获 payload 无订单号时跳过入库（右侧订单面板未显示订单）。
+- 测试经内嵌 fake CDP 服务端（`HttpServer` + `WebSocketTransformer`）覆盖协议客户端：脚本注入、binding 回流入库、无订单号跳过。
+
+### 兼容：收件箱投递通道（保留）
+
+早期通过外部 Node 注入器把捕获写入收件箱 `%LOCALAPPDATA%/Xiaoxingtie/OrderMaterials/inbox/`（`<投递ID>.paidan.json` + 图片成对，原子重命名）。`PaidanIngestService` 保留消费该通道：校验元数据、文件名白名单、字节长度一致后入库（同号复用，`ImageSource.paidan`）；失败投递移入 `inbox/failed/` 附错误说明；控制器忙时投递保持原样由定时扫描重试。CDP 直连为主路径后，此通道仅作为兼容备用，二者事件统一对外，不产生重复入库。入库图片 `originalVerified=false`，与拖入流程一致；字节校验只覆盖长度一致，哈希校验留待后续版本。

@@ -191,3 +191,34 @@ func stringContains(s string, substr string) bool {
 	return false
 }
 
+func TestRouterDispatchesPaidanSyncBeforeWebLibrary(t *testing.T) {
+	router, err := httpapi.NewRouter(httpapi.RouterOptions{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		HTTP:   config.HTTPConfig{MaxBodyBytes: 1024},
+		LibraryHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Test-Handler", "library")
+		}),
+		PaidanHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/v1/paidan/orders/123" || r.Header.Get("Authorization") != "Bearer test" || r.Method != "DELETE" {
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+			w.Header().Set("X-Test-Handler", "paidan")
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		"/api/v1/paidan/orders/123": "paidan",
+		"/api/v1/paidan-old":        "library",
+		"/api/v1/auth/session":      "library",
+	} {
+		request := httptest.NewRequest("DELETE", path, nil)
+		request.Header.Set("Authorization", "Bearer test")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		if got := response.Header().Get("X-Test-Handler"); got != want {
+			t.Errorf("%s: handled by %q, want %q", path, got, want)
+		}
+	}
+}

@@ -1,0 +1,159 @@
+  /* ---------- 排单区块构建（dark=独立面板配色） ----------
+     结构：头部（订单号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
+     嵌入模式：区块透明融入平台菜单容器，行风格与平台菜单项一致 */
+  function buildSection(img, dark) {
+    const section = document.createElement('div')
+    section.id = SECTION_ID
+    section.style.cssText =
+      'width:100%;box-sizing:border-box;display:flex;flex-direction:column;' +
+      (dark
+        ? 'background:rgba(24,27,38,.96);backdrop-filter:blur(14px);color:#e8eaf0;' +
+          'border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:6px 4px;' +
+          'box-shadow:0 12px 40px rgba(0,0,0,.45);'
+        : 'background:transparent;color:#2a2f3a;padding:2px 0 4px;') +
+      'font:12px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;user-select:none;'
+
+    const panelOrders = parseOrderPanel()
+    const selected = new Map() // webId → qty
+    const cellSyncs = new Map() // webId → 行视图同步函数
+
+    // 头部：订单号（单订单输入框；多订单下拉切换）
+    const head = document.createElement('div')
+    head.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 12px 4px;'
+    const ordLabel = document.createElement('span')
+    ordLabel.textContent = '订单'
+    ordLabel.style.cssText = 'flex-shrink:0;color:' + (dark ? '#9aa3b5' : '#8b93a5') + ';font-size:11px;'
+    head.appendChild(ordLabel)
+    let ordInput
+    if (panelOrders.length > 1) {
+      ordInput = document.createElement('select')
+      for (const order of panelOrders) {
+        const option = document.createElement('option')
+        option.value = order.orderNumber
+        option.textContent = order.orderNumber + '（' + order.specs.map(s => s.code + '×' + s.qty).join(' ') + '）'
+        ordInput.appendChild(option)
+      }
+      ordInput.addEventListener('change', () => applyOrderSpecs(ordInput.value))
+    } else {
+      ordInput = document.createElement('input')
+      ordInput.placeholder = '订单号（自动识别，可修改）'
+      ordInput.spellcheck = false
+      ordInput.value = panelOrders[0]?.orderNumber || ''
+      ordInput.style.cssText = 'flex:1;min-width:0;padding:4px 8px;border:1px solid ' +
+        (dark ? 'rgba(255,255,255,.16)' : '#d8dbe3') + ';border-radius:7px;background:transparent;color:inherit;outline:none;font:12px sans-serif;'
+    }
+    ordInput.style.cssText += 'flex:1;min-width:0;box-sizing:border-box;'
+    head.appendChild(ordInput)
+    section.appendChild(head)
+
+    // 模板清单行（菜单项风格：勾选框 + 编号 + 名称 + 份数）
+    const list = document.createElement('div')
+    list.style.cssText = 'display:flex;flex-direction:column;'
+    for (const t of TEMPLATES) {
+      const row = document.createElement('div')
+      row.style.cssText =
+        'display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;' +
+        'transition:background .12s;'
+      row.addEventListener('mouseenter', () => { row.style.background = dark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.05)' })
+      row.addEventListener('mouseleave', () => { row.style.background = 'transparent' })
+
+      const cbx = document.createElement('span')
+      cbx.style.cssText =
+        'width:14px;height:14px;flex-shrink:0;border-radius:4px;border:1.5px solid ' +
+        (dark ? 'rgba(255,255,255,.3)' : '#c5c9d4') + ';display:inline-flex;align-items:center;justify-content:center;'
+      const checkSvg = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
+      const code = document.createElement('span')
+      code.textContent = t.code
+      code.style.cssText = 'font-weight:700;color:#5b8cff;font-size:11px;width:28px;flex-shrink:0;'
+      const name = document.createElement('span')
+      name.textContent = t.name
+      name.style.cssText = 'flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;'
+      const qty = document.createElement('span')
+      qty.style.cssText =
+        'display:none;align-items:center;gap:6px;flex-shrink:0;'
+      const minus = document.createElement('button')
+      minus.textContent = '−'
+      minus.style.cssText = 'width:18px;height:18px;border-radius:5px;border:1px solid ' +
+        (dark ? 'rgba(255,255,255,.2)' : '#ccc') + ';background:transparent;color:inherit;cursor:pointer;font-size:11px;line-height:1;padding:0;'
+      const qtyLabel = document.createElement('b')
+      qtyLabel.textContent = '1'
+      qtyLabel.style.cssText = 'min-width:14px;text-align:center;font-size:12px;'
+      const plus = document.createElement('button')
+      plus.textContent = '＋'
+      plus.style.cssText = minus.style.cssText
+      qty.appendChild(minus); qty.appendChild(qtyLabel); qty.appendChild(plus)
+      row.appendChild(cbx); row.appendChild(code); row.appendChild(name); row.appendChild(qty)
+
+      const sync = () => {
+        const on = selected.has(t.id)
+        cbx.style.background = on ? '#5b8cff' : 'transparent'
+        cbx.style.borderColor = on ? '#5b8cff' : dark ? 'rgba(255,255,255,.3)' : '#c5c9d4'
+        cbx.innerHTML = on ? checkSvg : ''
+        qty.style.display = on ? 'inline-flex' : 'none'
+        cellSyncs.set(t.id, sync)
+      }
+      row.addEventListener('click', ev => {
+        ev.stopPropagation()
+        if (selected.has(t.id)) selected.delete(t.id)
+        else selected.set(t.id, 1)
+        sync()
+      })
+      minus.addEventListener('click', ev => {
+        ev.stopPropagation()
+        const next = Math.max(1, (selected.get(t.id) ?? 1) - 1)
+        selected.set(t.id, next)
+        qtyLabel.textContent = String(next)
+      })
+      plus.addEventListener('click', ev => {
+        ev.stopPropagation()
+        const next = (selected.get(t.id) ?? 1) + 1
+        selected.set(t.id, next)
+        qtyLabel.textContent = String(next)
+      })
+      list.appendChild(row)
+      cellSyncs.set(t.id, sync)
+    }
+    section.appendChild(list)
+
+    // 底部：确认排单（全宽）
+    const foot = document.createElement('div')
+    foot.style.cssText = 'padding:6px 12px 8px;'
+    const confirmBtn = document.createElement('button')
+    confirmBtn.textContent = '确认排单'
+    confirmBtn.style.cssText =
+      'width:100%;height:32px;border:none;border-radius:8px;cursor:pointer;' +
+      'background:linear-gradient(135deg,#4f7dff,#6a5bff);color:#fff;font:600 13px -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;' +
+      'display:inline-flex;align-items:center;justify-content:center;gap:6px;'
+    confirmBtn.innerHTML = ICONS.receipt + '<span>确认排单</span>'
+    foot.appendChild(confirmBtn)
+    section.appendChild(foot)
+
+    // 规格 → 模板预选（按订单面板解析的规格与份数）
+    function applyOrderSpecs(order) {
+      if (!order) return
+      selected.clear()
+      for (const spec of order.specs) selected.set(spec.webId, spec.qty)
+      for (const t of TEMPLATES) cellSyncs.get(t.id)?.()
+    }
+
+    confirmBtn.addEventListener('click', ev => {
+      ev.stopPropagation()
+      if (selected.size === 0) return
+      const order = panelOrders.length ? (panelOrders.find(o => o.orderNumber === ordInput.value) || { specs: [] }) : null
+      // 已解析订单：模板与份数按订单规格；未解析：用当前勾选
+      const templates = order
+        ? order.specs.filter(s => selected.has(s.webId)).map(s => ({ id: s.webId, qty: selected.get(s.webId) }))
+        : Array.from(selected.entries()).map(([id, qty]) => ({ id, qty }))
+      if (dark) hideStandalone()
+      else {
+        const menu = document.querySelector(PLATFORM_MENU_SEL)
+        if (menu) menu.style.display = 'none'
+      }
+      capture(img, order?.orderNumber || ordInput.value, templates)
+    })
+
+    // 初始：按第一个订单的规格预选
+    if (panelOrders.length) applyOrderSpecs(panelOrders[0])
+    return section
+  }
+

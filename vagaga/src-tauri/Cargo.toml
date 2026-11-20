@@ -1,0 +1,49 @@
+[package]
+name = "vagaga"
+version = "0.1.0"
+description = "vagaga：千帆素材采集、模板关联、排版与抠图"
+edition = "2021"
+
+[lib]
+name = "vagaga_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+arboard = "3"
+image = "0.25"
+rand = "0.8"
+urlencoding = "2"
+mysql_async = "0.34"
+sha2 = "0.10"
+hmac = "0.12"
+qiniu-etag = "0.2.4"
+same-file = "1"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

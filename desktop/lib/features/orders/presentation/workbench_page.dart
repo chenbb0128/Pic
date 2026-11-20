@@ -6,6 +6,7 @@ import '../../../platform/desktop_gateway.dart';
 import '../../settings/presentation/storage_settings_dialog.dart';
 import '../../settings/storage_settings.dart';
 import '../application/order_controller.dart';
+import '../application/paidan_ingest_service.dart';
 import '../domain/order_document.dart';
 import '../domain/order_image.dart';
 import 'widgets/image_assignment_panel.dart';
@@ -18,10 +19,12 @@ class WorkbenchPage extends StatefulWidget {
     required this.controller,
     required this.desktop,
     required this.storage,
+    this.paidanEvents,
   });
   final OrderController controller;
   final DesktopGateway desktop;
   final StorageSettings storage;
+  final Stream<PaidanIngestEvent>? paidanEvents;
 
   @override
   State<WorkbenchPage> createState() => _WorkbenchPageState();
@@ -31,6 +34,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   final _orderNumber = TextEditingController();
   StreamSubscription<List<String>>? _dropSubscription;
   StreamSubscription<String>? _warningSubscription;
+  StreamSubscription<PaidanIngestEvent>? _paidanSubscription;
   bool _pinned = false;
   bool _choosingFiles = false;
   bool _settingsOpen = false;
@@ -47,7 +51,22 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
     _warningSubscription = widget.desktop.dropWarnings.listen(
       controller.reportError,
     );
+    _paidanSubscription = widget.paidanEvents?.listen(_onPaidanEvent);
     unawaited(_initialize());
+  }
+
+  void _onPaidanEvent(PaidanIngestEvent event) {
+    if (!mounted) return;
+    final message = switch (event.status) {
+      PaidanIngestStatus.imported => '排单已入库：订单 ${event.orderNumber} 新增 1 张图片',
+      PaidanIngestStatus.deferred => null,
+      PaidanIngestStatus.failed =>
+        '排单入库失败（${event.orderNumber}）：${event.detail ?? '未知原因'}，文件保留在收件箱 failed 目录',
+    };
+    if (message == null) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _initialize() async {
@@ -61,6 +80,7 @@ class _WorkbenchPageState extends State<WorkbenchPage> {
   void dispose() {
     unawaited(_dropSubscription?.cancel());
     unawaited(_warningSubscription?.cancel());
+    unawaited(_paidanSubscription?.cancel());
     _orderNumber.dispose();
     super.dispose();
   }

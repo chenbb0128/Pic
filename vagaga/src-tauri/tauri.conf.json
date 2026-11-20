@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "vagaga",
+  "version": "0.1.0",
+  "identifier": "cn.xiaoxingtie.paidan-center",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "vagaga",
+        "width": 1530,
+        "height": 780,
+        "minWidth": 1530,
+        "minHeight": 640,
+        "decorations": false,
+        "transparent": true,
+        "windowEffects": {
+          "effects": [
+            "acrylic",
+            "mica"
+          ],
+          "state": "active"
+        }
+      }
+    ],
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": []
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico"
+    ]
+  },
+  "mainBinaryName": "vagaga"
+}

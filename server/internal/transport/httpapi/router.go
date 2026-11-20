@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/chenbb0128/Pic/server/internal/config"
+	"github.com/chenbb0128/Pic/server/internal/modules/paidan"
 	platformmetrics "github.com/chenbb0128/Pic/server/internal/platform/metrics"
 	"github.com/chenbb0128/Pic/server/internal/transport/httpapi/middleware"
 	"github.com/chenbb0128/Pic/server/internal/transport/httpapi/response"
@@ -28,6 +30,7 @@ type RouterOptions struct {
 	ReadinessChecks []ReadyCheck
 	Metrics         *platformmetrics.Metrics
 	LibraryHandler  http.Handler
+	PaidanHandler   http.Handler
 }
 
 func NewRouter(opts RouterOptions) (*gin.Engine, error) {
@@ -71,8 +74,19 @@ func NewRouter(opts RouterOptions) (*gin.Engine, error) {
 		response.OK(c, gin.H{"status": "ok"})
 	})
 	router.GET("/ready", readyHandler(opts.Logger, opts.ReadyTimeout, opts.ReadinessChecks))
-	if opts.LibraryHandler != nil {
-		router.Any("/api/v1/*path", gin.WrapH(opts.LibraryHandler))
+	if opts.LibraryHandler != nil || opts.PaidanHandler != nil {
+		router.Any("/api/v1/*path", func(c *gin.Context) {
+			path := c.Request.URL.Path
+			if opts.PaidanHandler != nil && (path == paidan.Prefix || strings.HasPrefix(path, paidan.Prefix+"/")) {
+				opts.PaidanHandler.ServeHTTP(c.Writer, c.Request)
+				return
+			}
+			if opts.LibraryHandler != nil {
+				opts.LibraryHandler.ServeHTTP(c.Writer, c.Request)
+				return
+			}
+			response.Error(c, response.NotFound())
+		})
 	}
 
 	return router, nil

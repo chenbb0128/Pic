@@ -8,19 +8,46 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
 	"github.com/chenbb0128/Pic/server/internal/config"
+	"github.com/chenbb0128/Pic/server/internal/modules/paidan"
 	"github.com/chenbb0128/Pic/server/internal/platform/database"
 )
 
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
-	migrationsDir := flag.String("dir", "database/migrations", "path to migrations directory")
+	target := flag.String("target", "app", "migration target: app or paidan")
+	migrationsDir := flag.String("dir", "", "override the migration directory")
 	command := flag.String("command", "status", "migration command: up, down, status, redo")
-	dsnOverride := flag.String("dsn", "", "optional database DSN override")
+	dsnOverride := flag.String("dsn", "", "optional main application database DSN override")
 	flag.Parse()
+
+	switch *target {
+	case "paidan":
+		if *dsnOverride != "" {
+			slog.Error("paidan migration expects PAIDAN_MYSQL_DSN")
+			os.Exit(1)
+		}
+		dir := *migrationsDir
+		if dir == "" {
+			dir = "database/paidan_migrations"
+		}
+		if err := migratePaidan(dir, *command); err != nil {
+			slog.Error("paidan migration failed", "command", *command, "error", err)
+			os.Exit(1)
+		}
+		return
+	case "app":
+		if *migrationsDir == "" {
+			*migrationsDir = "database/migrations"
+		}
+	default:
+		slog.Error("unsupported migration target")
+		os.Exit(1)
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -74,6 +101,29 @@ func main() {
 		slog.Error("migration failed", "command", *command, "error", err)
 		os.Exit(1)
 	}
+}
+
+func migratePaidan(dir, command string) error {
+	dsn := strings.TrimSpace(os.Getenv("PAIDAN_MYSQL_DSN"))
+	if dsn == "" {
+		return fmt.Errorf("PAIDAN_MYSQL_DSN is required")
+	}
+	db, err := paidan.OpenDatabase(dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("paidan MySQL connection failed")
+	}
+	if err := goose.SetDialect("mysql"); err != nil {
+		return err
+	}
+	goose.SetTableName("paidan_goose_db_version")
+	return runMigrationCommand(db, dir, command)
 }
 
 func runMigrationCommand(db *sql.DB, dir string, command string) error {

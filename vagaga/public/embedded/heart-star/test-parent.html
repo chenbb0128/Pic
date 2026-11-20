@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>test-parent</title></head>
+<body style="font-family:sans-serif">
+<h3>injection test harness</h3>
+<iframe id="f" src="./index.html?template=%E7%88%B1%E5%BF%83%E6%A8%AA%E7%89%88.png" style="width:1200px;height:800px;border:1px solid #ccc"></iframe>
+<script>
+window.__msgs = []
+window.__result = 'PENDING'
+window.__T0 = Date.now()
+window.addEventListener('message', e => {
+  const d = e.data || {}
+  window.__msgs.push({ type: d.type, ready: d.ready, t: Date.now() - window.__T0 })
+  if (d.type === 'pic-make-done') window.__result = 'INJECTED'
+  if (d.type === 'pic-make-inject-error') window.__result = 'ERROR: ' + d.message
+})
+
+// iframe load 后 800ms 发送注入消息（模拟订单制作中心父窗口）
+document.getElementById('f').addEventListener('load', () => {
+  setTimeout(() => {
+    const c = document.createElement('canvas')
+    c.width = 64; c.height = 64
+    const x = c.getContext('2d')
+    x.fillStyle = '#e33'; x.fillRect(0, 0, 64, 64)
+    c.toBlob(b => {
+      const f = new File([b], 't.png', { type: 'image/png' })
+      f.arrayBuffer().then(ab => {
+        const bytes = new Uint8Array(ab)
+        let bin = ''
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i])
+        document.getElementById('f').contentWindow.postMessage({
+          type: 'pic-make-inject',
+          b64: btoa(bin),
+          name: 't.png',
+          mime: 'image/png',
+          template: '爱心横版.png',
+        }, '*')
+      })
+    }, 'image/png')
+  }, 800)
+})
+</script>
+</body>
+</html>

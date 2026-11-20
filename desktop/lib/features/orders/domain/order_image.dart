@@ -1,4 +1,6 @@
-enum ImageSource { localFile, desktopDrop }
+/// 图片进入资料库的途径。
+/// `paidan`：千帆客服「进入排单」经收件箱自动入库（排单小助手写入）。
+enum ImageSource { localFile, desktopDrop, paidan }
 
 class OrderImage {
   OrderImage({

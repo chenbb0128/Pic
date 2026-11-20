@@ -15,8 +15,17 @@ class OrderMaterialsApp extends StatefulWidget {
 
 class _OrderMaterialsAppState extends State<OrderMaterialsApp> {
   @override
+  void initState() {
+    super.initState();
+    widget.dependencies.paidan.start();
+    widget.dependencies.paidanCdp.start();
+  }
+
+  @override
   void dispose() {
     widget.dependencies.orders.dispose();
+    unawaited(widget.dependencies.paidan.dispose());
+    unawaited(widget.dependencies.paidanCdp.dispose());
     unawaited(widget.dependencies.desktop.dispose());
     super.dispose();
   }
@@ -46,6 +55,7 @@ class _OrderMaterialsAppState extends State<OrderMaterialsApp> {
       controller: widget.dependencies.orders,
       desktop: widget.dependencies.desktop,
       storage: widget.dependencies.storage,
+      paidanEvents: widget.dependencies.paidanEvents,
     ),
   );
 }

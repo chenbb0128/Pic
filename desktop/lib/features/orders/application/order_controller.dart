@@ -110,6 +110,39 @@ class OrderController extends ChangeNotifier {
     }
   });
 
+  /// 排单收件箱入库：按订单号找单或建单后导入图片。
+  /// 返回 null 表示成功；返回 `busy` 表示控制器忙，调用方稍后重试；
+  /// 其他返回值为失败原因。不依赖也不抢占当前选中订单。
+  Future<String?> ingestPaidan({
+    required String orderNumber,
+    required String sourcePath,
+  }) async {
+    if (_busy) return 'busy';
+    _busy = true;
+    _error = null;
+    _notify();
+    try {
+      final order = await repository.create(orderNumber);
+      final updated = await repository.importImage(
+        order,
+        sourcePath,
+        ImageSource.paidan,
+      );
+      _orders = [updated, ..._orders.where((item) => item.id != updated.id)];
+      // 用户恰好开着同一订单时，替换为最新快照；否则不动当前选择。
+      if (_current?.id == updated.id) {
+        _current = updated;
+        _selectedImageId = updated.images.last.id;
+      }
+      return null;
+    } on Object catch (error) {
+      return error.toString();
+    } finally {
+      _busy = false;
+      _notify();
+    }
+  }
+
   Future<bool> setTemplate(String templateId, bool enabled) =>
       setTemplateQuantity(
         templateId,
