@@ -190,7 +190,7 @@ watch(
 const EDITOR_URL = '/embedded/heart-star/index.html'
 
 function openEditor() {
-  editorSrc.value = EDITOR_URL
+  if (!editorSrc.value) editorSrc.value = EDITOR_URL
 }
 
 /* ---------- 素材注入 + 模板自动切换 ---------- */
@@ -240,15 +240,7 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
         numberingDrafts.delete(editingOrder)
       }
     }
-    const targetUrl = template
-      ? `${EDITOR_URL}?template=${encodeURIComponent(template)}`
-      : editorSrc.value || EDITOR_URL
-    if (editorSrc.value !== targetUrl) {
-      lastInjectedOrder.value = null
-      lastInjectedImageId = null
-      editorSrc.value = targetUrl
-      editorReady.value = false
-    }
+    openEditor()
     status.value = `正在注入「${img.originalName}」…`
 
     const isReady = () => editorReady.value && typeof frame.value?.contentWindow?.__picDoInject === 'function'
@@ -277,6 +269,7 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
       mime: blob.type || 'image/png',
       template,
       orderNumber,
+      imageId: img.id,
       layoutNumber,
       numberingDraft: numberingDrafts.get(orderNumber),
     })
@@ -301,6 +294,8 @@ async function onMessage(event: MessageEvent) {
         dataB64?: string
         b64?: string
         fileName?: string
+        orderNumber?: string | null
+        imageId?: string | null
         action?: string
       }
     | null
@@ -333,8 +328,8 @@ async function onMessage(event: MessageEvent) {
     return
   }
   if (data?.type === 'pic-make-exported') {
-    const orderNumber = lastInjectedOrder.value
-    const imageId = lastInjectedImageId
+    const orderNumber = data.orderNumber === undefined ? lastInjectedOrder.value : data.orderNumber
+    const imageId = data.imageId === undefined ? lastInjectedImageId : data.imageId
     try {
       const saved = await saveProduction(orderNumber, data.b64 ?? '', data.fileName || '成品.png', imageId)
       lastExport.value = saved
@@ -988,11 +983,7 @@ function orderProductions(orderNumber: string): Production[] {
   color: #fff;
   cursor: pointer;
   font-family: inherit;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
-}
-.imgRow:hover .makeBtn, .makeBtn:focus-visible {
-  opacity: 1;
+  transition: background 0.15s;
 }
 .makeBtn:hover:not(:disabled) {
   background: #2f5fe0;

@@ -5,6 +5,7 @@ interface Window {
     mime: string
     template: string
     orderNumber?: string
+    imageId?: string
     layoutNumber?: string | null
     numberingDraft?: { prefix: string; value: string }
   }) => Promise<void>

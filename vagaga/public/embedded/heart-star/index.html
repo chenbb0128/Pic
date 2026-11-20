@@ -427,7 +427,7 @@ photoScale.addEventListener('input',()=>setPhotoScale(photoScale.value));photoSc
 function say(t,error=false){const s=document.getElementById('status');s.textContent=t;s.className='status'+(error?' error':'')}
 function currentSlots(){return templates[sel.value].slots}
 const footerHeightMm=3,footerText=document.getElementById('footerText'),numberingEnabled=document.getElementById('numberingEnabled'),footerPrefix=document.getElementById('footerPrefix'),sheetTotal=document.getElementById('sheetTotal'),sheetIndex=document.getElementById('sheetIndex');
-let orderNumberingOrder = null, orderNumberingEdited = false;
+let orderNumberingOrder = null, orderNumberingEdited = false, orderImageId = null;
 
 function applyOrderNumbering(data) {
   if (typeof data.orderNumber !== 'string' || !data.orderNumber) return;
@@ -612,6 +612,7 @@ async function exportPng(withWatermark=false){
  if(templates[sel.value].custom&&(customBusy||customDirty)){say('请先完成自定义排版。',true);return}
  const proof=withWatermark===true,name=sel.value,numbered=numberingEnabled.checked,label=numbered?composeFooterNumber():'';
  if(!proof&&numbered&&!label.trim()){footerText.focus();say('请先输入本次编号后再下载。',true);return}
+ const orderNumber=orderNumberingOrder,imageId=orderImageId;
  exportBusy=true;draw();
  try{
   if(templates[name].text){clearTimeout(fontInputTimer);const copySnapshot=JSON.stringify([states,copyStyle,copyLayout]);await prepareCopyFont();if(copySnapshot!==JSON.stringify([states,copyStyle,copyLayout]))throw new Error('文案或字体已更新，请重新下载。')}
@@ -624,7 +625,7 @@ async function exportPng(withWatermark=false){
   const finalBlob=proof?blob:await addDpiMetadata(blob,d.dpi);
   if(numberingEnabled.checked!==numbered||(numbered&&composeFooterNumber()!==label))throw new Error('编号设置已更新，请重新下载。');
   const a=document.createElement('a');a.href=URL.createObjectURL(finalBlob);a.download=pngFilename(name,label,d).replace(/\.png$/i,proof?'_水印预览.png':'.png');a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-  if(!proof&&window.parent&&window.parent!==window&&window.parent.__TAURI_INTERNALS__){try{const bin=new Uint8Array(await finalBlob.arrayBuffer());let binary='';for(let i=0;i<bin.length;i+=0x8000)binary+=String.fromCharCode(...bin.subarray(i,i+0x8000));window.parent.postMessage({type:'pic-make-exported',b64:btoa(binary),fileName:a.download},'*')}catch(error){console.error('[pic-make] export bridge failed',error)}}
+  if(!proof&&window.parent&&window.parent!==window&&window.parent.__TAURI_INTERNALS__){try{const bin=new Uint8Array(await finalBlob.arrayBuffer());let binary='';for(let i=0;i<bin.length;i+=0x8000)binary+=String.fromCharCode(...bin.subarray(i,i+0x8000));window.parent.postMessage({type:'pic-make-exported',b64:btoa(binary),fileName:a.download,orderNumber,imageId},'*')}catch(error){console.error('[pic-make] export bridge failed',error)}}
   if(!proof&&numbered){footerText.value='';orderNumberingEdited=false}
   say(proof?`带水印预览图已导出：${a.download}，${output.width} × ${output.height} px（白底预览，非印刷文件）。`:`PNG 已导出：${a.download}，${output.width} × ${output.height} px，${d.dpi} DPI。${numbered?'编号输入框已清空。':''}`)
  }catch(err){say(err.message||'导出失败，请重试。',true)}finally{exportBusy=false;draw()}
@@ -936,6 +937,7 @@ async function waitForOrderTemplate(template) {
     if (!HeartStarTemplateLink.selectInitial(sel, templates, `?template=${encodeURIComponent(name)}`)) {
       throw new Error('找不到订单指定的模板。');
     }
+    HeartStarPreset.selectSize(templates[sel.value], widthInput, heightInput);
     sel.dispatchEvent(new Event('change'));
   }
   if (window.__picTemplateLoaded === true) return;
@@ -954,15 +956,26 @@ async function waitForOrderTemplate(template) {
   });
 }
 window.__picDoInject = async function (data) {
+  if (exportBusy) throw new Error('成品正在导出，请稍后再制作。');
   await waitForOrderTemplate(data.template);
+  if (exportBusy) throw new Error('成品正在导出，请稍后再制作。');
   const bin = atob(data.b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const file = new File([bytes], data.name || 'order-image.png', { type: data.mime || 'image/png' });
-  if (!await setFiles([file], selectedPhotoTarget())) {
+  const target = selectedPhotoTarget();
+  const switchingOrder = data.orderNumber && data.orderNumber !== orderNumberingOrder;
+  if (switchingOrder) target.ids = target.states.map((_, index) => index);
+  if (!await setFiles([file], target)) {
     throw new Error('素材图片未能放入模板，请检查图片和所选位置后重试。');
   }
+  if (switchingOrder) {
+    urls.forEach(URL.revokeObjectURL);
+    photos = [];
+    urls = [];
+  }
   applyOrderNumbering(data);
+  if (data.orderNumber) orderImageId = data.imageId || null;
 };
 window.addEventListener('message', async function (event) {
   const data = event.data;
