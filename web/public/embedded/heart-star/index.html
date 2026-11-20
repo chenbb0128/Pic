@@ -83,6 +83,10 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 .photo-tune-control input[type=range]:disabled{opacity:.4;cursor:not-allowed}
 .photo-tune-control input[type=range]:focus-visible{outline:2px solid var(--tune-accent);outline-offset:2px;border-radius:6px}
 .photo-tune-help{margin:3px 0 0;font-size:11px;line-height:1.7;color:#92848c}
+.photo-lighting{margin-top:18px;padding-top:16px;border-top:1px solid #e6dce0}
+.photo-lighting>.label{margin-bottom:10px}
+.photo-lighting .btn{width:100%;height:36px;margin-bottom:12px;font-size:12px}
+.photo-lighting .photo-tune-control{margin-bottom:6px}
 #customRows{max-height:min(440px,48vh);overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-right:4px}
 .custom-help{margin:0 0 12px;font-size:12px;line-height:1.6;color:var(--muted)}
 .custom-help:last-child{margin:10px 0 0}
@@ -201,6 +205,13 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <div class="photo-tune-control"><label for="photoOffsetY">上下位置 <output id="photoOffsetYOut" for="photoOffsetY">居中</output></label><input id="photoOffsetY" type="range" min="-200" max="200" step="1" value="0" aria-label="头像上下位置"></div>
   <div class="photo-tune-control"><label for="photoOffsetX">左右位置 <output id="photoOffsetXOut" for="photoOffsetX">居中</output></label><input id="photoOffsetX" type="range" min="-200" max="200" step="1" value="0" aria-label="头像左右位置"></div>
   <p class="photo-tune-help">仅调整选中的头像，多选可批量微调。</p>
+  <div class="photo-lighting" id="photoLightingField" aria-label="人像补光">
+   <div class="label">人像补光 <button type="button" class="photo-tune-reset" data-light-reset aria-label="恢复所选人像原亮度" disabled>恢复原亮度</button></div>
+   <button type="button" class="btn" data-light-auto disabled>一键补光</button>
+   <div class="photo-tune-control"><label for="photoLightStrength">补光强度 <output data-light-value for="photoLightStrength">未补光</output></label><input id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="0" aria-label="人像补光强度" disabled></div>
+   <p class="photo-tune-help">提亮人像暗部，保留亮部细节。选中多个头像可批量补光。</p>
+   <p class="photo-tune-help" data-light-status role="status" aria-live="polite"></p>
+  </div>
   <div hidden><input id="photoScaleNumber" type="number" min="25" max="400" value="100"><input id="photoDragMode" type="checkbox"><select id="photoMoveStep"><option value="5">5 px</option></select><span id="photoOffsetReadout"></span></div>
  </div>
  <div class="field" id="slotBackgroundField">
@@ -239,7 +250,9 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./solid-background.js?v=solid-3"></script>
 <script src="./solid-background-quick.js?v=quick-1"></script>
 <script src="./ai-cutout.js?v=ai-1"></script>
-<script src="./photo-thumbnails.js?v=thumbs-3"></script>
+<script src="./photo-thumbnails.js?v=thumbs-4"></script>
+<script src="./photo-lighting.js?v=1"></script>
+<script src="./photo-lighting-controls.js?v=1"></script>
 <script src="./preview-watermark.js?v=picture-preview-4"></script>
 <script src="./product-preview.js?v=product-2"></script>
 <script src="./editor-interactions.js?v=right-numbering-3"></script>
@@ -266,7 +279,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <script src="./strawberry-template.js?v=6"></script>
 <script src="./template-link.js?v=1"></script>
 <script src="./cloud-snapshot.js?v=cloud-1"></script>
-<script src="./cloud-editor.js?v=strawberry-1"></script>
+<script src="./cloud-editor.js?v=photo-lighting-1"></script>
 <script src="./cloud-state.js?v=cloud-2"></script>
 <script src="./cloud-library.js?v=tool-session-1"></script>
 <script>
@@ -300,7 +313,7 @@ HeartStarProductPreview.mount({button:productPreviewButton,capture:productPrevie
 const picturePreviewButton=document.createElement('button');picturePreviewButton.type='button';picturePreviewButton.className='preview-tool picture-preview-button';picturePreviewButton.textContent='预览图';picturePreviewButton.setAttribute('aria-haspopup','dialog');picturePreviewButton.setAttribute('aria-expanded','false');document.querySelector('.preview-tools').append(picturePreviewButton);
 const pictureDialog=document.createElement('dialog');pictureDialog.className='picture-dialog';pictureDialog.setAttribute('aria-labelledby','picturePreviewTitle');pictureDialog.innerHTML='<div class="picture-dialog-head"><h2 id="picturePreviewTitle">预览图</h2><button type="button" class="preview-tool" aria-label="关闭预览图">✕</button></div><div class="picture-dialog-content"></div>';document.body.append(pictureDialog);
 HeartStarWatermark.createDialog({button:picturePreviewButton,dialog:pictureDialog,close:pictureDialog.querySelector('button'),content:pictureDialog.querySelector('.picture-dialog-content'),render:picturePreviewSnapshot,onError:message=>say(message,true)});
-function picturePreviewSnapshot(){const cfg=templates[sel.value];if(canvas.hidden||exportBusy||photoUploadBusy||replacementBusy||slotBackgrounds.busy()||motifEditor.busy()||(cfg.custom&&(customBusy||customDirty))||(cfg.text&&fontBusy))throw new Error('请等待模板和图片准备完成后再预览。');if(!outputConfig())throw new Error('请输入有效的宽度和高度。');try{draw(false);return HeartStarWatermark.preview(canvas,document.getElementById('watermarkEnabled').checked)}finally{draw()}}
+function picturePreviewSnapshot(){const cfg=templates[sel.value];if(canvas.hidden||exportBusy||photoLightingEditor?.busy()||photoUploadBusy||replacementBusy||slotBackgrounds.busy()||motifEditor.busy()||(cfg.custom&&(customBusy||customDirty))||(cfg.text&&fontBusy))throw new Error('请等待模板和图片准备完成后再预览。');if(!outputConfig())throw new Error('请输入有效的宽度和高度。');try{draw(false);return HeartStarWatermark.preview(canvas,document.getElementById('watermarkEnabled').checked)}finally{draw()}}
 function productPreviewSnapshot(){
  if(!selectionBoard().ready||fontBusy||solidBackgroundEditor?.busy()||aiCutoutEditor?.busy())throw new Error('请等待模板和图片准备完成后再生成商品展示图。');
  if(templates[sel.value].text&&!states.some(state=>state.text?.trim()))throw new Error('请先输入并应用文案。');
@@ -354,6 +367,7 @@ function drawCopy(x,y,w,h,size,content){const text=content.trim();if(!text)retur
  ctx.font=`${weight} ${fontSize}px ${family}`;lines=wrapCopy(text,maxWidth);lineHeight=fontSize*1.3;ctx.beginPath();ctx.rect(x-w/2,y-h/2,w,h);ctx.clip();lines.forEach((line,i)=>ctx.fillText(line,x,y+(i-(lines.length-1)/2)*lineHeight));ctx.restore()}
 const photoScale=document.getElementById('photoScale'),photoScaleNumber=document.getElementById('photoScaleNumber'),photoOffsetX=document.getElementById('photoOffsetX'),photoOffsetY=document.getElementById('photoOffsetY'),photoDragMode=document.getElementById('photoDragMode');let photoDrag=null,ignorePhotoClick=false,photoFrameRequest=0;
 const replacePhoto=document.getElementById('replacePhoto'),replacePhotoFile=document.getElementById('replacePhotoFile'),replacedPhotos=new Map(),replacementUrls=new Set();
+const photoLighting=HeartStarPhotoLighting.create();
 let replacementRequest=0,replacementBusy=false,replacementTarget=null,photoUploadRequest=0,photoUploadBusy=false,photoUploadTarget=null;
 function slotPhoto(i){return replacedPhotos.has(i)?replacedPhotos.get(i).image:(photos.length?photos[i%photos.length]:null)}
 function hasSlotPhotos(){return currentSlots().some((_,i)=>slotPhoto(i))}
@@ -374,7 +388,7 @@ function removeSelectedPhotos(){
  const ids=[...selectedSlots].filter(i=>states[i]&&slotPhoto(i));if(!ids.length)return;
  finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementTarget=null;photoUploadTarget=null;replacePhotoFile.value='';filesEl.value='';
  // Keep an explicit empty photo so the original shared source cannot fill this slot again.
- ids.forEach(i=>{replacedPhotos.set(i,{image:null,url:null});delete states[i].photoBackgroundRemoved});
+ ids.forEach(i=>{replacedPhotos.set(i,{image:null,url:null});delete states[i].photoBackgroundRemoved;delete states[i].photoLight});
  releaseUnusedReplacementUrls();updatePhotoControls();draw();say(`已删除所选 ${ids.length} 张照片，图案轮廓和背景保持不变。`);
 }
 function selectedPhotoTarget(){return{template:sel.value,states,request:replacementRequest,ids:[...selectedSlots].filter(i=>states[i]).sort((a,b)=>a-b)}}
@@ -505,7 +519,7 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true){
  const templateImage=motifEditor.source(cfg.custom?cfg.background:base);
  if(!cfg.text){HeartStarBackground.drawTemplate(ctx,cfg,templateImage,states);if(states.some(st=>!st.clip))HeartStarBackground.photoAreas(cfg,templateImage,states)}
  cfg.slots.forEach((p,i)=>{
-  const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=includePhotos?slotPhoto(i):null,fit=!cfg.text&&!st.clip&&!HeartStarBackground.photoOnly(st),f=cfg.text?p:fit?HeartStarBackground.photoFrame(cfg,templateImage,states,i,im):HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
+  const st=states[i]||{size:cfg.text?1:.62,dx:0,dy:0},im=includePhotos?photoLighting.source(slotPhoto(i),st.photoLight||0,st):null,fit=!cfg.text&&!st.clip&&!HeartStarBackground.photoOnly(st),f=cfg.text?p:fit?HeartStarBackground.photoFrame(cfg,templateImage,states,i,im):HeartStarBackground.frame(cfg,templateImage,states,i),x=f.x+st.dx,y=f.y+st.dy,w=f.w*st.size,h=f.h*st.size;
   if(cfg.text)drawCopy(x,y,w,h,st.size,st.text??DEFAULT_COPY);
   else {
    if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage,states)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}
@@ -513,8 +527,8 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true){
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
  });
- ctx.restore();drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoThumbnails?.update();
- download.disabled=exportBusy||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
+ ctx.restore();drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoLightingEditor?.update();photoThumbnails?.update();
+ download.disabled=exportBusy||photoLightingEditor?.busy()||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
  watermarkDownload.disabled=download.disabled;
  sharedLibrary?.changed();
 }
@@ -535,7 +549,7 @@ function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
   if(request!==replacementRequest||target.template!==sel.value||target.states!==states){discard();return}
   replacementBusy=false;
   if(items.some(item=>!item.ready)){discard();say('图片读取失败，原图片已保留，请重新选择。',true);draw();return}
-  ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;if(!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
+  ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;delete states[id].photoLight;if(!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
   releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。`);draw();
  };
  items.forEach(item=>{item.image.onload=()=>{item.ready=true;settle()};item.image.onerror=settle;item.image.src=item.url});
@@ -550,6 +564,7 @@ function crc32(bytes){let c=0xffffffff;for(const b of bytes){c^=b;for(let k=0;k<
 async function addDpiMetadata(blob,dpi){const input=new Uint8Array(await blob.arrayBuffer()),view=new DataView(input.buffer,input.byteOffset,input.byteLength);let pos=8,insertAt=-1;while(pos+12<=input.length){const len=view.getUint32(pos),type=String.fromCharCode(...input.subarray(pos+4,pos+8));if(type==='IHDR'){insertAt=pos+12+len;break}pos+=12+len}if(insertAt<0)throw new Error('找不到 PNG 图像头');const chunk=new Uint8Array(21),v=new DataView(chunk.buffer),ppm=Math.round(dpi/0.0254);v.setUint32(0,9);chunk.set([112,72,89,115],4);v.setUint32(8,ppm);v.setUint32(12,ppm);chunk[16]=1;v.setUint32(17,crc32(chunk.subarray(4,17)));const output=new Uint8Array(input.length+chunk.length);output.set(input.subarray(0,insertAt),0);output.set(chunk,insertAt);output.set(input.subarray(insertAt),insertAt+chunk.length);return new Blob([output],{type:'image/png'})}
 async function exportPng(withWatermark=false){
  if(exportBusy)return;
+ if(photoLightingEditor?.busy()){say('请等待人像补光完成后再导出。',true);return}
  if(motifEditor.busy()){say('请等待图案更换完成。',true);return}
  if(slotBackgrounds.busy()){say('请等待背景图片读取完成。',true);return}
  if(templates[sel.value].custom&&(customBusy||customDirty)){say('请先完成自定义排版。',true);return}
@@ -789,17 +804,21 @@ if(HeartStarTemplateLink.selectInitial(sel,templates,window.location.search))Hea
 const clearSelectionButton=document.getElementById('clearSelection');
 clearSelectionButton.textContent='清空选择 (Esc)';clearSelectionButton.title='取消全部选中（Esc）';clearSelectionButton.setAttribute('aria-keyshortcuts','Escape');
 HeartStarInteractions.createShortcuts({target:document,canClear:()=>selectedSlots.size>0&&!photoDrag&&!backgroundDrag.dragging()&&selectionBoard().ready,onClear:()=>clearSelectionButton.click()});
-function selectionBoard(){const cfg=templates[sel.value],d=renderConfig(),ready=!canvas.hidden&&!exportBusy&&!photoUploadBusy&&!replacementBusy&&!slotBackgrounds.busy()&&!motifEditor.busy()&&!(cfg.custom&&(customBusy||customDirty))&&(cfg.text||cfg.custom?cfg.text||!!cfg.background:base.complete&&!!base.naturalWidth)&&!!d;return{ready:!!ready,token:states,width:cfg.w,height:cfg.h,contentWidthRatio:d?d.contentPxW/d.pxW:1,contentRatio:d?d.contentPxH/d.pxH:1,slots:ready?currentSlots().map((_,i)=>slotFrame(i)):[],states}}
+function selectionBoard(){const cfg=templates[sel.value],d=renderConfig(),ready=!canvas.hidden&&!exportBusy&&!photoLightingEditor?.busy()&&!photoUploadBusy&&!replacementBusy&&!slotBackgrounds.busy()&&!motifEditor.busy()&&!(cfg.custom&&(customBusy||customDirty))&&(cfg.text||cfg.custom?cfg.text||!!cfg.background:base.complete&&!!base.naturalWidth)&&!!d;return{ready:!!ready,token:states,width:cfg.w,height:cfg.h,contentWidthRatio:d?d.contentPxW/d.pxW:1,contentRatio:d?d.contentPxH/d.pxH:1,slots:ready?currentSlots().map((_,i)=>slotFrame(i)):[],states}}
 function solidPhotoBoard(all=false){const cfg=templates[sel.value];return{token:states,
  ready:!cfg.text&&!canvas.hidden&&!exportBusy&&!photoUploadBusy&&!replacementBusy&&!slotBackgrounds.busy()&&!motifEditor.busy()&&!(cfg.custom&&(customBusy||customDirty)),
  ids:cfg.text?[]:all?states.map((_,i)=>i):[...selectedSlots],photoAt:slotPhoto,processedAt:i=>!!states[i]?.photoBackgroundRemoved}}
+const cutoutPhotoBoard=(all=false)=>{const board=solidPhotoBoard(all);return{...board,ready:board.ready&&!photoLightingEditor?.busy()}};
 const solidBackgroundButton=document.createElement('button');solidBackgroundButton.type='button';solidBackgroundButton.id='removeSolidBackground';solidBackgroundButton.className='btn';solidBackgroundButton.style.cssText='width:100%;height:36px;margin-top:8px;font-size:12px';document.getElementById('thumbs').after(solidBackgroundButton);
-const solidBackgroundStore=HeartStarSolidBackground.createStore({getBoard:solidPhotoBoard,apply:applySolidPhotos});
-var solidBackgroundEditor=HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:solidPhotoBoard,report:say,changed:()=>photoThumbnails?.update()});
+const solidBackgroundStore=HeartStarSolidBackground.createStore({getBoard:cutoutPhotoBoard,apply:applySolidPhotos});
+var solidBackgroundEditor=HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:()=>photoThumbnails?.update()});
 const aiCutoutButton=document.createElement('button');aiCutoutButton.type='button';aiCutoutButton.id='aiCutout';aiCutoutButton.className='btn';aiCutoutButton.title='联网调用 AI 抠图服务去除照片背景，同图重复处理免费';aiCutoutButton.style.cssText='width:100%;height:36px;margin-top:8px;font-size:12px';solidBackgroundButton.after(aiCutoutButton);
-var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:solidPhotoBoard,report:say,changed:()=>photoThumbnails?.update()});
+var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:()=>photoThumbnails?.update()});
+var photoLightingEditor=HeartStarPhotoLightingControls.mount({root:document.getElementById('photoLightingField'),processor:photoLighting,
+ getBoard:()=>{const board=solidPhotoBoard();return{...board,states,ready:board.ready&&!solidBackgroundEditor?.busy()&&!aiCutoutEditor?.busy()}},
+ apply:(ids,strength)=>{ids.forEach(id=>{if(strength)states[id].photoLight=strength;else delete states[id].photoLight});draw()},changed:draw,report:say});
 document.getElementById('thumbs').classList.add('photo-thumbnails');
-var photoThumbnails=HeartStarPhotoThumbnails.create({container:document.getElementById('thumbs'),getBoard:()=>({...solidPhotoBoard(true),ready:solidPhotoBoard(true).ready&&!solidBackgroundEditor.busy()&&!aiCutoutEditor.busy()}),isProcessed:solidBackgroundStore.isProcessed,canRestore:solidBackgroundStore.isProcessed,process:ids=>solidBackgroundEditor.process(ids),restore:ids=>solidBackgroundEditor.restore(ids)});
+var photoThumbnails=HeartStarPhotoThumbnails.create({container:document.getElementById('thumbs'),getBoard:()=>({...cutoutPhotoBoard(true),ready:cutoutPhotoBoard(true).ready&&!solidBackgroundEditor.busy()&&!aiCutoutEditor.busy()}),displayImage:(image,id)=>photoLighting.source(image,states[id]?.photoLight||0,states[id]),isProcessed:solidBackgroundStore.isProcessed,canRestore:solidBackgroundStore.isProcessed,process:ids=>solidBackgroundEditor.process(ids),restore:ids=>solidBackgroundEditor.restore(ids)});
 HeartStarInteractions.createSelection({canvas,surface:previewPanel,getBoard:selectionBoard,isPhotoDrag:()=>photoDragMode.checked||backgroundDragMode.checked,onStart:()=>{ignorePhotoClick=false},onSelection:(ids,append)=>{selectedSlots=append?new Set([...selectedSlots,...ids]):new Set(ids);if(!selectedSlots.has(selectedSlot))selectedSlot=[...selectedSlots].sort((a,b)=>a-b)[0]??0;multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;ignorePhotoClick=true;if(templates[sel.value].text)showCopyTab('edit');updateControls();requestPhotoDraw()},canResize:()=>selectionBoard().ready&&!templates[sel.value].text&&!!selectedSlots.size,onResize:delta=>{HeartStarInteractions.resizeSelection(states,selectedSlots,delta);updateControls();requestPhotoDraw()}});
 
 sel.addEventListener('change',loadTemplate);slotSelect.addEventListener('change',()=>{selectedSlot=Number(slotSelect.value);selectedSlots=new Set([selectedSlot]);multiMode=false;document.getElementById('multiMode').checked=false;updateControls();draw()});document.getElementById('multiMode').addEventListener('change',e=>{multiMode=e.target.checked;if(!selectedSlots.size)selectedSlots.add(selectedSlot);if(!multiMode){selectedSlot=[...selectedSlots].sort((a,b)=>a-b)[0];selectedSlots=new Set([selectedSlot])}updateControls();draw()});document.getElementById('selectAll').addEventListener('click',()=>{multiMode=true;document.getElementById('multiMode').checked=true;selectedSlots=new Set(currentSlots().map((_,i)=>i));selectedSlot=0;updateControls();draw()});document.getElementById('clearSelection').addEventListener('click',()=>{selectedSlots.clear();updateControls();draw()});canvas.addEventListener('click',event=>{if(ignorePhotoClick){ignorePhotoClick=false;return}chooseAtCanvas(event)});filesEl.addEventListener('change',e=>setFiles(e.target.files));scale.addEventListener('input',()=>setSelectedSize(scale.value));sizeNumber.addEventListener('change',()=>setSelectedSize(sizeNumber.value));sizeNumber.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();setSelectedSize(sizeNumber.value);sizeNumber.blur()}});clip.addEventListener('change',()=>setSelectedClip(clip.checked));clipShape.addEventListener('change',()=>setSelectedShape(clipShape.value));document.querySelectorAll('[data-move]').forEach(b=>b.addEventListener('click',()=>{const [mx,my]=b.dataset.move.split(',').map(Number),step=Number(document.getElementById('moveStep').value);copyChange(()=>selectedSlots.forEach(i=>{const st=states[i];st.dx=Math.max(-200,Math.min(200,st.dx+mx*step));st.dy=Math.max(-200,Math.min(200,st.dy+my*step))}),'move-'+[...selectedSlots].join(','));updateControls();draw()}));document.getElementById('resetPosition').addEventListener('click',()=>{copyChange(()=>selectedSlots.forEach(i=>states[i]={...states[i],size:templates[sel.value].text?1:.62,dx:0,dy:0,shape:'template'}));updateControls();draw()});[widthInput,heightInput,dpiInput].forEach(e=>e.addEventListener('input',()=>{if(updateCanvasSize())draw()}));drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('drag')});drop.addEventListener('dragleave',()=>drop.classList.remove('drag'));drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('drag');setFiles(e.dataTransfer.files)});document.getElementById('clear').addEventListener('click',()=>{photoUploadRequest++;photoUploadBusy=false;clearReplacedPhotos();photos=[];urls.forEach(URL.revokeObjectURL);urls=[];thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];filesEl.value='';document.getElementById('thumbs').replaceChildren();say('图片已清空。');draw()});download.addEventListener('click',exportPng);loadTemplate();

@@ -257,6 +257,7 @@ describe('heart-star predefined photo placement', () => {
     const calls: any[] = []
     let clips = 0
     const env = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, aiCutoutEditor: undefined, photoThumbnails: undefined,
+      photoLightingEditor: undefined, photoLighting: { source: (image: any) => image },
       photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
       states: [{ size: .62, dx: 0, dy: 0, imageScale: 1 }], slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false },
       updateMotifControls() {}, updateCanvasSize: () => true, canvas: { width: 10, height: 10 },
@@ -287,6 +288,7 @@ describe('heart-star predefined photo placement', () => {
     const calls: any[] = [], borders: number[][] = []
     let currentPhoto: typeof photo | null = null
     const env = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, aiCutoutEditor: undefined, photoThumbnails: undefined,
+      photoLightingEditor: undefined, photoLighting: { source: (image: any) => image },
       photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
       states: [{ size: .62, dx: 0, dy: 0, imageScale: 1 }], slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false },
       updateMotifControls() {}, updateCanvasSize: () => true, canvas: { width: 13, height: 13 },

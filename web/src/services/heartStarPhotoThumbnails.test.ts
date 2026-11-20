@@ -1,17 +1,17 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-function setup() {
+function setup(displayImage?: (image: any, id: number) => any) {
   class Element {
     children: Element[] = []; listeners: Record<string, Function> = {}
     textContent = ''; className = ''; disabled = false; hidden = false
-    width = 0; height = 0; open = false
+    width = 0; height = 0; open = false; drawnImage: any
     append(...items: Element[]) { this.children.push(...items) }
     replaceChildren(...items: Element[]) { this.children = items }
     setAttribute() {}
     addEventListener(name: string, fn: Function) { this.listeners[name] = fn }
     click() { this.listeners.click?.() }
-    getContext() { return { drawImage() {} } }
+    getContext() { return { drawImage: (image: any) => { this.drawnImage = image } } }
     showModal() { this.open = true }
     close() { this.open = false }
   }
@@ -22,7 +22,7 @@ function setup() {
   const scope: any = {}, path = new URL('../../public/embedded/heart-star/photo-thumbnails.js', import.meta.url)
   new Function('globalThis', 'document', existsSync(path) ? readFileSync(path, 'utf8') : '')(scope, document)
   expect(scope.HeartStarPhotoThumbnails, 'thumbnail controls are registered').toBeDefined()
-  const feature = scope.HeartStarPhotoThumbnails.create({ container,
+  const feature = scope.HeartStarPhotoThumbnails.create({ container, displayImage,
     getBoard: () => ({ token, ready, ids: photos.map((_, i) => i), photoAt: (id: number) => photos[id], processedAt: (id: number) => marked.has(id) }),
     isProcessed: (image: any) => processed.has(image), canRestore: (image: any) => processed.has(image),
     process: (ids: number[]) => processedIds.push(ids), restore: (ids: number[]) => restoredIds.push(ids) })
@@ -33,6 +33,19 @@ function setup() {
 }
 
 describe('manual photo background controls in upload thumbnails', () => {
+  it('shows portrait lighting in thumbnails and zoom without changing the original cutout target', () => {
+    const lit = { width: 80, height: 80 }
+    const s = setup((image, id) => id === 0 ? lit : image); s.feature.update()
+    expect(s.container.children).toHaveLength(3)
+    expect(s.container.children[0]!.children[0]!.drawnImage).toBe(lit)
+    expect(s.text()).toContain('已补光')
+    s.container.children[0]!.children[0]!.click()
+    const dialog = s.document.body.children[0]!
+    expect(dialog.children[0]!.children[0]!.textContent).toContain('已补光')
+    expect(dialog.children[1]!.children[0]!.drawnImage).toBe(lit)
+    s.button(s.container.children[0]!).click()
+    expect(s.processedIds).toEqual([[0, 1]])
+  })
   it('does not process on upload and directly processes only the clicked photo and all its uses', () => {
     const s = setup(); s.feature.update()
     expect(s.container.children).toHaveLength(2)

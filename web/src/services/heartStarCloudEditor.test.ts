@@ -17,6 +17,9 @@ describe('heart-star cloud editor bridge', () => {
     const editor = feature(), data = { template: { w: 200, h: 300, slots: [{ x: 40, y: 50, w: 20, h: 20 }], image: { naturalWidth: 200, naturalHeight: 300 } },
       states: [{ size: .62, dx: 0, dy: 0 }], photos: [null], settings: { width: 144, height: 210, dpi: 600 } }
     expect(() => editor.validate(data, {})).not.toThrow()
+    expect(() => editor.validate({ ...data, states: [{ photoLight: 100 }] }, {})).not.toThrow()
+    for (const photoLight of [-1, 201, NaN, Infinity, '100'])
+      expect(() => editor.validate({ ...data, states: [{ photoLight }] }, {})).toThrow()
     expect(() => editor.validate({ ...data, states: [{ motif: { assetId: 'missing' } }] }, {})).toThrow()
     expect(() => editor.validate({ ...data, settings: { width: 1e9, height: 210, dpi: 600 } }, {})).toThrow()
     expect(() => editor.validate({ ...data, template: { ...data.template, image: null } }, {})).toThrow()

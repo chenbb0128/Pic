@@ -104,6 +104,14 @@ describe('heart-star selected photo upload', () => {
     expect(s.states[0]).toEqual({ imageScale: 2, imageDx: 7 })
   })
 
+  it('clears the old lighting when replacing a portrait and retains lighting on other positions', () => {
+    const s = setup([1])
+    Object.assign(s.states[0]!, { photoLight: 70 }); Object.assign(s.states[1]!, { photoLight: 150 })
+    s.upload([s.file('new')]); s.images[0].onload()
+    expect(s.states[1]).not.toHaveProperty('photoLight')
+    expect(s.states[0]).toHaveProperty('photoLight', 70)
+  })
+
   it('assigns multiple files in board order, regardless of selection order', () => {
     const s = setup([3, 1])
     s.upload([s.file('a'), s.file('b')])

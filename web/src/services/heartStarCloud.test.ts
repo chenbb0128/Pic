@@ -11,7 +11,7 @@ function setup() {
     loadImage: async (id: string) => ({ isImage: true, restoredId: id }),
   })
   const photo = { isImage: true, name: 'customer' }, base = { isImage: true, name: 'artwork' }
-  const state = { size: .62, dx: 6, dy: -8, imageScale: 1.4,
+  const state = { size: .62, dx: 6, dy: -8, imageScale: 1.4, photoLight: 125,
     background: { type: 'image', image: base, scale: 2, dx: 20, dy: -4 },
     motif: { assetId: 'mint-star', image: base, frame: { x: 40, y: 50, w: 20, h: 30 } } }
   const input = { template: { w: 200, h: 300, slots: [{ x: 40, y: 50, w: 20, h: 30 }], image: base },
@@ -28,6 +28,7 @@ describe('shared heart-star snapshots', () => {
     const snapshot = await promise
     expect(snapshot.schemaVersion).toBe(1)
     expect(snapshot.states[0].dx).toBe(6)
+    expect(snapshot.states[0].photoLight).toBe(125)
     expect(snapshot.settings).toMatchObject({ dpi: 600, footerText: 'ABC', numberingEnabled: true })
     expect(snapshot.states[0].background).toMatchObject({ scale: 2, dx: 20, dy: -4 })
     expect(snapshot.photos[0]).toEqual({ fileId: '00000000000000000000000000000002' })
@@ -45,7 +46,7 @@ describe('shared heart-star snapshots', () => {
   it('restores images, motif frames and transforms without computing a new layout', async () => {
     const s = setup(), snapshot = await s.codec.capture(s.input, 'project')
     const restored = await s.codec.restore(snapshot)
-    expect(restored.states[0]).toMatchObject({ size: .62, dx: 6, dy: -8, imageScale: 1.4,
+    expect(restored.states[0]).toMatchObject({ size: .62, dx: 6, dy: -8, imageScale: 1.4, photoLight: 125,
       motif: { assetId: 'mint-star', frame: { x: 40, y: 50, w: 20, h: 30 } } })
     expect(restored.photos[0].restoredId).toBe('00000000000000000000000000000002')
     expect(restored.template.image).toBe(restored.states[0].background.image)

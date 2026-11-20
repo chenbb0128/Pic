@@ -16,7 +16,7 @@ function setup() {
     footerPrefix: { value: 'ch' }, sheetTotal: { value: '1' }, sheetIndex: { value: '1' },
     sel: { value: 'heart.png' }, templates: { 'heart.png': {} },
     exportBusy: false, customBusy: false, customDirty: false, slotBackgrounds: { busy: () => false },
-    motifEditor: { busy: () => false },
+    motifEditor: { busy: () => false }, photoLightingEditor: undefined,
     draw(_selection = true, fullResolution = false) {
       const d = env.renderConfig(fullResolution)
       env.canvas.width = d.pxW; env.canvas.height = d.pxH
@@ -48,6 +48,14 @@ function setup() {
 }
 
 describe('heart-star numbering and DPI export', () => {
+  it('waits for portrait lighting before downloading and retains the order number', async () => {
+    const { env, feature, downloads, messages } = setup()
+    env.photoLightingEditor = { busy: () => true }
+    await feature.exportPng()
+    expect(downloads).toEqual([])
+    expect(messages.join('')).toContain('补光')
+    expect(env.footerText.value).toBe('订单001')
+  })
   it('adds a 3 mm strip on the right for landscape output without shrinking the artwork', async () => {
     const { env, feature, downloads, geometry, paintedText } = setup()
     env.widthInput.value = '210'
