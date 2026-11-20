@@ -6,6 +6,7 @@ pub mod cutout;
 mod data_dir;
 pub mod mysql;
 mod material_export;
+mod network_drivers;
 mod qiniu_settings;
 mod qiniu_store;
 mod qiniu_sync;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub data_root: PathBuf,
     pub port: u16,
     pub(crate) qiniu: Arc<qiniu_sync::Sync>,
+    pub(crate) cloud: Arc<cloud::Sync>,
 }
 
 pub fn run() {
@@ -48,12 +50,15 @@ pub fn run() {
             let store = Arc::new(opened.with_qiniu(qiniu_settings.enabled));
             let qiniu = Arc::new(qiniu_sync::Sync::new(qiniu_settings, &credential));
             let legacy = qiniu.legacy();
+            let cloud = Arc::new(cloud::Sync::new());
+            let cloud_for_events = cloud.clone();
             let port = 9222u16;
             app.manage(AppState {
                 store: store.clone(),
                 data_root: data_root.clone(),
                 port,
                 qiniu: qiniu.clone(),
+                cloud: cloud.clone(),
             });
             qiniu.start(app.handle().clone(), store.clone(), data_root.clone());
 
@@ -113,7 +118,7 @@ pub fn run() {
                                 let _ = handle.emit("paidan:ingested", &event);
                                 continue;
                             }
-                            // 同步推送：MySQL（唯一主库）+ MinIO（可选文件通道）
+                            // MySQL 直连与对象存储各自同步。
                             {
                                 let store = store_for_events.clone();
                                 let root = root_for_events.clone();
@@ -131,28 +136,10 @@ pub fn run() {
                                     }
                                 });
                             }
-                            {
-                                let store = store_for_events.clone();
-                                let root = root_for_events.clone();
-                                let order_number = order_number.clone();
-                                let image_id = image_id.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    let config = cloud::load_config(&root);
-                                    if !(config.enabled && config.valid()) {
-                                        return;
-                                    }
-                                    let s3 = cloud::S3Client::new(&config);
-                                    if let Err(error) = cloud::push_order(
-                                        &store,
-                                        &s3,
-                                        &order_number,
-                                        Some(&[image_id]),
-                                    )
-                                    .await
-                                    {
-                                        eprintln!("[cloud] 推送失败 {order_number}: {error}");
-                                    }
-                                });
+                            if let Err(error) = cloud_for_events.enqueue(
+                                &store_for_events, &root_for_events, order_number, image_id, true,
+                            ) {
+                                eprintln!("[cloud] 排单加入上传队列失败 {order_number}: {error}");
                             }
                             let _ = handle.emit("paidan:ingested", &event);
                         }
@@ -166,16 +153,37 @@ pub fn run() {
             if !legacy {
                 return Ok(());
             }
-            // 同步启动回填：本地订单推到 MySQL（唯一主库）+ MinIO（可选）
-            let backfill_root = data_root.clone();
+            let cloud_store = poll_store.clone();
+            let cloud_root = data_root.clone();
+            let cloud_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let config = cloud::load_config(&backfill_root);
-                if config.enabled && config.valid() {
-                    let s3 = cloud::S3Client::new(&config);
-                    if let Err(error) = cloud::backfill_push(&backfill_store, &s3).await {
-                        eprintln!("[cloud] 回填失败: {error}");
+                if let Err(error) = cloud.backfill(&cloud_store, &cloud_root, true).await {
+                    eprintln!("[cloud] 启动回填失败: {error}");
+                }
+                loop {
+                    match cloud.cycle(&cloud_store, &cloud_root).await {
+                        Ok(notices) => {
+                            for notice in notices {
+                                let _ = cloud_handle.emit("paidan:cloud-imported", serde_json::json!({
+                                    "orderNumber": notice.order_number,
+                                    "newImages": notice.new_images,
+                                    "newProductions": 0,
+                                }));
+                            }
+                        }
+                        Err(error) => eprintln!("[cloud] 同步失败: {error}"),
+                    }
+                    let interval = cloud::load_config(&cloud_root).poll_seconds.max(10);
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {},
+                        _ = cloud.wake.notified() => {},
                     }
                 }
+            });
+
+            // MySQL 同步启动回填。
+            let backfill_root = data_root.clone();
+            tauri::async_runtime::spawn(async move {
                 let mysql_config = mysql::load_config(&backfill_root);
                 if mysql_config.enabled && mysql_config.valid() {
                     let client = mysql::MyClient::new(&mysql_config);
@@ -186,12 +194,12 @@ pub fn run() {
                 }
             });
 
-            // 同步轮询拉取：MySQL（唯一主库）+ MinIO（可选），制作机感知最新订单/成品
+            // 独立轮询 MySQL 订单和成品。
             let poll_root = data_root.clone();
             tauri::async_runtime::spawn(async move {
-                let mut sleep_secs: u64 = 10;
                 loop {
                     let mysql_config = mysql::load_config(&poll_root);
+                    let mut sleep_secs = 10;
                     if mysql_config.enabled && mysql_config.valid() {
                         let client = mysql::MyClient::new(&mysql_config);
                         match client.pull_all(&poll_store, &poll_root).await {
@@ -211,32 +219,7 @@ pub fn run() {
                         }
                         sleep_secs = mysql_config.poll_seconds.max(10);
                     }
-                    let config = cloud::load_config(&poll_root);
-                    if config.enabled && config.valid() {
-                        let s3 = cloud::S3Client::new(&config);
-                        match cloud::pull_all(&poll_store, &s3).await {
-                            Ok(notices) => {
-                                for notice in notices {
-                                    let _ = poll_handle.emit(
-                                        "paidan:cloud-imported",
-                                        serde_json::json!({
-                                            "orderNumber": notice.order_number,
-                                            "newImages": notice.new_images,
-                                            "newProductions": 0,
-                                        }),
-                                    );
-                                }
-                            }
-                            Err(error) => eprintln!("[cloud] 拉取失败: {error}"),
-                        }
-                        if config.poll_seconds.max(10) < sleep_secs {
-                            sleep_secs = config.poll_seconds.max(10);
-                        }
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(
-                        if mysql_config.enabled || config.enabled { sleep_secs } else { 10 },
-                    ))
-                    .await;
+                    tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;
                 }
             });
 
@@ -256,6 +239,7 @@ pub fn run() {
             commands::save_cloud_config,
             commands::cloud_test,
             commands::cloud_sync_now,
+            commands::cloud_backfill,
             commands::get_mysql_config,
             commands::save_mysql_config,
             commands::mysql_test,

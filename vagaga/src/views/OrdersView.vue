@@ -160,7 +160,6 @@ const busyImageId = ref('')
 const lastInjectedOrder = ref<string | null>(null)
 let lastInjectedImageId: string | null = null
 const numberingDrafts = new Map<string, { prefix: string; value: string }>()
-let pendingInjection: { orderNumber: string; imageId: string } | null = null
 const lastExport = ref<Production | null>(null)
 const exportStatus = computed(() => {
   const saved = lastExport.value
@@ -205,13 +204,16 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary)
 }
 
-async function injectImage(img: OrderImage, orderNumber: string, templateId?: string) {
+async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumber' | 'metadata'>, templateId?: string) {
   const blocked = makeBlockReason(img)
   if (blocked) {
     status.value = blocked
     return
   }
   if (busyImageId.value) return
+  const { orderNumber, metadata } = order
+  const layoutNumber = parseMeta(metadata)?.layoutNumber ?? null
+  const template = templateId ? webIdOf(templateId) : ''
   busyImageId.value = img.id
   status.value = `正在读取「${img.originalName}」…`
   try {
@@ -238,8 +240,8 @@ async function injectImage(img: OrderImage, orderNumber: string, templateId?: st
         numberingDrafts.delete(editingOrder)
       }
     }
-    const targetUrl = templateId
-      ? `${EDITOR_URL}?template=${encodeURIComponent(templateId)}`
+    const targetUrl = template
+      ? `${EDITOR_URL}?template=${encodeURIComponent(template)}`
       : editorSrc.value || EDITOR_URL
     if (editorSrc.value !== targetUrl) {
       lastInjectedOrder.value = null
@@ -249,7 +251,7 @@ async function injectImage(img: OrderImage, orderNumber: string, templateId?: st
     }
     status.value = `正在注入「${img.originalName}」…`
 
-    const isReady = () => editorReady.value && frame.value?.contentWindow?.__picTemplateLoaded === true
+    const isReady = () => editorReady.value && typeof frame.value?.contentWindow?.__picDoInject === 'function'
     if (!isReady()) {
       const ready = await new Promise<boolean>(resolve => {
         const timer = setInterval(() => {
@@ -264,27 +266,28 @@ async function injectImage(img: OrderImage, orderNumber: string, templateId?: st
           resolve(false)
         }, 10000)
       })
-      if (!ready) throw new Error('模板加载超时，请重试。')
+      if (!ready) throw new Error('编辑器加载超时，请重试。')
     }
 
     const fw = frame.value?.contentWindow
     if (typeof fw?.__picDoInject !== 'function') throw new Error('编辑器尚未就绪，请重试。')
-    pendingInjection = { orderNumber, imageId: img.id }
-    const order = store.orders.find(item => item.orderNumber === orderNumber)
-    fw.__picDoInject({
+    await fw.__picDoInject({
       b64,
       name: img.originalName || 'order-image.png',
       mime: blob.type || 'image/png',
-      template: templateId ?? '',
+      template,
       orderNumber,
-      layoutNumber: parseMeta(order?.metadata)?.layoutNumber ?? null,
+      layoutNumber,
       numberingDraft: numberingDrafts.get(orderNumber),
     })
+    lastInjectedOrder.value = orderNumber
+    lastInjectedImageId = img.id
+    lastExport.value = null
+    status.value = '素材已注入编辑器，请排版调整后导出。'
   } catch (error) {
-    pendingInjection = null
     status.value = String(error)
   } finally {
-    if (!pendingInjection) busyImageId.value = ''
+    busyImageId.value = ''
   }
 }
 
@@ -299,27 +302,8 @@ async function onMessage(event: MessageEvent) {
         b64?: string
         fileName?: string
         action?: string
-        message?: string
-        ready?: boolean
       }
     | null
-  if (data?.type === 'pic-make-done') {
-    if (pendingInjection) {
-      lastInjectedOrder.value = pendingInjection.orderNumber
-      lastInjectedImageId = pendingInjection.imageId
-      pendingInjection = null
-      busyImageId.value = ''
-      lastExport.value = null
-    }
-    status.value = '素材已注入编辑器，请排版调整后导出。'
-    return
-  }
-  if (data?.type === 'pic-make-inject-error') {
-    pendingInjection = null
-    busyImageId.value = ''
-    status.value = `素材注入失败：${data.message}`
-    return
-  }
   if (data?.type === 'heart-star-toolbar' && data.action === 'shortcuts') {
     showShortcutGuide.value = true
     return
@@ -576,7 +560,7 @@ function orderProductions(orderNumber: string): Production[] {
                         class="makeBtn"
                         :disabled="!!busyImageId || !!makeBlockReason(img)"
                         :title="makeBlockReason(img) || `注入素材并切换到 ${codeOf(t.templateId)} 模板`"
-                        @click.stop="injectImage(img, entry.summary.orderNumber, t.templateId)"
+                        @click.stop="injectImage(img, entry.summary, t.templateId)"
                       >制作</button>
                     </span>
                   </div>
@@ -613,7 +597,7 @@ function orderProductions(orderNumber: string): Production[] {
                     class="miniBtn make"
                     :disabled="!!busyImageId || !!makeBlockReason(img)"
                     :title="makeBlockReason(img) || `注入素材并切换到 ${codeOf(t.templateId)} 模板`"
-                    @click.stop="injectImage(img, entry.summary.orderNumber, t.templateId)"
+                    @click.stop="injectImage(img, entry.summary, t.templateId)"
                   >{{ codeOf(t.templateId) }} × {{ t.quantity }}</button>
                 </div>
                 <div class="panelRow" v-if="canEditTemplates">

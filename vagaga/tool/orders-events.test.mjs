@@ -10,6 +10,7 @@ const storeSource = readFileSync(new URL('../src/stores/orders.ts', import.meta.
 const viewSource = compileScript(parse(readFileSync(
   new URL('../src/views/OrdersView.vue', import.meta.url), 'utf8',
 )).descriptor, { id: 'orders-events-test' }).content
+const editorSource = readFileSync(new URL('../public/embedded/heart-star/index.html', import.meta.url), 'utf8')
 const flush = () => new Promise(resolve => setImmediate(resolve))
 const image = id => ({ id, filePath: `D:/app/data/images/${id}.png`, thumbnailPath: null,
   originalName: `${id}.png`, byteLength: 100, width: 10, height: 10,
@@ -17,6 +18,127 @@ const image = id => ({ id, filePath: `D:/app/data/images/${id}.png`, thumbnailPa
 const order = (id, images = []) => ({ id, orderNumber: `ORDER-${id}`, images,
   imageCount: images.length, taskCount: 0, createdAt: '2026-11-19T12:00:00',
   updatedAt: '2026-11-19T12:00:00', metadata: null })
+
+function editorFixture() {
+  const between = (start, end) => editorSource.slice(editorSource.indexOf(start), editorSource.indexOf(end))
+  const field = value => Object.assign(new EventTarget(), { value })
+  const prefix = field('ch')
+  prefix.options = ['ch', 'yy', 'x'].map(value => ({ value }))
+  const input = field('')
+  const output = { textContent: '' }
+  const template = field('preset.png')
+  const controls = {
+    footerPrefix: prefix, footerText: input, exportFilename: output, template,
+    numberingEnabled: { checked: true }, sheetTotal: { value: '1' }, sheetIndex: { value: '1' },
+  }
+  const photos = new Map()
+  const images = []
+  const downloads = []
+  const frame = Object.assign(new EventTarget(), { __picTemplateLoaded: true })
+  const canvas = { width: 1, height: 1, toBlob: done => done(new Blob(['fixture'])) }
+  const dimensions = { totalW: 100, totalH: 100, dpi: 300 }
+  const context = vm.createContext({
+    window: frame, Event, File, TextEncoder, atob,
+    setTimeout: (callback, delay) => setTimeout(callback, delay).unref(), clearTimeout,
+    document: {
+      getElementById: id => controls[id],
+      createElement: () => ({ click() { downloads.push(this.download) } }),
+    },
+    Image: class { set src(value) { images.push(this) } },
+    URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
+    sel: template, templates: { 'preset.png': {} }, states: [{}],
+    photoUploadTarget: null, photoUploadBusy: false, replacementRequest: 0,
+    replacementUrls: new Set(), replacedPhotos: photos,
+    HeartStarBackground: { photoOnly: () => false },
+    selectedPhotoTarget: () => ({
+      template: template.value, states: context.states, request: context.replacementRequest, ids: [0],
+    }),
+    draw() {}, updatePhotoControls() {}, finishPhotoDrag() {}, say() {},
+    releaseUnusedReplacementUrls() {}, renderThumbs() {}, updateControls() {},
+    canvas, exportBusy: false, outputConfig: () => dimensions, renderConfig: () => dimensions,
+    portraitConfig: config => config, portraitCanvas: source => source, addDpiMetadata: async blob => blob,
+    motifEditor: { busy: () => false }, slotBackgrounds: { busy: () => false },
+    HeartStarWatermark: { preview: source => source },
+  })
+  const bridge = [...editorSource.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+    .map(([, source]) => source).find(source => source.includes('window.__picDoInject ='))
+  vm.runInContext([
+    between('const footerHeightMm=', 'function drawFooter('),
+    between('async function setFiles(', 'function applySolidPhotos('),
+    between('async function exportPng(', 'const customAssets='),
+    bridge,
+  ].join('\n'), context)
+  return { frame, photos, images, prefix, input, output, downloads, exportPng: context.exportPng }
+}
+
+test('the editor fills its actual numbering controls when the photo finishes loading', async () => {
+  const editor = editorFixture()
+  const { frame, photos, images, prefix, input, output } = editor
+  const pending = frame.__picDoInject({
+    b64: 'AA==', name: 'fixture.png', mime: 'image/png',
+    template: 'preset.png', orderNumber: 'ORDER-one', layoutNumber: 'CH-0007a',
+  })
+  await flush()
+  assert.equal(input.value, '')
+  assert.equal(photos.size, 0)
+  images.shift().onload()
+  await pending
+  assert.equal(photos.size, 1)
+  assert.equal(prefix.value, 'ch')
+  assert.equal(input.value, '0007a')
+  assert.match(output.textContent, /^ch-\d{8}-0007a .*_preset_100x100mm_300dpi\.png$/)
+})
+
+test('the editor does not apply another order number when the image cannot be read', async () => {
+  const { frame, images, input } = editorFixture()
+  input.value = 'previous'
+  const pending = frame.__picDoInject({
+    b64: 'AA==', name: 'fixture.png', mime: 'image/png',
+    template: 'preset.png', orderNumber: 'ORDER-second', layoutNumber: 'yy-0074',
+  })
+  await flush()
+  images.shift().onerror()
+  await assert.rejects(Promise.resolve(pending), /图片/)
+  assert.equal(input.value, 'previous')
+})
+
+test('making waits for the current template before it starts loading the order image', async () => {
+  const { frame, images, input } = editorFixture()
+  frame.__picTemplateLoaded = false
+  const pending = frame.__picDoInject({
+    b64: 'AA==', name: 'fixture.png', mime: 'image/png',
+    template: 'preset.png', orderNumber: 'ORDER-two', layoutNumber: 'x-002',
+  })
+  await flush()
+  assert.equal(images.length, 0)
+  frame.__picTemplateLoaded = true
+  frame.dispatchEvent(new Event('pic-template-ready'))
+  await flush()
+  assert.equal(images.length, 1)
+  images.shift().onload()
+  await pending
+  assert.equal(input.value, '002')
+})
+
+test('formal PNG download clears the saved draft after the watermarked preview preserves it', async () => {
+  const { frame, images, input, downloads, exportPng } = editorFixture()
+  const pending = frame.__picDoInject({
+    b64: 'AA==', name: 'fixture.png', mime: 'image/png',
+    template: 'preset.png', orderNumber: 'ORDER-one', layoutNumber: 'ch-001',
+  })
+  await flush()
+  images.shift().onload()
+  await pending
+  input.value = '0009'
+  input.dispatchEvent(new Event('input'))
+  await exportPng(true)
+  assert.match(downloads[0], /^ch-\d{8}-0009 .*_水印预览\.png$/)
+  assert.equal(frame.__picReadOrderNumbering().value, '0009')
+  await exportPng()
+  assert.match(downloads[1], /^ch-\d{8}-0009 .*_preset_100x100mm_300dpi\.png$/)
+  assert.equal(input.value, '')
+  assert.equal(frame.__picReadOrderNumbering(), null)
+})
 
 function environment(t) {
   let rows = [], timerId = 0, delayedDetail = null
@@ -196,19 +318,18 @@ test('Qiniu production checks the local original and exports with its source ima
   env.fetchImage(async () => ({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }))
   await env.store.refreshQiniuStatus()
   const view = await env.mountView()
-  const frame = { __picTemplateLoaded: true, __picDoInject() {} }
+  const frame = { async __picDoInject() {} }
   view.frame.value = vue.markRaw({ contentWindow: frame })
   view.editorSrc.value = '/embedded/heart-star/index.html'
   view.editorReady.value = true
-  await view.injectImage({ ...image('scaled'), sourceQuality: 'scaled' }, 'ORDER-scaled')
+  await view.injectImage({ ...image('scaled'), sourceQuality: 'scaled' }, order('scaled'))
   assert.equal(view.lastInjectedOrder.value, null)
   assert.match(view.status.value, /原图/)
-  await view.injectImage({ ...image('unknown'), sourceQuality: 'unknown' }, 'ORDER-unknown')
+  await view.injectImage({ ...image('unknown'), sourceQuality: 'unknown' }, order('unknown'))
   assert.equal(view.lastInjectedOrder.value, null)
-  await view.injectImage({ ...image('original'), sourceQuality: 'original' }, 'ORDER-one')
-  await view.onMessage({ source: frame, data: { type: 'pic-make-done' } })
+  await view.injectImage({ ...image('original'), sourceQuality: 'original' }, order('one'))
   env.fetchImage(async () => ({ ok: false, status: 404 }))
-  await view.injectImage({ ...image('missing'), sourceQuality: 'original' }, 'ORDER-missing', 'new-template')
+  await view.injectImage({ ...image('missing'), sourceQuality: 'original' }, order('missing'), 'new-template')
   assert.equal(view.editorSrc.value, '/embedded/heart-star/index.html')
   assert.equal(view.lastInjectedOrder.value, 'ORDER-one')
   await view.onMessage({ source: frame, data: { type: 'pic-make-exported', b64: 'png', fileName: '成品.png' } })
@@ -220,8 +341,7 @@ test('Qiniu production checks the local original and exports with its source ima
   await flush()
   assert.match(view.exportStatus.value, /已同步服务器/)
   env.fetchImage(async () => ({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }))
-  await view.injectImage(image('historical'), 'ORDER-historical')
-  await view.onMessage({ source: frame, data: { type: 'pic-make-done' } })
+  await view.injectImage(image('historical'), order('historical'))
   assert.equal(view.lastInjectedOrder.value, 'ORDER-historical')
 })
 
@@ -244,39 +364,43 @@ test('local order search matches partial order numbers and layout codes', async 
   assert.equal(view.visibleEntries.value.length, 2)
 })
 
-test('making receives the order number, the remark code and the corresponding manual draft', async t => {
+test('making uses the clicked order remark and restores that order’s deliberately blank draft', async t => {
   const env = environment(t)
   await env.store.refreshQiniuStatus()
   env.rows([
-    { ...order('one'), metadata: '{"layoutNumber":"yy-00123"}' },
+    { ...order('one'), metadata: '{"layoutNumber":"CH-00123"}' },
     order('two'),
   ])
   await env.store.loadOrders()
   env.fetchImage(async () => ({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }))
   const view = await env.mountView()
-  const injections = []
-  let edited = null
-  const frame = {
-    __picTemplateLoaded: true,
-    __picDoInject: data => injections.push(data),
-    __picReadOrderNumbering: () => edited,
-  }
+  const { frame, images, input, prefix } = editorFixture()
   view.frame.value = vue.markRaw({ contentWindow: frame })
   view.editorSrc.value = '/embedded/heart-star/index.html'
   view.editorReady.value = true
-  const make = async number => {
-    await view.injectImage(image('fixture'), number)
-    await view.onMessage({ source: frame, data: { type: 'pic-make-done' } })
+  const make = async summary => {
+    const pending = view.injectImage(image('fixture'), summary)
+    await flush()
+    assert.equal(view.busyImageId.value, 'fixture')
+    images.shift().onload()
+    await pending
   }
-  await make('ORDER-one')
-  assert.equal(injections[0].orderNumber, 'ORDER-one')
-  assert.equal(injections[0].layoutNumber, 'yy-00123')
-  edited = { orderNumber: 'ORDER-one', prefix: 'x', value: '009' }
-  await make('ORDER-two')
-  assert.equal(injections[1].layoutNumber, null)
-  assert.equal(injections[1].numberingDraft, undefined)
-  edited = null
-  await make('ORDER-one')
-  assert.equal(injections[2].numberingDraft.prefix, 'x')
-  assert.equal(injections[2].numberingDraft.value, '009')
+  const [first, second] = view.visibleEntries.value.map(entry => entry.summary)
+  await make(first)
+  assert.equal(input.value, '00123')
+  view.chooseOrder(second.id)
+  assert.equal(view.lastInjectedOrder.value, 'ORDER-one')
+  assert.equal(input.value, '00123')
+  prefix.value = 'x'
+  prefix.dispatchEvent(new Event('input'))
+  input.value = ''
+  input.dispatchEvent(new Event('input'))
+  await make(second)
+  assert.equal(view.lastInjectedOrder.value, 'ORDER-two')
+  assert.equal(prefix.value, 'ch')
+  assert.equal(input.value, '')
+  await make(first)
+  assert.equal(view.lastInjectedOrder.value, 'ORDER-one')
+  assert.equal(prefix.value, 'x')
+  assert.equal(input.value, '')
 })

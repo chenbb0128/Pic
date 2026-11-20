@@ -7,8 +7,6 @@ interface Window {
     orderNumber?: string
     layoutNumber?: string | null
     numberingDraft?: { prefix: string; value: string }
-  }) => void
+  }) => Promise<void>
   __picReadOrderNumbering?: () => { orderNumber: string; prefix: string; value: string } | null
-  __picTemplateLoaded?: boolean
-  __picPendingInject?: unknown
 }

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useOrdersStore, toast, loadOrders, refreshQiniuStatus } from '../stores/orders'
 import {
+  cloudBackfill,
   cloudSyncNow,
   cloudTest,
   getCloudConfig,
@@ -19,13 +20,21 @@ import {
   saveQiniuSettings,
   testQiniuSettings,
 } from '../lib/tauri'
-import type { CloudConfig, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings } from '../types'
+import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, SmbConfig, WebDavConfig } from '../types'
 
 defineEmits<{ back: [] }>()
 
 const store = useOrdersStore()
 
-const storageProvider = ref<'minio' | 'qiniu' | null>(null)
+type StorageProvider = CloudProvider | 'qiniu'
+
+const storageNames: Record<StorageProvider, string> = {
+  minio: 'MinIO',
+  webdav: 'WebDAV',
+  smb: 'SMB',
+  qiniu: '七牛 Kodo',
+}
+const editedStorageProvider = ref<StorageProvider | null>(null)
 const qiniuSaved = ref<QiniuSettings | null>(null)
 const qiniuForm = ref({ apiUrl: '', pollSeconds: 15, token: '' })
 const qiniuMsg = ref('')
@@ -37,30 +46,44 @@ const qiniuNeedsRestart = computed(() => Boolean(store.qiniu && qiniuSaved.value
   legacyIsRunning.value !== (!qiniuSaved.value.enabled && !qiniuSaved.value.hasToken) ||
   (qiniuSaved.value.enabled && store.qiniuSettingsChanged)
 )))
+const qiniuRestartNote = computed(() => {
+  if (!qiniuSaved.value?.enabled) return '重启后仅保存在本机'
+  return qiniuIsRunning.value ? '重启后应用七牛配置' : '重启后使用七牛'
+})
 const qiniuRoleName: Record<QiniuDevice['role'], string> = {
   customer: '客服',
   production: '制作',
   both: '客服与制作',
 }
 
-const cloud = ref<CloudConfig>({
-  enabled: false,
-  endpoint: '',
-  bucket: '',
-  accessKey: '',
-  secretKey: '',
-  region: 'us-east-1',
-  pollSeconds: 30,
-})
-const cloudMsg = ref('')
+const emptyWebDav: WebDavConfig = { endpoint: '', root: '', username: '', password: '' }
+const emptySmb: SmbConfig = { host: '', share: '', root: '', username: '', password: '' }
+type CloudForm = CloudConfig & { webdav: WebDavConfig; smb: SmbConfig }
+type CloudSaveAction = 'profile' | 'activate' | 'pause'
+const cloud = ref<CloudForm | null>(null)
+const cloudSaved = ref<CloudConfig | null>(null)
+const cloudLoadError = ref('')
+const cloudMsg = ref<{ provider: CloudProvider; text: string } | null>(null)
 const cloudBusy = ref(false)
-const minioEnabled = ref<boolean | null>(null)
+const qiniuHasBinding = computed(() => Boolean(qiniuSaved.value?.enabled || qiniuSaved.value?.hasToken))
+const storageProvider = computed<StorageProvider>({
+  get: () => editedStorageProvider.value ?? (qiniuHasBinding.value ? 'qiniu' : cloudSaved.value?.provider ?? 'minio'),
+  set: (provider: StorageProvider) => { editedStorageProvider.value = provider },
+})
+const selectedCloudProvider = computed(() => storageProvider.value === 'qiniu' ? null : storageProvider.value)
+const activeCloudProvider = computed(() =>
+  legacyIsRunning.value && cloudSaved.value?.enabled ? cloudSaved.value.provider ?? 'minio' : null,
+)
+const selectedCloudIsRunning = computed(() =>
+  selectedCloudProvider.value !== null && selectedCloudProvider.value === activeCloudProvider.value,
+)
+const canSaveCloud = computed(() => legacyIsRunning.value && qiniuSaved.value !== null && !qiniuHasBinding.value)
 const currentStorage = computed(() => {
   if (!store.qiniu) return '正在读取'
-  if (qiniuIsRunning.value) return '七牛 Kodo'
+  if (qiniuIsRunning.value) return storageNames.qiniu
   if (!legacyIsRunning.value) return '仅本机（七牛已暂停）'
-  if (minioEnabled.value === null) return cloudMsg.value ? '读取失败' : '正在读取'
-  return minioEnabled.value ? 'MinIO' : '仅本机'
+  if (!cloudSaved.value) return cloudLoadError.value ? '读取失败' : '正在读取'
+  return activeCloudProvider.value ? storageNames[activeCloudProvider.value] : '仅本机'
 })
 
 const pgc = ref<MysqlConfig>({ enabled: true, host: '192.168.31.200', port: 3306, user: 'root', password: 'admin123', dbname: 'vagaga', pollSeconds: 30 })
@@ -101,12 +124,7 @@ function onScroll() {
 
 onMounted(async () => {
   void loadQiniuSettings()
-  try {
-    cloud.value = await getCloudConfig()
-    minioEnabled.value = cloud.value.enabled
-  } catch (error) {
-    cloudMsg.value = `读取 MinIO 配置失败：${error}`
-  }
+  void loadCloudSettings()
   try {
     pgc.value = await getMysqlConfig()
   } catch {
@@ -124,10 +142,22 @@ async function loadQiniuSettings() {
     const settings = await getQiniuSettings()
     qiniuSaved.value = settings
     qiniuForm.value = { apiUrl: settings.apiUrl, pollSeconds: settings.pollSeconds, token: '' }
-    storageProvider.value ??= settings.enabled || settings.hasToken ? 'qiniu' : 'minio'
   } catch (error) {
     qiniuMsg.value = `读取七牛设置失败：${error}`
-    storageProvider.value ??= 'minio'
+  }
+}
+
+async function loadCloudSettings() {
+  try {
+    const config = await getCloudConfig()
+    cloudSaved.value = config
+    cloud.value = {
+      ...config,
+      webdav: { ...emptyWebDav, ...config.webdav },
+      smb: { ...emptySmb, ...config.smb },
+    }
+  } catch (error) {
+    cloudLoadError.value = `读取对象存储配置失败：${error}`
   }
 }
 
@@ -240,49 +270,106 @@ async function syncPgNow() {
   }
 }
 
-async function saveCloud() {
+function cloudDraft(provider: CloudProvider, saved: CloudConfig, form: CloudForm): CloudConfig {
+  const { endpoint, bucket, accessKey, secretKey, region, pollSeconds, webdav, smb } = form
+  const config = { ...saved, provider, pollSeconds }
+  switch (provider) {
+    case 'minio':
+      return { ...config, endpoint, bucket, accessKey, secretKey, region }
+    case 'webdav':
+      return { ...config, webdav: { ...webdav } }
+    case 'smb':
+      return { ...config, smb: { ...smb } }
+  }
+}
+
+function setCloudMsg(provider: CloudProvider, text: string) {
+  cloudMsg.value = { provider, text }
+}
+
+async function runCloudAction(provider: CloudProvider, action: () => Promise<void>) {
   cloudBusy.value = true
   try {
-    const config = { ...cloud.value }
+    await action()
+  } catch (error) {
+    setCloudMsg(provider, String(error))
+  } finally {
+    cloudBusy.value = false
+  }
+}
+
+function saveCloud(action: CloudSaveAction) {
+  const provider = selectedCloudProvider.value
+  const saved = cloudSaved.value
+  const form = cloud.value
+  if (!provider || !saved || !form || !canSaveCloud.value) return
+  if (action === 'pause' && !selectedCloudIsRunning.value) return
+
+  const preserveActive = action === 'profile' && saved.enabled && !selectedCloudIsRunning.value
+  const config = action === 'pause' ? { ...saved, enabled: false } : {
+    ...cloudDraft(provider, saved, form),
+    provider: preserveActive ? saved.provider ?? 'minio' : provider,
+    enabled: action === 'activate' || saved.enabled,
+    pollSeconds: preserveActive ? saved.pollSeconds : form.pollSeconds,
+  }
+  if (action !== 'pause' && !preserveActive && (!Number.isSafeInteger(config.pollSeconds) || config.pollSeconds < 10)) {
+    setCloudMsg(provider, '轮询间隔请输入至少 10 秒的整数。')
+    return
+  }
+
+  return runCloudAction(provider, async () => {
     await saveCloudConfig(config)
-    minioEnabled.value = config.enabled
-    cloudMsg.value = 'MinIO 配置已保存。'
-  } catch (error) {
-    cloudMsg.value = String(error)
-  } finally {
-    cloudBusy.value = false
-  }
+    cloudSaved.value = config
+    const name = storageNames[provider]
+    const messages = {
+      profile: `${name} 配置已保存。`,
+      activate: `配置已保存，正在使用 ${name}。`,
+      pause: `已暂停 ${name} 同步。`,
+    }
+    setCloudMsg(provider, messages[action])
+  })
 }
 
-async function testCloud() {
-  cloudBusy.value = true
-  cloudMsg.value = '正在测试连接…'
-  try {
-    cloudMsg.value = await cloudTest(JSON.parse(JSON.stringify(cloud.value)))
-    toast('ok', '云服务连接成功')
-  } catch (error) {
-    cloudMsg.value = String(error)
-    toast('error', '云服务连接失败')
-  } finally {
-    cloudBusy.value = false
-  }
+function testCloud() {
+  const provider = selectedCloudProvider.value
+  const saved = cloudSaved.value
+  const form = cloud.value
+  if (!provider || !saved || !form) return
+  return runCloudAction(provider, async () => {
+    setCloudMsg(provider, '正在测试连接…')
+    const config = cloudDraft(provider, saved, form)
+    try {
+      setCloudMsg(provider, await cloudTest(config))
+      toast('ok', '云服务连接成功')
+    } catch (error) {
+      toast('error', '云服务连接失败')
+      throw error
+    }
+  })
 }
 
-async function syncNow() {
-  cloudBusy.value = true
-  cloudMsg.value = '正在同步…'
-  try {
+function syncNow() {
+  const provider = selectedCloudProvider.value
+  if (!provider || !selectedCloudIsRunning.value) return
+  return runCloudAction(provider, async () => {
+    setCloudMsg(provider, '正在同步…')
     const notices = await cloudSyncNow()
     const total = notices.reduce((sum, n) => sum + n.newImages, 0)
-    cloudMsg.value = notices.length
-      ? `同步完成：${notices.length} 个订单更新，新增 ${total} 张素材。`
-      : '同步完成：云端没有新变化。'
+    setCloudMsg(provider, notices.length
+      ? `同步完成，更新 ${notices.length} 个订单，新增 ${total} 张素材。`
+      : '同步完成，云端没有新素材。')
     await loadOrders()
-  } catch (error) {
-    cloudMsg.value = String(error)
-  } finally {
-    cloudBusy.value = false
-  }
+  })
+}
+
+function backfillCloud() {
+  const provider = selectedCloudProvider.value
+  if (!selectedCloudIsRunning.value || (provider !== 'webdav' && provider !== 'smb')) return
+  return runCloudAction(provider, async () => {
+    setCloudMsg(provider, '正在补传历史素材…')
+    const count = await cloudBackfill()
+    setCloudMsg(provider, count ? `已补传 ${count} 个订单的历史素材。` : '没有需要补传的历史素材。')
+  })
 }
 
 async function saveCutout() {
@@ -389,54 +476,104 @@ async function openCutoutLogs() {
                 <span>{{ currentStorage }}</span>
               </div>
               <span v-if="qiniuNeedsRestart" class="restartNote">
-                {{ qiniuSaved?.enabled ? '重启后使用七牛' : '重启后仅保存在本机' }}
+                {{ qiniuRestartNote }}
               </span>
             </div>
             <label class="row">
-              <span class="label">存储类别</span>
+              <span class="label">配置类别</span>
               <select v-model="storageProvider" class="input" :disabled="cloudBusy || qiniuBusy">
                 <option value="minio">MinIO（S3 兼容）</option>
+                <option value="webdav">WebDAV</option>
+                <option value="smb">SMB（共享文件夹）</option>
                 <option value="qiniu">七牛 Kodo</option>
               </select>
             </label>
 
-            <template v-if="storageProvider === 'minio'">
-              <p class="hint">客服机与制作机共用一个 MinIO Bucket，同步素材和订单清单。</p>
-              <p v-if="qiniuSaved?.hasToken" class="hint">此数据目录已绑定七牛。使用 MinIO 需要独立的数据目录。</p>
-              <label class="row checkRow">
-                <input v-model="cloud.enabled" type="checkbox" />
-                <span>启用 MinIO</span>
-              </label>
-              <div class="row">
-                <span class="label">端点</span>
-                <input v-model="cloud.endpoint" class="input" placeholder="http://your-minio.example.com:9000" spellcheck="false" />
-              </div>
-              <div class="row">
-                <span class="label">Bucket</span>
-                <input v-model="cloud.bucket" class="input" placeholder="vagaga" spellcheck="false" />
-              </div>
-              <div class="row">
-                <span class="label">Access Key</span>
-                <input v-model="cloud.accessKey" class="input" placeholder="MinIO Access Key" spellcheck="false" />
-              </div>
-              <div class="row">
-                <span class="label">Secret Key</span>
-                <input v-model="cloud.secretKey" class="input" type="password" placeholder="MinIO Secret Key" />
-              </div>
-              <div class="row">
-                <span class="label">Region</span>
-                <input v-model="cloud.region" class="input" placeholder="us-east-1" spellcheck="false" />
-              </div>
-              <div class="row">
-                <span class="label">轮询间隔(秒)</span>
-                <input v-model.number="cloud.pollSeconds" class="input narrow" type="number" min="10" step="5" />
-              </div>
-              <div class="row actions">
-                <button class="btn" :disabled="cloudBusy || minioEnabled === null" @click="saveCloud">保存</button>
-                <button class="btn" :disabled="cloudBusy || minioEnabled === null" @click="testCloud">测试连接</button>
-                <button class="btn" :disabled="cloudBusy || !legacyIsRunning || !minioEnabled" @click="syncNow">立即同步</button>
-              </div>
-              <div v-if="cloudMsg" class="cloudMsg" role="status">{{ cloudMsg }}</div>
+            <template v-if="selectedCloudProvider">
+              <p v-if="qiniuHasBinding" class="hint">此数据目录已绑定七牛。重启后如需使用 {{ storageNames[selectedCloudProvider] }}，请使用独立的数据目录。</p>
+              <p v-else-if="!selectedCloudIsRunning" class="hint">可先保存连接配置，点击「保存并启用」后切换当前存储。</p>
+              <template v-if="cloud">
+                <template v-if="selectedCloudProvider === 'minio'">
+                  <p class="hint">客服机与制作机共用一个 MinIO Bucket，同步素材和订单清单。</p>
+                  <label class="row">
+                    <span class="label">端点</span>
+                    <input v-model="cloud.endpoint" class="input" placeholder="http://your-minio.example.com:9000" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">Bucket</span>
+                    <input v-model="cloud.bucket" class="input" placeholder="vagaga" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">Access Key</span>
+                    <input v-model="cloud.accessKey" class="input" placeholder="MinIO Access Key" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">Secret Key</span>
+                    <input v-model="cloud.secretKey" class="input" type="password" placeholder="MinIO Secret Key" autocomplete="new-password" />
+                  </label>
+                  <label class="row">
+                    <span class="label">Region</span>
+                    <input v-model="cloud.region" class="input" placeholder="us-east-1" spellcheck="false" />
+                  </label>
+                </template>
+                <template v-else-if="selectedCloudProvider === 'webdav'">
+                  <label class="row">
+                    <span class="label">WebDAV 地址</span>
+                    <input v-model.trim="cloud.webdav.endpoint" class="input" type="url" placeholder="https://nas.example.com/dav" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">同步目录</span>
+                    <input v-model.trim="cloud.webdav.root" class="input" placeholder="相对目录，留空使用 WebDAV 根目录" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">用户名</span>
+                    <input v-model="cloud.webdav.username" class="input" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">密码</span>
+                    <input v-model="cloud.webdav.password" class="input" type="password" autocomplete="new-password" />
+                  </label>
+                </template>
+                <template v-else>
+                  <label class="row">
+                    <span class="label">服务器</span>
+                    <input v-model.trim="cloud.smb.host" class="input" placeholder="nas.example.com" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">共享名</span>
+                    <input v-model.trim="cloud.smb.share" class="input" placeholder="例如 images" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">同步目录</span>
+                    <input v-model.trim="cloud.smb.root" class="input" placeholder="相对目录，留空使用共享根目录" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">用户名</span>
+                    <input v-model="cloud.smb.username" class="input" spellcheck="false" />
+                  </label>
+                  <label class="row">
+                    <span class="label">密码</span>
+                    <input v-model="cloud.smb.password" class="input" type="password" autocomplete="new-password" />
+                  </label>
+                </template>
+                <label class="row">
+                  <span class="label">轮询间隔（秒）</span>
+                  <input v-model.number="cloud.pollSeconds" class="input narrow" type="number" min="10" step="1" />
+                </label>
+                <p v-if="canSaveCloud && activeCloudProvider && !selectedCloudIsRunning" class="hint">切换到 {{ storageNames[selectedCloudProvider] }} 后应用此轮询间隔。</p>
+                <div class="row actions storageActions">
+                  <button class="btn" :disabled="cloudBusy" @click="testCloud">测试连接</button>
+                  <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('profile')">保存配置</button>
+                  <button v-if="!selectedCloudIsRunning" class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('activate')">保存并启用</button>
+                  <template v-else>
+                    <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('pause')">暂停同步</button>
+                    <button class="btn" :disabled="cloudBusy" @click="syncNow">立即同步</button>
+                    <button v-if="selectedCloudProvider !== 'minio'" class="btn" :disabled="cloudBusy" @click="backfillCloud">补传历史素材</button>
+                  </template>
+                </div>
+              </template>
+              <div v-if="cloudLoadError" class="cloudMsg" role="status">{{ cloudLoadError }}</div>
+              <div v-else-if="cloudMsg?.provider === selectedCloudProvider" class="cloudMsg" role="status">{{ cloudMsg.text }}</div>
             </template>
             <template v-else-if="storageProvider === 'qiniu'">
               <p class="hint">通过排单服务同步原图和成品，客服和制作权限由设备凭证决定。</p>
@@ -645,6 +782,9 @@ h2 {
 .actions {
   gap: 8px;
   padding-top: 10px;
+}
+.storageActions {
+  flex-wrap: wrap;
 }
 .storageStatus, .queueCounts {
   display: flex;

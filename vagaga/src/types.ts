@@ -52,7 +52,25 @@ export interface AppInfo {
   templates: TemplateInfo[]
 }
 
+export type CloudProvider = 'minio' | 'webdav' | 'smb'
+
+export interface WebDavConfig {
+  endpoint: string
+  root: string
+  username: string
+  password: string
+}
+
+export interface SmbConfig {
+  host: string
+  share: string
+  root: string
+  username: string
+  password: string
+}
+
 export interface CloudConfig {
+  provider?: CloudProvider
   enabled: boolean
   endpoint: string
   bucket: string
@@ -60,6 +78,8 @@ export interface CloudConfig {
   secretKey: string
   region: string
   pollSeconds: number
+  webdav?: WebDavConfig
+  smb?: SmbConfig
 }
 
 export interface CutoutConfig {

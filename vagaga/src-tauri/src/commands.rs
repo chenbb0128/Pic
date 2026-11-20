@@ -194,26 +194,11 @@ pub fn set_image_templates(
         .into_iter()
         .map(|t| (t.template_id, t.quantity))
         .collect();
-    state
-        .store
-        .set_image_templates(&image_id, &mapped)
-        .map_err(|error| error.to_string())?;
-    if !state.qiniu.legacy() { return Ok(()); }
-    // 云同步：模板/份数修改后重推该订单（MinIO/PostgreSQL 已启用时）
+    // 模板调整后同步该订单的清单。
     let store = state.store.clone();
     let data_root = state.data_root.clone();
+    let order_number = state.cloud.update_templates(&store, &data_root, &image_id, &mapped)?;
     tauri::async_runtime::spawn(async move {
-        let Some(row) = store.get_image(&image_id).ok().flatten() else { return };
-        let Some(order_number) = store.order_number_by_id(&row.order_id).ok().flatten() else { return };
-        let config = crate::cloud::load_config(&data_root);
-        if config.enabled && config.valid() {
-            let s3 = crate::cloud::S3Client::new(&config);
-            if let Err(error) =
-                crate::cloud::push_order(&store, &s3, &order_number, Some(&[image_id])).await
-            {
-                eprintln!("[cloud] 模板更新推送失败 {order_number}: {error}");
-            }
-        }
         let mysql_config = crate::mysql::load_config(&data_root);
         if mysql_config.enabled && mysql_config.valid() {
             let client = crate::mysql::MyClient::new(&mysql_config);
@@ -431,7 +416,7 @@ pub fn list_productions(
     }).collect()
 }
 
-/* ---------- 云同步（MinIO 多机协同） ---------- */
+/* ---------- 文件存储同步 ---------- */
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -446,19 +431,19 @@ pub fn get_cloud_config(state: State<'_, AppState>) -> crate::cloud::CloudConfig
 }
 
 #[tauri::command]
-pub fn save_cloud_config(
+pub async fn save_cloud_config(
     state: State<'_, AppState>,
     config: crate::cloud::CloudConfig,
 ) -> Result<(), String> {
-    crate::cloud::save_config(&state.data_root, &config)
+    if config.enabled && !state.qiniu.legacy() {
+        return Err("此数据目录已绑定七牛。请用独立的数据目录启用其他存储。".into());
+    }
+    state.cloud.save(&state.data_root, &config).await
 }
 
 #[tauri::command]
 pub async fn cloud_test(config: crate::cloud::CloudConfig) -> Result<String, String> {
-    if !config.valid() {
-        return Err("请填写完整的端点、Bucket 与访问密钥。".into());
-    }
-    crate::cloud::S3Client::new(&config).test().await
+    config.test().await
 }
 
 #[tauri::command]
@@ -466,17 +451,19 @@ pub async fn cloud_sync_now(state: State<'_, AppState>) -> Result<Vec<CloudNotic
     if !state.qiniu.legacy() {
         return Err("此数据目录使用七牛同步，请在七牛设置中同步订单".into());
     }
-    let config = crate::cloud::load_config(&state.data_root);
-    if !config.valid() {
-        return Err("未配置云同步（端点/Bucket/密钥）。".into());
-    }
-    let s3 = crate::cloud::S3Client::new(&config);
-    let store = state.store.clone();
-    let notices = crate::cloud::pull_all(&store, &s3).await?;
+    let notices = state.cloud.cycle(&state.store, &state.data_root).await?;
     Ok(notices
         .into_iter()
         .map(|n| CloudNoticeDto { order_number: n.order_number, new_images: n.new_images })
         .collect())
+}
+
+#[tauri::command]
+pub async fn cloud_backfill(state: State<'_, AppState>) -> Result<usize, String> {
+    if !state.qiniu.legacy() {
+        return Err("此数据目录已绑定七牛。".into());
+    }
+    state.cloud.backfill(&state.store, &state.data_root, false).await
 }
 
 /// AI 抠图返回：成品 PNG（base64）+ 是否命中本地缓存。

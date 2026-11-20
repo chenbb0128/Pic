@@ -69,6 +69,10 @@ export function cloudSyncNow(): Promise<CloudNotice[]> {
   return invoke('cloud_sync_now')
 }
 
+export function cloudBackfill(): Promise<number> {
+  return invoke('cloud_backfill')
+}
+
 export function getMysqlConfig(): Promise<MysqlConfig> {
   return invoke('get_mysql_config')
 }

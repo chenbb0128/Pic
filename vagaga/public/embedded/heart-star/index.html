@@ -502,7 +502,32 @@ function portraitCanvas(source,d){
  return output;
 }
 function updateCanvasSize(fullResolution=false){const d=outputConfig(),render=renderConfig(fullResolution);if(!d){document.getElementById('exportPixels').textContent='请输入有效尺寸';document.getElementById('exportSize').textContent='—';return false}if(canvas.width!==render.pxW)canvas.width=render.pxW;if(canvas.height!==render.pxH)canvas.height=render.pxH;const p=portraitConfig(d);document.getElementById('exportPixels').textContent=`${p.pxW} × ${p.pxH} px`;document.getElementById('exportSize').textContent=`${Number(p.totalW.toFixed(3))} × ${Number(p.totalH.toFixed(3))} mm`;document.getElementById('footerAreaLabel').textContent='底部编号区';document.getElementById('footerAreaSize').textContent=numberingEnabled.checked?`另加 3 mm 高${d.w>d.h?'（编辑时在右侧）':''}`:'未启用（不增加尺寸）';document.getElementById('footerSizeHint').textContent='含底部编号区';document.getElementById('footerSizeHint').hidden=!numberingEnabled.checked;const cfg=templates[sel.value];document.getElementById('dimensions').textContent=`${cfg.slots.length} 个位置 · ${Number(d.totalW.toFixed(3))}×${Number(d.totalH.toFixed(3))} mm / ${d.dpi} DPI${d.w>d.h?' · PNG 竖向导出':''}`;document.getElementById('exportFilename').textContent=pngFilename();resizePreview();return true}
-function loadTemplate(){customRequest++;clearTimeout(customTimer);customBusy=false;preserveTemplatePhotos();replacePhoto.disabled=true;finishPhotoDrag();ignorePhotoClick=false;photoDragMode.checked=false;const name=sel.value,cfg=templates[name];clearTimeout(fontInputTimer);fontRequest++;fontBusy=false;updateTemplateFields();if(cfg.custom){loadCustomTemplate();return}const image=new Image();base=image;const ready=()=>{if(sel.value!==name||base!==image)return;states=cfg.text?ensureCopyStates():cfg.slots.map((_,i)=>HeartStarPreset.initialState(cfg,i));selectedSlot=0;selectedSlots=new Set(cfg.slots.map((_,i)=>i));multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;document.getElementById('empty').hidden=true;canvas.hidden=false;buildSlotSelect();updateControls();if(updateCanvasSize())draw();if(cfg.text){renderCopyJobs();updateCopyHistory();prepareCopyFont()}window.__picTemplateLoaded=true;window.dispatchEvent(new Event('pic-template-ready'));if(window.__picPendingInject){var __pd=window.__picPendingInject;window.__picPendingInject=null;window.__picDoInject(__pd)}};if(cfg.text){ready();return}image.onload=ready;image.onerror=()=>{if(base===image)say('模板载入失败，请刷新页面。',true)};if(cfg.editedSource)image.src=cfg.editedSource.src;else if(cfg.preset){HeartStarPreset.source(cfg,loadCustomImage).then(url=>{if(base===image&&sel.value===name)image.src=url}).catch(error=>{if(base===image)say(error.message||'模板生成失败，请重试。',true)})}else image.src=templateSources[name]||''}
+function markTemplateReady(){
+ window.__picTemplateLoaded=true;
+ window.dispatchEvent(new Event('pic-template-ready'));
+}
+function loadTemplate(){
+ window.__picTemplateLoaded=false;
+ customRequest++;clearTimeout(customTimer);customBusy=false;preserveTemplatePhotos();replacePhoto.disabled=true;finishPhotoDrag();ignorePhotoClick=false;photoDragMode.checked=false;
+ const name=sel.value,cfg=templates[name];
+ clearTimeout(fontInputTimer);fontRequest++;fontBusy=false;updateTemplateFields();
+ if(cfg.custom){loadCustomTemplate();return}
+ const image=new Image();base=image;
+ const ready=()=>{
+  if(sel.value!==name||base!==image)return;
+  states=cfg.text?ensureCopyStates():cfg.slots.map((_,i)=>HeartStarPreset.initialState(cfg,i));
+  selectedSlot=0;selectedSlots=new Set(cfg.slots.map((_,i)=>i));multiMode=selectedSlots.size>1;
+  document.getElementById('multiMode').checked=multiMode;document.getElementById('empty').hidden=true;canvas.hidden=false;
+  buildSlotSelect();updateControls();if(updateCanvasSize())draw();
+  if(cfg.text){renderCopyJobs();updateCopyHistory();prepareCopyFont()}
+  markTemplateReady();
+ };
+ if(cfg.text){ready();return}
+ image.onload=ready;image.onerror=()=>{if(base===image)say('模板载入失败，请刷新页面。',true)};
+ if(cfg.editedSource)image.src=cfg.editedSource.src;
+ else if(cfg.preset)HeartStarPreset.source(cfg,loadCustomImage).then(url=>{if(base===image&&sel.value===name)image.src=url}).catch(error=>{if(base===image)say(error.message||'模板生成失败，请重试。',true)});
+ else image.src=templateSources[name]||'';
+}
 function buildSlotSelect(){slotSelect.replaceChildren();currentSlots().forEach((p,i)=>{const o=document.createElement('option');o.value=i;o.textContent=`${String(i+1).padStart(2,'0')} · ${p.type==='text'?(states[i].text.trim().replace(/\s+/g,' ').slice(0,12)||'空白'):shapeLabel(p.type)}${p.bottom?' · 底部小爱心':''}`;if(templates[sel.value].custom)o.textContent=`第 ${p.row+1} 排 · 第 ${p.column+1} 个 · ${customAssets[p.assetId].name}`;slotSelect.append(o)})}
 function updateControls(){updateCopyEditor();updateClipControls();const count=selectedSlots.size,ids=[...selectedSlots].sort((a,b)=>a-b);if(count&&!selectedSlots.has(selectedSlot))selectedSlot=ids[0];updatePhotoControls();const st=states[selectedSlot],disabled=!count;slotSelect.value=String(selectedSlot);document.getElementById('selectedCount').textContent=`已选 ${count} 个`;document.getElementById('slotInfo').textContent='拖框批量选择，Shift 拖框可追加；'+(multiMode?'点击图案可添加或取消选择':'点击图案切换选择')+(templates[sel.value].text?'':'；Alt＋滚轮调整选中图片大小');scale.disabled=disabled;sizeNumber.disabled=disabled;clipShape.disabled=disabled;document.querySelectorAll('[data-move],#resetPosition').forEach(b=>b.disabled=disabled);if(!count){sizeNumber.value='';document.getElementById('scaleOut').value='—';clipShape.value='template';document.getElementById('offsetReadout').textContent='请先选择图形';return}const vals=ids.map(i=>states[i].size*100),avg=Math.round(vals.reduce((a,b)=>a+b,0)/vals.length),same=vals.every(v=>Math.abs(v-vals[0])<.01),shapes=ids.map(i=>states[i].shape||'template'),sameShape=shapes.every(v=>v===shapes[0]);scale.value=avg;sizeNumber.value=same?String(Math.round(vals[0])):'';document.getElementById('scaleOut').value=same?`${Math.round(vals[0])}%`:'混合';clipShape.value=sameShape?shapes[0]:'mixed';document.getElementById('offsetReadout').textContent=count>1?`所选 ${count} 个图形会按相同步长一起移动`:`X ${st.dx>0?'+':''}${st.dx} px　Y ${st.dy>0?'+':''}${st.dy} px`}
 function updateClipControls(){
@@ -550,26 +575,27 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true){
  sharedLibrary?.changed();
 }
 function chooseAtCanvas(e){const hit=slotAtCanvas(e);if(hit.footer){footerText.focus();footerText.select();return}const cfg=templates[sel.value],best=hit.index;if(multiMode){if(selectedSlots.has(best)){if(selectedSlots.size>1)selectedSlots.delete(best)}else selectedSlots.add(best)}else selectedSlots=new Set([best]);selectedSlot=selectedSlots.has(best)?best:[...selectedSlots][0];if(cfg.text)showCopyTab('edit');updateControls();draw()}
-function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
+async function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
  photoUploadTarget=null;
- const picked=[...list].filter(f=>f.type.startsWith('image/'));if(!picked.length)return;
- if(!target.ids.length){say('请先选择要替换的图案。',true);return}
- if(templates[sel.value].text||photoUploadBusy||target.template!==sel.value||target.states!==states||target.request!==replacementRequest)return;
+ const picked=[...list].filter(f=>f.type.startsWith('image/'));if(!picked.length)return false;
+ if(!target.ids.length){say('请先选择要替换的图案。',true);return false}
+ if(templates[sel.value].text||photoUploadBusy||target.template!==sel.value||target.states!==states||target.request!==replacementRequest)return false;
  const ids=[...target.ids].sort((a,b)=>a-b),request=++replacementRequest;
- const items=picked.map(file=>({file,image:new Image(),url:URL.createObjectURL(file),ready:false}));
+ const items=picked.map(file=>({image:new Image(),url:URL.createObjectURL(file)}));
  items.forEach(item=>replacementUrls.add(item.url));
  finishPhotoDrag();ignorePhotoClick=false;replacementBusy=true;updatePhotoControls();draw();
- let loaded=0;
+ const loaded=await Promise.all(items.map(({image,url})=>new Promise(resolve=>{
+  image.onload=()=>resolve(true);
+  image.onerror=()=>resolve(false);
+  image.src=url;
+ })));
  const discard=()=>items.forEach(({url})=>{if(replacementUrls.delete(url))URL.revokeObjectURL(url)});
- const settle=()=>{
-  if(++loaded!==items.length)return;
-  if(request!==replacementRequest||target.template!==sel.value||target.states!==states){discard();return}
-  replacementBusy=false;
-  if(items.some(item=>!item.ready)){discard();say('图片读取失败，原图片已保留，请重新选择。',true);draw();return}
-  ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;if(!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
-  releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。`);draw();
- };
- items.forEach(item=>{item.image.onload=()=>{item.ready=true;settle()};item.image.onerror=settle;item.image.src=item.url});
+ if(request!==replacementRequest||target.template!==sel.value||target.states!==states){discard();return false}
+ replacementBusy=false;
+ if(loaded.includes(false)){discard();say('图片读取失败，原图片已保留，请重新选择。',true);draw();return false}
+ ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;if(!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
+ releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。`);draw();
+ return true;
 }
 function applySolidPhotos(items){
  finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementTarget=null;photoUploadTarget=null;replacePhotoFile.value='';filesEl.value='';
@@ -772,6 +798,7 @@ function loadCustomImage(id){
 function customInitialState(){return{size:.62,dx:0,dy:0,shape:'template',imageScale:1,imageDx:0,imageDy:0}}
 async function applyCustomLayout(selectAll=false){
  clearTimeout(customTimer);if(sel.value!==CUSTOM_TEMPLATE)return;const request=++customRequest;let layout;
+ window.__picTemplateLoaded=false;
  try{layout=buildCustomLayout(customRows,customAssets,widthInput.value,heightInput.value)}catch(error){customBusy=false;customDirty=true;customSummary.classList.add('error');customSummary.textContent=error.message;document.getElementById('applyCustom').disabled=false;draw();return}
  customBusy=true;download.disabled=true;document.getElementById('applyCustom').disabled=true;customSummary.classList.remove('error');customSummary.textContent='正在生成排版…';draw();
  try{
@@ -780,7 +807,7 @@ async function applyCustomLayout(selectAll=false){
   const cfg=templates[CUSTOM_TEMPLATE],previous=new Map(cfg.slots.map((p,i)=>[p.key,{state:states[i],replacement:replacedPhotos.get(i)}])),selectionKeys=new Set([...selectedSlots].map(i=>cfg.slots[i]?.key));finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementBusy=false;replacementTarget=null;replacePhotoFile.value='';replacedPhotos.clear();
   states=layout.slots.map((p,i)=>{const old=previous.get(p.key);if(old?.replacement)replacedPhotos.set(i,old.replacement);return old?.state||customInitialState()});releaseUnusedReplacementUrls();
   Object.assign(cfg,layout,{background,savedStates:states});motifEditor.reflow();selectedSlots=new Set(layout.slots.flatMap((p,i)=>selectAll===true||selectionKeys.has(p.key)?[i]:[]));if(!selectedSlots.size)selectedSlots.add(0);selectedSlot=[...selectedSlots][0];multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;
-  customDirty=false;customBusy=false;document.getElementById('empty').hidden=true;canvas.hidden=false;customSummary.textContent=`已排好 ${customRows.length} 排 · ${layout.slots.length} 个图案 · ${Number(widthInput.value)} × ${Number(heightInput.value)} mm`;buildSlotSelect();updateControls();draw();
+  customDirty=false;customBusy=false;document.getElementById('empty').hidden=true;canvas.hidden=false;customSummary.textContent=`已排好 ${customRows.length} 排 · ${layout.slots.length} 个图案 · ${Number(widthInput.value)} × ${Number(heightInput.value)} mm`;buildSlotSelect();updateControls();draw();markTemplateReady();
  }catch(error){if(request===customRequest&&sel.value===CUSTOM_TEMPLATE){customBusy=false;customDirty=true;customSummary.classList.add('error');customSummary.textContent=error.message;draw()}}
  finally{if(request===customRequest)document.getElementById('applyCustom').disabled=false}
 }
@@ -902,40 +929,54 @@ var sharedLibrary=isTauriEmbed?null:HeartStarCloud.mount({getSnapshot:getCloudSn
  setBusy:busy=>{document.querySelector('.app').inert=busy;document.querySelector('.editor-toolbar').inert=busy},report:say});
 </script>
 <script>
-// 订单制作中心注入通道：父窗口 postMessage 传入订单素材图（base64），
-// 走编辑器原生 setFiles 管线（等同手动上传/粘贴，填充当前选中槽位）。
-// 订单制作中心注入通道：照片等待模板就绪后注入（A02 等预置模板的底图为异步合成，
-// iframe @load 时尚未就绪——直接注入会被随后的槽位重建丢弃，故先缓存）
-window.__picPendingInject = null;
-window.__picDoInject = function (data) {
-  try {
-    var bin = atob(data.b64);
-    var bytes = new Uint8Array(bin.length);
-    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    var file = new File([bytes], data.name || 'order-image.png', { type: data.mime || 'image/png' });
-    var transfer = new DataTransfer();
-    transfer.items.add(file);
-    setFiles(transfer.files);
-    applyOrderNumbering(data);
-    window.parent.postMessage({ type: 'pic-make-done' }, '*');
-  } catch (error) {
-    console.error('[pic-make] 注入失败', error);
-    window.parent.postMessage({ type: 'pic-make-inject-error', message: String(error) }, '*');
+// 预置模板的底图会异步合成，iframe 的 load 事件可能早于槽位就绪。
+async function waitForOrderTemplate(template) {
+  const name = template || sel.value;
+  if (sel.value !== name) {
+    if (!HeartStarTemplateLink.selectInitial(sel, templates, `?template=${encodeURIComponent(name)}`)) {
+      throw new Error('找不到订单指定的模板。');
+    }
+    sel.dispatchEvent(new Event('change'));
   }
+  if (window.__picTemplateLoaded === true) return;
+  await new Promise((resolve, reject) => {
+    const ready = () => {
+      if (sel.value !== name) return;
+      clearTimeout(timeout);
+      window.removeEventListener('pic-template-ready', ready);
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      window.removeEventListener('pic-template-ready', ready);
+      reject(new Error('模板加载超时，请重试。'));
+    }, 10000);
+    window.addEventListener('pic-template-ready', ready);
+  });
+}
+window.__picDoInject = async function (data) {
+  await waitForOrderTemplate(data.template);
+  const bin = atob(data.b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const file = new File([bytes], data.name || 'order-image.png', { type: data.mime || 'image/png' });
+  if (!await setFiles([file], selectedPhotoTarget())) {
+    throw new Error('素材图片未能放入模板，请检查图片和所选位置后重试。');
+  }
+  applyOrderNumbering(data);
 };
-window.addEventListener('message', function (event) {
-  var data = event.data || {};
-  if (data.type !== 'pic-make-inject' || !data.b64) return;
-  // 立即回执：父窗口未收到 ack 会自动重发（消除 iframe 加载时序竞争）
+window.addEventListener('message', async function (event) {
+  const data = event.data;
+  if (event.source !== window.parent || data?.type !== 'pic-make-inject' || !data.b64) return;
   window.parent.postMessage({
     type: 'pic-make-ack',
     template: data.template || '',
     ready: window.__picTemplateLoaded === true,
   }, '*');
-  if (window.__picTemplateLoaded === true) {
-    window.__picDoInject(data);
-  } else {
-    window.__picPendingInject = data; // loadTemplate 就绪钩子（ready 末尾）会自动执行
+  try {
+    await window.__picDoInject(data);
+    window.parent.postMessage({ type: 'pic-make-done' }, '*');
+  } catch (error) {
+    window.parent.postMessage({ type: 'pic-make-inject-error', message: String(error) }, '*');
   }
 });
 </script>

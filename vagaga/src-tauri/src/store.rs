@@ -22,6 +22,55 @@ pub(crate) fn valid_layout_number(number: &str) -> bool {
         && suffix.bytes().all(|value| value.is_ascii_alphanumeric())
 }
 
+pub(crate) struct FileSyncImport<'a> {
+    pub target: &'a str,
+    pub fingerprint: &'a str,
+    pub layout_number: Option<&'a str>,
+    pub layout_captured_at: Option<&'a str>,
+}
+
+pub(crate) struct PendingFileUpload {
+    pub order_number: String,
+    pub image_id: String,
+    pub may_add: bool,
+    pub revision: i64,
+}
+
+enum CloudImport<'a> {
+    Mysql(&'a str),
+    Files(FileSyncImport<'a>),
+}
+
+fn merge_file_layout_metadata(current: Option<&str>, incoming: &FileSyncImport<'_>) -> Option<String> {
+    let number = incoming.layout_number.filter(|value| valid_layout_number(value))?;
+    let captured_at = incoming.layout_captured_at
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok());
+    let parsed = current.and_then(|text| serde_json::from_str::<Value>(text).ok());
+    if let Some((_, previous_time)) = parsed.as_ref().and_then(layout_metadata) {
+        if captured_at <= previous_time {
+            return None;
+        }
+    }
+    let mut fields = match parsed {
+        Some(Value::Object(fields)) => fields,
+        _ => {
+            let mut fields = serde_json::Map::new();
+            if let Some(text) = current.filter(|text| !text.is_empty()) {
+                fields.insert("legacyMetadata".into(), Value::String(text.to_owned()));
+            }
+            fields
+        }
+    };
+    fields.insert("layoutNumber".into(), Value::String(number.to_owned()));
+    match captured_at {
+        Some(timestamp) => {
+            fields.insert("layoutNumberCapturedAt".into(), Value::String(timestamp.to_rfc3339()));
+        }
+        None => { fields.remove("layoutNumberCapturedAt"); }
+    }
+    Some(Value::Object(fields).to_string())
+}
+
 fn layout_metadata(value: &Value) -> Option<(&str, Option<chrono::DateTime<chrono::FixedOffset>>)> {
     let number = value
         .get("layoutNumber")?
@@ -243,7 +292,21 @@ impl Store {
                 file_path TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_productions_order ON productions(order_number);",
+            CREATE INDEX IF NOT EXISTS idx_productions_order ON productions(order_number);
+            CREATE TABLE IF NOT EXISTS file_sync_checkpoints (
+                target TEXT NOT NULL,
+                order_id TEXT NOT NULL REFERENCES orders(id),
+                fingerprint TEXT NOT NULL,
+                PRIMARY KEY (target, order_id)
+            );
+            CREATE TABLE IF NOT EXISTS file_sync_pending (
+                target TEXT NOT NULL,
+                order_number TEXT NOT NULL,
+                image_id TEXT NOT NULL,
+                may_add INTEGER NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (target, order_number, image_id)
+            );",
         )?;
         // 旧库迁移：images 表补 thumb_path 列（缩略图路径）
         let has_thumb_column: i64 = conn
@@ -590,7 +653,22 @@ impl Store {
         image_id: &str,
         templates: &[(String, i64)],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
+        self.set_image_templates_and_queue(image_id, templates, None).map(|_| ())
+    }
+
+    pub(crate) fn set_image_templates_and_queue(
+        &self,
+        image_id: &str,
+        templates: &[(String, i64)],
+        upload: Option<(&str, bool)>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let mut lock = self.conn.lock().expect("store mutex poisoned");
+        let conn = lock.transaction()?;
+        let (order_id, order_number): (String, String) = conn.query_row(
+            "SELECT i.order_id, o.order_number FROM images i JOIN orders o ON i.order_id = o.id WHERE i.id = ?1",
+            [image_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
         conn.execute(
             "DELETE FROM image_templates WHERE image_id = ?1",
             params![image_id],
@@ -604,16 +682,15 @@ impl Store {
                 params![image_id, template_id, quantity],
             )?;
         }
-        let order_id: String = conn.query_row(
-            "SELECT order_id FROM images WHERE id = ?1",
-            params![image_id],
-            |row| row.get(0),
-        )?;
         conn.execute(
             "UPDATE orders SET updated_at = ?2 WHERE id = ?1",
             params![order_id, now()],
         )?;
-        Ok(())
+        if let Some((target, may_add)) = upload {
+            Self::enqueue_file_upload_on(&conn, target, &order_number, image_id, may_add)?;
+        }
+        conn.commit()?;
+        Ok(order_number)
     }
 
     /// 删除图片记录（磁盘文件保留）。
@@ -732,6 +809,61 @@ impl Store {
         rows.collect()
     }
 
+    pub(crate) fn file_sync_fingerprints(
+        &self,
+        target: &str,
+    ) -> rusqlite::Result<std::collections::HashMap<String, String>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut statement = conn.prepare(
+            "SELECT o.order_number, f.fingerprint FROM file_sync_checkpoints f
+             JOIN orders o ON o.id = f.order_id WHERE f.target = ?1",
+        )?;
+        let rows = statement.query_map([target], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    pub(crate) fn enqueue_file_upload(
+        &self, target: &str, order_number: &str, image_id: &str, may_add: bool,
+    ) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        Self::enqueue_file_upload_on(&conn, target, order_number, image_id, may_add)
+    }
+
+    fn enqueue_file_upload_on(
+        conn: &Connection, target: &str, order_number: &str, image_id: &str, may_add: bool,
+    ) -> rusqlite::Result<()> {
+        conn.execute(
+            "INSERT INTO file_sync_pending(target, order_number, image_id, may_add) VALUES(?1, ?2, ?3, ?4)
+             ON CONFLICT(target, order_number, image_id)
+             DO UPDATE SET revision=revision+1, may_add=MAX(may_add, excluded.may_add)",
+            params![target, order_number, image_id, may_add],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn pending_file_uploads(&self, target: &str) -> rusqlite::Result<Vec<PendingFileUpload>> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut statement = conn.prepare(
+            "SELECT order_number, image_id, may_add, revision FROM file_sync_pending WHERE target=?1 ORDER BY order_number, rowid",
+        )?;
+        let rows = statement.query_map([target], |row| Ok(PendingFileUpload {
+            order_number: row.get(0)?, image_id: row.get(1)?, may_add: row.get(2)?, revision: row.get(3)?,
+        }))?;
+        rows.collect()
+    }
+
+    pub(crate) fn complete_file_upload(
+        &self,
+        target: &str,
+        item: &PendingFileUpload,
+    ) -> rusqlite::Result<()> {
+        self.conn.lock().expect("store mutex poisoned").execute(
+            "DELETE FROM file_sync_pending WHERE target=?1 AND order_number=?2 AND image_id=?3 AND revision=?4",
+            params![target, item.order_number, item.image_id, item.revision],
+        )?;
+        Ok(())
+    }
+
     /// 拉取侧：云端图片落盘目录 数据根/images/YYYY-MM-DD/<安全订单号>_cloud/。
     pub fn cloud_import_directory(&self, order_number: &str) -> PathBuf {
         self.image_root
@@ -748,16 +880,51 @@ impl Store {
         manifest_hash: &str,
         updated_at: &str,
     ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
+        self.import_synced_order(order_number, images, updated_at, CloudImport::Mysql(manifest_hash))
+            .map(|count| count.unwrap_or_default())
+    }
+
+    pub(crate) fn import_file_order(
+        &self,
+        order_number: &str,
+        images: &[(CloudImageMeta, PathBuf)],
+        updated_at: &str,
+        state: FileSyncImport<'_>,
+    ) -> Result<Option<usize>, Box<dyn std::error::Error + Send + Sync>> {
+        self.import_synced_order(order_number, images, updated_at, CloudImport::Files(state))
+    }
+
+    fn import_synced_order(
+        &self,
+        order_number: &str,
+        images: &[(CloudImageMeta, PathBuf)],
+        updated_at: &str,
+        source: CloudImport<'_>,
+    ) -> Result<Option<usize>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut lock = self.conn.lock().expect("store mutex poisoned");
+        let conn = lock.transaction()?;
+        if let CloudImport::Files(state) = &source {
+            let pending: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM file_sync_pending WHERE target=?1 AND order_number=?2)",
+                params![state.target, order_number],
+                |row| row.get(0),
+            )?;
+            if pending {
+                return Ok(None);
+            }
+        }
         let order_id = self.find_or_create_order(&conn, order_number)?;
         let mut new_images = 0usize;
         for (meta, path) in images {
-            let exists: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM images WHERE id = ?1",
+            let owner: Option<String> = conn.query_row(
+                "SELECT order_id FROM images WHERE id = ?1",
                 params![meta.id],
                 |row| row.get(0),
-            )?;
-            if exists == 0 {
+            ).optional()?;
+            if owner.as_ref().is_some_and(|id| id != &order_id) {
+                return Err("同步素材 ID 属于另一订单".into());
+            }
+            if owner.is_none() {
                 // 缩略图：与入库一致（失败不阻塞导入，前端回退原图）
                 let thumb_path = path.with_extension("thumb.jpg");
                 let thumb_path_value = (|| -> Option<String> {
@@ -804,11 +971,31 @@ impl Store {
                 )?;
             }
         }
-        conn.execute(
-            "UPDATE orders SET updated_at = ?2, cloud_hash = ?3 WHERE id = ?1",
-            params![order_id, updated_at, manifest_hash],
-        )?;
-        Ok(new_images)
+        match source {
+            CloudImport::Mysql(watermark) => {
+                conn.execute(
+                    "UPDATE orders SET updated_at = ?2, cloud_hash = ?3 WHERE id = ?1",
+                    params![order_id, updated_at, watermark],
+                )?;
+            }
+            CloudImport::Files(state) => {
+                let previous: Option<String> = conn.query_row(
+                    "SELECT metadata FROM orders WHERE id=?1", [&order_id], |row| row.get(0),
+                )?;
+                let updated_meta = merge_file_layout_metadata(previous.as_deref(), &state);
+                conn.execute(
+                    "UPDATE orders SET updated_at=MAX(updated_at, ?2), metadata=COALESCE(?3, metadata) WHERE id=?1",
+                    params![order_id, updated_at, updated_meta],
+                )?;
+                conn.execute(
+                    "INSERT INTO file_sync_checkpoints(target, order_id, fingerprint) VALUES(?1, ?2, ?3)
+                     ON CONFLICT(target, order_id) DO UPDATE SET fingerprint=excluded.fingerprint",
+                    params![state.target, order_id, state.fingerprint],
+                )?;
+            }
+        }
+        conn.commit()?;
+        Ok(Some(new_images))
     }
 
     /// 读取订单元数据（推送 MySQL 用）。
@@ -926,13 +1113,20 @@ impl Store {
 
     /// 删除订单记录（磁盘图片保留）。
     pub fn delete_order(&self, id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut lock = self.conn.lock().expect("store mutex poisoned");
+        let conn = lock.transaction()?;
         conn.execute(
             "DELETE FROM image_templates WHERE image_id IN (SELECT id FROM images WHERE order_id = ?1)",
             params![id],
         )?;
         conn.execute("DELETE FROM images WHERE order_id = ?1", params![id])?;
+        conn.execute("DELETE FROM file_sync_checkpoints WHERE order_id = ?1", params![id])?;
+        conn.execute(
+            "DELETE FROM file_sync_pending WHERE order_number = (SELECT order_number FROM orders WHERE id = ?1)",
+            params![id],
+        )?;
         conn.execute("DELETE FROM orders WHERE id = ?1", params![id])?;
+        conn.commit()?;
         Ok(())
     }
 
