@@ -3,7 +3,7 @@
     <header class="z-20 shrink-0 border-b border-slate-700 bg-slate-950 text-white">
       <div class="flex w-full min-w-0 items-center justify-between gap-3 px-3 py-2.5 sm:px-5">
         <RouterLink class="shrink-0 text-base font-bold tracking-tight text-indigo-200" to="/workspace">✦ 小星贴工具箱</RouterLink>
-        <nav class="hidden items-center gap-1 text-xs lg:flex" aria-label="主导航">
+        <nav class="hidden flex-wrap items-center justify-end gap-1 text-xs lg:flex" aria-label="主导航">
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/workspace">自动排版</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/heart-star">爱心星星 🔒</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/cutout">抠图</RouterLink>
@@ -11,6 +11,7 @@
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/polka">波点</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/frame">框架对比</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/resize">尺寸转换</RouterLink>
+          <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/renumber">修改编号</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/name">姓名排版</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/tools/text">文字方格</RouterLink>
           <RouterLink class="rounded-lg px-2.5 py-2 text-slate-300 hover:bg-slate-800" active-class="bg-indigo-500/25 text-white" to="/classic">经典2/3CM</RouterLink>
@@ -27,6 +28,7 @@
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/polka">波点生成</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/frame">框架对比</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/resize">尺寸转换</RouterLink>
+            <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/renumber">修改编号</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/name">姓名排版</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/tools/text">文字方格</RouterLink>
             <RouterLink class="rounded-lg px-3 py-2 hover:bg-slate-800" to="/classic">经典2/3CM排版</RouterLink>

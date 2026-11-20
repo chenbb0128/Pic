@@ -3,6 +3,8 @@
 enum ImageSource { localFile, desktopDrop, paidan }
 
 class OrderImage {
+  static const maxNoteLength = 500;
+
   OrderImage({
     required this.id,
     required this.originalName,
@@ -11,6 +13,7 @@ class OrderImage {
     required this.source,
     this.filePath,
     this.originalVerified = false,
+    this.note = '',
     Set<String> templateIds = const {},
     Map<String, int> templateQuantities = const {},
   }) : templateQuantities = Map.unmodifiable({
@@ -21,6 +24,9 @@ class OrderImage {
       (entry) => entry.key.trim().isEmpty || entry.value < 1,
     )) {
       throw ArgumentError('模板编号不能为空，份数必须为正整数');
+    }
+    if (note.length > maxNoteLength) {
+      throw ArgumentError('图片备注不能超过 $maxNoteLength 字');
     }
   }
 
@@ -33,6 +39,7 @@ class OrderImage {
   final String? filePath;
   // Byte-preserving import alone cannot prove EVA supplied the original.
   final bool originalVerified;
+  final String note;
   final Map<String, int> templateQuantities;
   Set<String> get templateIds => Set.unmodifiable(templateQuantities.keys);
 
@@ -57,6 +64,18 @@ class OrderImage {
     return _withTemplateQuantities(quantities);
   }
 
+  OrderImage withNote(String value) => OrderImage(
+    id: id,
+    originalName: originalName,
+    storedName: storedName,
+    byteLength: byteLength,
+    source: source,
+    filePath: filePath,
+    originalVerified: originalVerified,
+    note: value,
+    templateQuantities: templateQuantities,
+  );
+
   OrderImage _withTemplateQuantities(Map<String, int> quantities) => OrderImage(
     id: id,
     originalName: originalName,
@@ -65,6 +84,7 @@ class OrderImage {
     source: source,
     filePath: filePath,
     originalVerified: originalVerified,
+    note: note,
     templateQuantities: quantities,
   );
 }

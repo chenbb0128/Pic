@@ -25,6 +25,7 @@ class OrderCodec {
               'source': image.source.name,
               if (image.filePath != null) 'filePath': image.filePath,
               'originalVerified': image.originalVerified,
+              'note': image.note,
               'templateIds': image.templateIds.toList()..sort(),
               'templateQuantities': image.templateQuantities,
             },
@@ -61,6 +62,7 @@ class OrderCodec {
             source: ImageSource.values.byName(image['source'] as String),
             filePath: filePath,
             originalVerified: image['originalVerified'] as bool,
+            note: (image['note'] as String?) ?? '',
             templateIds: (image['templateIds'] as List<dynamic>)
                 .cast<String>()
                 .map(canonicalTemplateId)

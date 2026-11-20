@@ -168,6 +168,18 @@ class OrderController extends ChangeNotifier {
     },
   );
 
+  Future<bool> setImageNote(String imageId, String note) => _run(() async {
+    final order = _current;
+    if (order == null) throw StateError('请先打开订单');
+    final image = order.images.where((item) => item.id == imageId).firstOrNull;
+    if (image == null) throw ArgumentError('图片不存在');
+    if (image.note == note) return;
+    final updated = order.setImageNote(imageId, note);
+    await repository.save(updated);
+    _current = updated;
+    _orders = [updated, ..._orders.where((item) => item.id != updated.id)];
+  });
+
   String imagePath(OrderImage image) =>
       repository.imagePath(_current!.id, image);
 

@@ -83,6 +83,16 @@ class OrderDocument {
     ]);
   }
 
+  OrderDocument setImageNote(String imageId, String note) {
+    if (!images.any((image) => image.id == imageId)) {
+      throw ArgumentError('图片不存在');
+    }
+    return _withImages([
+      for (final image in images)
+        if (image.id == imageId) image.withNote(note) else image,
+    ]);
+  }
+
   OrderDocument _withImages(List<OrderImage> images) => OrderDocument(
     id: id,
     orderNumber: orderNumber,

@@ -127,6 +127,22 @@ void main() {
     expect(controller.current!.taskCount, 3);
   });
 
+  test('图片备注独立保存并在重开后恢复，失败时不覆盖旧值', () async {
+    final imageId = controller.selectedImage!.id;
+    expect(await controller.setImageNote(imageId, '加急\n需要两份'), isTrue);
+    expect(controller.selectedImage!.note, '加急\n需要两份');
+    await controller.openOrder(controller.current!.id);
+    expect(controller.selectedImage!.note, '加急\n需要两份');
+
+    repository.failWrites = true;
+    expect(await controller.setImageNote(imageId, '新备注'), isFalse);
+    expect(controller.selectedImage!.note, '加急\n需要两份');
+    expect(
+      (await repository.load(controller.current!.id)).images.single.note,
+      '加急\n需要两份',
+    );
+  });
+
   test('删除图片同步保存关联和数量，切换相邻图片，删完保留空订单和原图', () async {
     final orderId = controller.current!.id;
     final first = controller.selectedImage!;

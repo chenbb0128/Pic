@@ -25,6 +25,7 @@ void main() {
       '模板混合.png': 1,
       '缤纷糖果.png': 1,
     });
+    expect(oldOrder.images.single.note, isEmpty);
     final json = jsonDecode(legacy) as Map<String, dynamic>;
     json['images'][0]['templateQuantities'] = {'A03': 3, 'A08': 2};
     final updated = codec.decode(jsonEncode(json), 'order');
@@ -34,6 +35,21 @@ void main() {
       '模板混合.png': 3,
       '缤纷糖果.png': 2,
     });
+  });
+
+  test('图片备注往返保存，超长备注明确拒绝', () {
+    final json = jsonDecode(legacy) as Map<String, dynamic>;
+    json['images'][0]['note'] = '加急\n客户要求蓝色模板';
+    final order = OrderCodec().decode(jsonEncode(json), 'order');
+    expect(order.images.single.note, '加急\n客户要求蓝色模板');
+    final reopened = OrderCodec().decode(OrderCodec().encode(order), 'order');
+    expect(reopened.images.single.note, order.images.single.note);
+
+    json['images'][0]['note'] = 'a' * 501;
+    expect(
+      () => OrderCodec().decode(jsonEncode(json), 'order'),
+      throwsA(isA<FormatException>()),
+    );
   });
 
   test('快照中的无效份数明确拒绝，不把损坏数据当作一份', () {

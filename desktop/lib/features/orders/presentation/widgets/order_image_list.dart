@@ -89,6 +89,24 @@ class OrderImageList extends StatelessWidget {
                     ),
                   ],
                 ),
+                if (image.note.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.notes, size: 14),
+                      const SizedBox(width: 5),
+                      Expanded(
+                        child: Text(
+                          image.note,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.labelSmall,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
