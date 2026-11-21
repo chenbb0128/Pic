@@ -149,9 +149,6 @@ export interface PaidanEvent {
   detail?: string
 }
 export type WorkflowRole = 'customer' | 'production' | 'both'
-export type WorkflowUploadKind = 'publish' | 'backup'
-export type WorkflowHistoryKind = 'backup' | 'completed'
-export type WorkflowRestoreAction = 'replace' | 'copy' | 'keep' | 'download'
 
 export interface WorkflowSettings {
   role: WorkflowRole
@@ -162,7 +159,7 @@ export interface WorkflowOrder {
   orderNumber: string
   localCompleted: boolean
   sharedState: 'pending' | 'completed' | null
-  pendingOperation: 'finish' | 'publish' | 'backup' | null
+  pendingOperation: 'finish' | 'publish' | null
   error: string | null
 }
 
@@ -172,11 +169,11 @@ export interface WorkflowPreview {
   updatedAt: string
   localVersion: string | null
   changes: string[]
-  conflict: boolean
 }
 
 export interface WorkflowResult {
   updated: number
+  uploadedOrderNumbers: string[]
   completed: number
   conflicts: WorkflowPreview[]
   errors: string[]

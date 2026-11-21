@@ -242,48 +242,8 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn backup(&self, id: &str, manifest: Vec<u8>) -> Result<(), String> {
-        match self {
-            Self::Nas(_, client) => {
-                let key = format!("{ROOT}/backups/{id}/manifest.json");
-                if let Some(previous) = client.get_object(&key).await? {
-                    return if previous == manifest {
-                        Ok(())
-                    } else {
-                        Err("备份编号重复。".into())
-                    };
-                }
-                client.put_object(&key, manifest).await
-            }
-            Self::Qiniu(client) => client.backup(id, manifest).await,
-        }
-    }
-
-    pub(crate) async fn list_backups(&self) -> Result<Vec<String>, String> {
-        match self {
-            Self::Nas(_, client) => client.list_prefixes(&format!("{ROOT}/backups/")).await,
-            Self::Qiniu(client) => client.list_backups().await,
-        }
-    }
-
-    pub(crate) async fn get_backup(&self, id: &str) -> Result<Option<Vec<u8>>, String> {
-        match self {
-            Self::Nas(_, client) => {
-                client
-                    .get_object(&format!("{ROOT}/backups/{id}/manifest.json"))
-                    .await
-            }
-            Self::Qiniu(client) => client.get_backup(id).await,
-        }
-    }
-
     #[cfg(test)]
-    pub(crate) async fn clean_fixture(
-        &self,
-        order: &str,
-        backup: &str,
-        blobs: &[String],
-    ) -> Result<(), String> {
+    pub(crate) async fn clean_fixture(&self, order: &str, blobs: &[String]) -> Result<(), String> {
         let Self::Nas(_, client) = self else {
             return Err("fixture requires NAS".into());
         };
@@ -294,9 +254,6 @@ impl Backend {
                 ))
                 .await?;
         }
-        client
-            .delete_object(&format!("{ROOT}/backups/{backup}/manifest.json"))
-            .await?;
         for blob in blobs {
             client
                 .delete_object(&format!("{ROOT}/blobs/{blob}"))

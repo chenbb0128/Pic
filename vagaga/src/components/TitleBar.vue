@@ -2,7 +2,12 @@
 import { onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
-const props = defineProps<{ view: 'orders' | 'settings'; beforeClose: () => Promise<boolean> }>()
+const props = defineProps<{
+  view: 'orders' | 'settings'
+  beforeClose: () => Promise<boolean>
+  uploadCount: number
+  operation: 'upload' | 'sync' | 'finish' | 'resolve' | null
+}>()
 const emit = defineEmits<{ change: ['orders' | 'settings']; upload: []; sync: [] }>()
 
 const win = getCurrentWindow()
@@ -45,8 +50,12 @@ async function close() {
       >{{ tab.label }}</button>
     </nav>
     <div class="workflowActions" aria-label="订单同步操作">
-      <button type="button" class="workflowBtn" @click="emit('upload')">数据上传</button>
-      <button type="button" class="workflowBtn" @click="emit('sync')">数据同步</button>
+      <button type="button" class="workflowBtn" :disabled="!!operation || !uploadCount" @click="emit('upload')">
+        {{ operation === 'upload' ? '正在上传…' : uploadCount ? '数据上传（' + uploadCount + '）' : '数据上传' }}
+      </button>
+      <button type="button" class="workflowBtn" :disabled="!!operation" @click="emit('sync')">
+        {{ operation === 'sync' ? '正在同步…' : '数据同步' }}
+      </button>
     </div>
     <div class="controls">
       <button class="ctl" title="最小化" @click="minimize">─</button>
@@ -110,7 +119,8 @@ async function close() {
   white-space: nowrap;
   cursor: pointer;
 }
-.workflowBtn:hover { background: var(--bg-card-hover); }
+.workflowBtn:hover:not(:disabled) { background: var(--bg-card-hover); }
+.workflowBtn:disabled { opacity: .5; cursor: default; }
 .controls {
   margin-left: auto;
   display: flex;

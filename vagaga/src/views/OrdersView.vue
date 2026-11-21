@@ -18,8 +18,13 @@ import {
 } from '../lib/tauri'
 import type { OrderImage, OrderSummary, Production, SyncStatus } from '../types'
 
-const props = defineProps<{ visible?: boolean }>()
-const emit = defineEmits<{ finish: [orderNumber: string]; history: [] }>()
+const props = defineProps<{
+  visible?: boolean
+  uploadableOrders?: Set<string>
+  uploadSelection?: string[]
+  workflowBusy?: boolean
+}>()
+const emit = defineEmits<{ finish: [orderNumber: string]; toggleUpload: [orderNumber: string, checked: boolean] }>()
 const store = useOrdersStore()
 const canDelete = computed(() => store.workflow.role !== 'production')
 const canEditTemplates = computed(() => store.workflow.role !== 'production')
@@ -80,7 +85,6 @@ function workflowLabel(number: string) {
   if (state?.localCompleted && state.sharedState === 'pending') return '制作已完成 · 待交付'
   if (state?.localCompleted) return '制作已完成'
   if (state?.pendingOperation === 'publish') return state.error ? '发布失败 · 等待重试' : '等待发布'
-  if (state?.pendingOperation === 'backup') return state.error ? '备份失败 · 等待重试' : '等待备份'
   if (state?.sharedState === 'pending') return '已发布 · 待制作'
   return ''
 }
@@ -582,7 +586,6 @@ function orderProductions(orderNumber: string): Production[] {
       <nav class="orderFilters" aria-label="按制作状态筛选">
         <button type="button" :aria-pressed="orderFilter === 'pending'" @click="orderFilter = 'pending'">待制作</button>
         <button type="button" :aria-pressed="orderFilter === 'completed'" @click="orderFilter = 'completed'">已完成</button>
-        <button type="button" class="historyLink" @click="emit('history')">共享历史</button>
       </nav>
       <div class="items">
         <div v-for="entry in visibleEntries" :key="entry.summary.id" class="orderBlock">
@@ -594,6 +597,11 @@ function orderProductions(orderNumber: string): Production[] {
             @mousemove="onItemMove($event)"
             @mouseleave="onItemLeave"
           >
+            <input v-if="uploadableOrders?.has(entry.summary.orderNumber)"
+              type="checkbox" class="uploadCheck"
+              :checked="uploadSelection?.includes(entry.summary.orderNumber)" :disabled="workflowBusy"
+              :aria-label="'勾选订单 ' + entry.summary.orderNumber + ' 上传'" @click.stop
+              @change="emit('toggleUpload', entry.summary.orderNumber, ($event.target as HTMLInputElement).checked)" />
             <svg class="chevron" :class="{ open: expandedOrderId === entry.summary.id }" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             <div class="itemMain">
               <div class="num">{{ entry.summary.orderNumber }}</div>
@@ -606,6 +614,7 @@ function orderProductions(orderNumber: string): Production[] {
               v-if="finishLabel(entry.summary.orderNumber)"
               class="miniBtn finishBtn"
               type="button"
+              :disabled="workflowBusy"
               @click.stop="requestFinish(entry.summary.orderNumber)"
             >{{ finishLabel(entry.summary.orderNumber) }}</button>
             <button
@@ -895,6 +904,13 @@ function orderProductions(orderNumber: string): Production[] {
   padding: 10px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+.uploadCheck {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
 }
 .chevron {
   flex-shrink: 0;
@@ -1231,7 +1247,6 @@ button.prodThumb:hover {
 }
 .orderFilters button:hover { background: var(--bg-card-hover); }
 .orderFilters button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
-.historyLink { margin-left: auto; }
 .orderWorkflowLabel { color: var(--accent); font-size: 11px; }
 .finishBtn { flex: 0 0 auto; white-space: nowrap; }
 .empty {

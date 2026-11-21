@@ -237,7 +237,7 @@ pub(crate) fn list(store: &Store) -> rusqlite::Result<Vec<OrderRow>> {
         "SELECT o.order_number, COALESCE(s.local_completed,0), s.shared_state, t.kind, t.error
          FROM orders o LEFT JOIN workflow_orders s USING(order_number)
          LEFT JOIN workflow_tasks t ON t.order_number=o.order_number AND t.kind=(
-             SELECT kind FROM workflow_tasks WHERE order_number=o.order_number
+             SELECT kind FROM workflow_tasks WHERE order_number=o.order_number AND kind IN ('publish','finish')
              ORDER BY CASE kind WHEN 'finish' THEN 1 WHEN 'publish' THEN 2 ELSE 3 END LIMIT 1
          )",
     )?;
@@ -325,9 +325,7 @@ pub(crate) fn finish_task(
 ) -> rusqlite::Result<()> {
     let mut conn = store.conn.lock().unwrap();
     let tx = conn.transaction()?;
-    if task.kind != "backup"
-        && read_state(&tx, &task.number)?.is_some_and(|current| current.revision <= revision)
-    {
+    if read_state(&tx, &task.number)?.is_some_and(|current| current.revision <= revision) {
         set_shared(
             &tx,
             &task.number,
@@ -354,7 +352,7 @@ pub(crate) fn discard_task(store: &Store, task: &Task) -> rusqlite::Result<()> {
 
 pub(crate) fn has_tasks(conn: &Connection, number: &str) -> rusqlite::Result<bool> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM workflow_tasks WHERE order_number=?1)",
+        "SELECT EXISTS(SELECT 1 FROM workflow_tasks WHERE order_number=?1 AND kind IN ('publish','finish'))",
         [number],
         |r| r.get(0),
     )
@@ -422,8 +420,6 @@ pub(crate) struct ImportedAsset {
 pub(crate) enum ImportAction {
     Sync,
     Replace,
-    Copy,
-    Products,
 }
 
 pub(crate) struct Import<'a> {
@@ -470,15 +466,13 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
     let mut conn = store.conn.lock().unwrap();
     let tx = conn.transaction().map_err(error)?;
     let current = verify_version(&tx, request.number, request.expected)?;
-    let mut number = request.number.to_owned();
+    let number = request.number.to_owned();
     let copy = |number: &str| format!("{number}~副本-{}", random_hex_pub(6));
     match request.action {
         ImportAction::Replace => {
             if let Some(current) = &current {
                 if has_tasks(&tx, &number).map_err(error)? {
-                    return Err(
-                        "这笔订单有尚未确认的上传，请先处理待上传操作，或另存远端副本。".into(),
-                    );
+                    return Err("这笔订单有尚未确认的上传，请先处理待上传操作。".into());
                 }
                 let preserved = copy(&number);
                 tx.execute(
@@ -518,22 +512,18 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
                 }
             }
         }
-        ImportAction::Copy => number = copy(&number),
         ImportAction::Sync => {
             if let Some(current) = &current {
                 remove_current_files(&tx, &number, &current.id).map_err(error)?;
             }
         }
-        ImportAction::Products => {}
     }
     let order_id = store.find_or_create_order(&tx, &number).map_err(error)?;
-    if current.is_none() || !matches!(request.action, ImportAction::Products) {
-        tx.execute(
-            "UPDATE orders SET metadata=?2,updated_at=?3 WHERE id=?1",
-            params![order_id, request.metadata, now()],
-        )
-        .map_err(error)?;
-    }
+    tx.execute(
+        "UPDATE orders SET metadata=?2,updated_at=?3 WHERE id=?1",
+        params![order_id, request.metadata, now()],
+    )
+    .map_err(error)?;
     for asset in request.assets.iter().filter(|asset| !asset.production) {
         let id = random_hex_pub(16);
         tx.execute(

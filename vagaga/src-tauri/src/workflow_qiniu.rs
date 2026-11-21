@@ -180,9 +180,6 @@ impl Qiniu {
     pub(crate) async fn latest(&self, order_key: &str) -> Result<Option<Vec<u8>>, String> {
         self.read("orders", order_key).await
     }
-    pub(crate) async fn get_backup(&self, id: &str) -> Result<Option<Vec<u8>>, String> {
-        self.read("backups", id).await
-    }
 
     async fn list(&self, collection: &str) -> Result<Vec<String>, String> {
         let mut ids = Vec::<String>::new();
@@ -209,9 +206,6 @@ impl Qiniu {
 
     pub(crate) async fn list_orders(&self) -> Result<Vec<String>, String> {
         self.list("orders").await
-    }
-    pub(crate) async fn list_backups(&self) -> Result<Vec<String>, String> {
-        self.list("backups").await
     }
 
     async fn publish(
@@ -247,14 +241,6 @@ impl Qiniu {
             return Err("七牛清单操作编号不一致".into());
         }
         self.publish("orders", order_key, expected, manifest).await
-    }
-
-    pub(crate) async fn backup(&self, id: &str, manifest: Vec<u8>) -> Result<(), String> {
-        if self.publish("backups", id, 0, manifest).await? {
-            Ok(())
-        } else {
-            Err("七牛备份编号已存在".into())
-        }
     }
 }
 

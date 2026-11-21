@@ -190,7 +190,7 @@ fn snapshot(
             .qiniu_asset_state(&image.id)
             .map_err(display)?
             .and_then(|state| state.quality);
-        if kind != "backup"
+        if kind != "legacy"
             && quality
                 .as_deref()
                 .is_some_and(|quality| quality != "original")
@@ -266,12 +266,12 @@ fn snapshot(
     }
     let metadata = store.order_metadata_by_number(number).map_err(display)?;
     let is_completed = state.local_completed || state.shared_state.as_deref() == Some("completed");
-    let completed = kind == "finish" || (kind == "backup" && is_completed);
+    let completed = kind == "finish" || (kind == "legacy" && is_completed);
     let now = crate::store::now();
     Ok(Manifest {
         schema_version: 1,
         order_number: number.into(),
-        revision: if kind == "backup" {
+        revision: if kind == "legacy" {
             0
         } else {
             expected.checked_add(1).ok_or("订单版本溢出")?
@@ -298,7 +298,6 @@ pub(crate) struct Preview {
     updated_at: String,
     local_version: Option<String>,
     changes: Vec<String>,
-    conflict: bool,
 }
 
 #[derive(Default, Serialize)]
@@ -306,6 +305,7 @@ pub(crate) struct Preview {
 pub(crate) struct Outcome {
     updated: usize,
     completed: usize,
+    uploaded_order_numbers: Vec<String>,
     conflicts: Vec<Preview>,
     errors: Vec<String>,
 }
@@ -322,12 +322,7 @@ pub(crate) struct ConnectionTest {
     message: String,
 }
 
-fn preview(
-    store: &Store,
-    manifest: &Manifest,
-    reference: String,
-    conflict: bool,
-) -> Result<Preview, String> {
+fn preview(store: &Store, manifest: &Manifest, reference: String) -> Result<Preview, String> {
     let local = db::order_state(store, &manifest.order_number).map_err(display)?;
     let current_metadata = store
         .order_metadata_by_number(&manifest.order_number)
@@ -360,7 +355,7 @@ fn preview(
         .count();
     let products = manifest.assets.len() - originals;
     changes.push(format!(
-        "远端含 {originals} 张素材、{products} 个成品，恢复时以此版本为准。"
+        "远端含 {originals} 张素材、{products} 个成品，使用共享版本会更新本机素材。"
     ));
     Ok(Preview {
         reference,
@@ -368,7 +363,6 @@ fn preview(
         updated_at: manifest.updated_at.clone(),
         local_version: local.as_ref().map(OrderState::version),
         changes,
-        conflict,
     })
 }
 
@@ -448,33 +442,30 @@ async fn run_task_attempt(
     checked_capability: bool,
 ) -> Result<(), String> {
     let manifest = Manifest::parse(task.manifest.as_bytes())?;
-    let backup = task.kind == "backup";
     let key = hash(&task.number);
     let result: Result<bool, String> = async {
-        if !backup {
-            if let Some(bytes) = backend.latest(&key).await? {
-                let latest = Manifest::parse(&bytes)?;
-                if latest.revision > task.expected {
-                    // The original attempt may have succeeded before a later device advanced the head.
-                    let applied = backend
-                        .commit(
-                            &key,
-                            task.expected,
-                            &manifest.operation_id,
-                            task.manifest.as_bytes().to_vec(),
-                        )
-                        .await?;
-                    return Ok(applied);
-                }
-                if latest.state == SharedState::Completed {
-                    return Ok(false);
-                }
+        if let Some(bytes) = backend.latest(&key).await? {
+            let latest = Manifest::parse(&bytes)?;
+            if latest.revision > task.expected {
+                // The original attempt may have succeeded before a later device advanced the head.
+                let applied = backend
+                    .commit(
+                        &key,
+                        task.expected,
+                        &manifest.operation_id,
+                        task.manifest.as_bytes().to_vec(),
+                    )
+                    .await?;
+                return Ok(applied);
             }
-            // A published order already has a valid revision on this target.
-            // Subsequent writes still use the provider's conditional commit.
-            if task.expected == 0 && !checked_capability {
-                check_capability(backend).await?;
+            if latest.state == SharedState::Completed {
+                return Ok(false);
             }
+        }
+        // A published order already has a valid revision on this target.
+        // Subsequent writes still use the provider's conditional commit.
+        if task.expected == 0 && !checked_capability {
+            check_capability(backend).await?;
         }
         for asset in &manifest.assets {
             let bytes = tokio::fs::read(outbox_file(
@@ -489,21 +480,14 @@ async fn run_task_attempt(
             }
             backend.put_blob(&asset.sha256, bytes).await?;
         }
-        if backup {
-            backend
-                .backup(&manifest.operation_id, task.manifest.as_bytes().to_vec())
-                .await?;
-            Ok(true)
-        } else {
-            backend
-                .commit(
-                    &key,
-                    task.expected,
-                    &manifest.operation_id,
-                    task.manifest.as_bytes().to_vec(),
-                )
-                .await
-        }
+        backend
+            .commit(
+                &key,
+                task.expected,
+                &manifest.operation_id,
+                task.manifest.as_bytes().to_vec(),
+            )
+            .await
     }
     .await;
     let applied = match result {
@@ -536,7 +520,7 @@ async fn check_capability(backend: &Backend) -> Result<(), String> {
     backend
         .test()
         .await
-        .map_err(|error| format!("共享存储未通过多人写入测试：{error}。可使用备份功能。"))
+        .map_err(|error| format!("共享存储未通过多人写入测试：{error}"))
 }
 
 async fn clear_outbox(root: &Path, operation: &str) {
@@ -561,11 +545,12 @@ async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option
     if kind == "publish"
         && (local.local_completed || local.shared_state.as_deref() == Some("completed"))
     {
-        return Err("这笔订单已经完成，可将它上传为备份。".into());
+        return Err("这笔订单已制作完毕。".into());
     }
-    let fresh_backend = match (kind, local.target.as_deref()) {
-        ("backup", _) | (_, None) => Some(selected(state)?),
-        (_, Some(_)) => None,
+    let fresh_backend = if local.target.is_none() {
+        Some(selected(state)?)
+    } else {
+        None
     };
     let target = fresh_backend
         .as_ref()
@@ -577,7 +562,7 @@ async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option
     if let Some(backend) = fresh_backend.as_ref().filter(|_| checked_capability) {
         check_capability(backend).await?;
     }
-    let expected = if kind == "backup" { 0 } else { local.revision };
+    let expected = local.revision;
     let operation = random_hex_pub(16);
     let stage = || -> Result<Task, String> {
         let manifest = snapshot(
@@ -615,17 +600,21 @@ async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option
 
 async fn publish_mysql(state: &AppState, task: &Task) -> Result<(), String> {
     let config = crate::mysql::load_config(&state.data_root);
-    if !config.enabled || task.kind == "backup" {
+    if !config.enabled {
         return Ok(());
     }
     let manifest = Manifest::parse(task.manifest.as_bytes())?;
     let client = crate::mysql::MyClient::new(&config);
-    client.order_index().await?.write(&task.target, &manifest.mysql_order()).await?;
+    client
+        .order_index()
+        .await?
+        .write(&task.target, &manifest.mysql_order())
+        .await?;
     Ok(())
 }
 
 fn verify_provider_role(store: &Store, target: &str, kind: &str) -> Result<(), String> {
-    if !target.starts_with("qiniu:") || kind == "backup" {
+    if !target.starts_with("qiniu:") {
         return Ok(());
     }
     let (settings, _) = crate::qiniu_settings::load(store)?;
@@ -653,22 +642,25 @@ async fn run_bound_task(state: &AppState, task: &Task) -> Result<(), String> {
 pub(crate) async fn workflow_upload(
     state: State<'_, AppState>,
     order_numbers: Vec<String>,
-    kind: String,
 ) -> Result<Outcome, String> {
-    if !matches!(kind.as_str(), "publish" | "backup") {
-        return Err("请选择发布或备份。".into());
-    }
-    if kind == "publish" && db::role(&state.store) == "production" {
+    if db::role(&state.store) == "production" {
         return Err("当前是制作端，不能发布待制作订单。".into());
     }
     let _operation = state.workflow_operations.lock().await;
     let mut result = Outcome::default();
+    let mut seen = std::collections::HashSet::new();
     for number in order_numbers {
-        match upload_one(&state, &number, &kind).await {
+        if !seen.insert(number.clone()) {
+            continue;
+        }
+        match upload_one(&state, &number, "publish").await {
             Ok(warning) => {
                 result.updated += 1;
+                result.uploaded_order_numbers.push(number.clone());
                 if let Some(warning) = warning {
-                    result.errors.push(format!("{number} 已发布，{warning}。可在 MySQL 设置中重新同步。"));
+                    result.errors.push(format!(
+                        "{number} 已发布，{warning}。可在 MySQL 设置中重新同步。"
+                    ));
                 }
             }
             Err(error) => result.errors.push(format!("{number}：{error}")),
@@ -712,7 +704,9 @@ pub(crate) async fn workflow_finish(
     }
     if local.target.is_some() {
         match upload_one(&state, &order_number, "finish").await {
-            Ok(Some(warning)) => result.errors.push(format!("共享交付已完成，{warning}。可在 MySQL 设置中重新同步。")),
+            Ok(Some(warning)) => result.errors.push(format!(
+                "共享交付已完成，{warning}。可在 MySQL 设置中重新同步。"
+            )),
             Ok(None) => {}
             Err(error) => {
                 result.errors.push(error);
@@ -726,28 +720,19 @@ pub(crate) async fn workflow_finish(
     Ok(result)
 }
 
-fn remote_reference(target: &str, kind: &str, key: &str, revision: u64) -> String {
-    format!("{target}:{kind}:{key}:{revision}")
+fn remote_reference(target: &str, key: &str, revision: u64) -> String {
+    format!("{target}:{key}:{revision}")
 }
 
-async fn load_manifest(
-    backend: &Backend,
-    kind: &str,
-    key: &str,
-) -> Result<Option<Manifest>, String> {
-    if !hex_id(key, if kind == "backup" { 32 } else { 64 }) {
-        return Err("共享记录编号无效。".into());
+async fn load_manifest(backend: &Backend, key: &str) -> Result<Option<Manifest>, String> {
+    if !hex_id(key, 64) {
+        return Err("共享订单编号无效。".into());
     }
-    let bytes = if kind == "backup" {
-        backend.get_backup(key).await?
-    } else {
-        backend.latest(key).await?
+    let Some(bytes) = backend.latest(key).await? else {
+        return Ok(None);
     };
-    let Some(bytes) = bytes else { return Ok(None) };
     let manifest = Manifest::parse(&bytes)?;
-    if (kind == "backup" && (manifest.operation_id != key || manifest.revision != 0))
-        || (kind != "backup" && (hash(&manifest.order_number) != key || manifest.revision == 0))
-    {
+    if hash(&manifest.order_number) != key || manifest.revision == 0 {
         return Err("共享清单与订单位置不符。".into());
     }
     Ok(Some(manifest))
@@ -778,14 +763,10 @@ async fn download(
     state: &AppState,
     backend: &Backend,
     manifest: &Manifest,
-    products_only: bool,
 ) -> Result<Download, String> {
-    let directory = download_directory(&state.data_root, products_only)?;
+    let directory = download_directory(&state.data_root)?;
     let mut assets = Vec::new();
     for asset in &manifest.assets {
-        if products_only && !asset.production() {
-            continue;
-        }
         let bytes = backend
             .get_blob(&asset.sha256)
             .await?
@@ -798,12 +779,8 @@ async fn download(
     Ok(Download { directory, assets })
 }
 
-fn download_directory(root: &Path, products_only: bool) -> Result<tempfile::TempDir, String> {
-    let base = root.join(if products_only {
-        "productions"
-    } else {
-        "images"
-    });
+fn download_directory(root: &Path) -> Result<tempfile::TempDir, String> {
+    let base = root.join("images");
     std::fs::create_dir_all(&base).map_err(display)?;
     tempfile::Builder::new()
         .prefix("shared-")
@@ -876,11 +853,11 @@ pub(crate) fn import_legacy(
             source,
             source_root,
             &number,
-            "backup",
+            "legacy",
             0,
             &random_hex_pub(16),
         )?;
-        let directory = download_directory(&state.data_root, false)?;
+        let directory = download_directory(&state.data_root)?;
         let mut assets = Vec::new();
         for asset in &manifest.assets {
             let bytes = std::fs::read(outbox_file(
@@ -947,15 +924,19 @@ async fn sync_one(
     active_order: Option<&str>,
     result: &mut Outcome,
 ) -> Result<(), String> {
-    let Some(manifest) = load_manifest(backend, "order", key).await? else {
+    let Some(manifest) = load_manifest(backend, key).await? else {
         return Ok(());
     };
     apply_shared_order(state, backend, manifest, key, active_order, result).await
 }
 
 async fn apply_shared_order(
-    state: &AppState, backend: &Backend, manifest: Manifest, key: &str,
-    active_order: Option<&str>, result: &mut Outcome,
+    state: &AppState,
+    backend: &Backend,
+    manifest: Manifest,
+    key: &str,
+    active_order: Option<&str>,
+    result: &mut Outcome,
 ) -> Result<(), String> {
     let target = backend.target();
     let number = manifest.order_number.as_str();
@@ -985,13 +966,12 @@ async fn apply_shared_order(
         result.conflicts.push(preview(
             &state.store,
             &manifest,
-            remote_reference(&target, "order", key, manifest.revision),
-            true,
+            remote_reference(&target, key, manifest.revision),
         )?);
         return Ok(());
     }
     let version = local.as_ref().map(OrderState::version);
-    let downloaded = download(state, backend, &manifest, false).await?;
+    let downloaded = download(state, backend, &manifest).await?;
     apply_download(
         &state.store,
         &manifest,
@@ -1013,7 +993,9 @@ pub(crate) async fn workflow_sync(
 }
 
 pub(crate) async fn synchronize(
-    state: &AppState, active_order: Option<&str>, require_mysql: bool,
+    state: &AppState,
+    active_order: Option<&str>,
+    require_mysql: bool,
 ) -> Result<Outcome, String> {
     let _operation = state.workflow_operations.lock().await;
     let backend = selected(state)?;
@@ -1028,7 +1010,8 @@ pub(crate) async fn synchronize(
             let mut order_index = client.order_index().await?;
             indexed = order_index.read(&target).await?;
             Ok::<_, String>(order_index)
-        }.await;
+        }
+        .await;
         match connection {
             Ok(connection) => index = Some(connection),
             Err(error) if require_mysql => return Err(error),
@@ -1039,10 +1022,13 @@ pub(crate) async fn synchronize(
     }
     let keys = backend.list_orders().await?;
     for key in keys.into_iter().filter(|key| hex_id(key, 64)) {
-        let manifest = match load_manifest(&backend, "order", &key).await {
+        let manifest = match load_manifest(&backend, &key).await {
             Ok(Some(manifest)) => manifest,
             Ok(None) => continue,
-            Err(error) => { response.errors.push(error); continue; }
+            Err(error) => {
+                response.errors.push(error);
+                continue;
+            }
         };
         if let Some(order_index) = &mut index {
             let current = manifest.mysql_order();
@@ -1053,7 +1039,9 @@ pub(crate) async fn synchronize(
                 }
             }
         }
-        if let Err(error) = apply_shared_order(state, &backend, manifest, &key, active_order, &mut response).await {
+        if let Err(error) =
+            apply_shared_order(state, &backend, manifest, &key, active_order, &mut response).await
+        {
             response.errors.push(error);
         }
     }
@@ -1061,104 +1049,38 @@ pub(crate) async fn synchronize(
 }
 
 #[tauri::command]
-pub(crate) async fn workflow_history(
-    state: State<'_, AppState>,
-    kind: String,
-) -> Result<Vec<Preview>, String> {
-    let backend = selected(&state)?;
-    let target = backend.target();
-    let (category, keys) = match kind.as_str() {
-        "backup" => ("backup", backend.list_backups().await?),
-        "completed" => ("order", backend.list_orders().await?),
-        _ => return Err("记录类型无效。".into()),
-    };
-    let mut result = Vec::new();
-    for key in keys
-        .into_iter()
-        .filter(|key| hex_id(key, if category == "backup" { 32 } else { 64 }))
-    {
-        let Some(manifest) = load_manifest(&backend, category, &key).await? else {
-            continue;
-        };
-        if kind == "completed" && manifest.state != SharedState::Completed {
-            continue;
-        }
-        let conflict = category == "backup"
-            && db::order_state(&state.store, &manifest.order_number)
-                .map_err(display)?
-                .is_some();
-        result.push(preview(
-            &state.store,
-            &manifest,
-            remote_reference(&target, category, &key, manifest.revision),
-            conflict,
-        )?);
-    }
-    result.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    Ok(result)
-}
-
-#[tauri::command]
-pub(crate) async fn workflow_restore(
+pub(crate) async fn workflow_resolve_conflict(
     state: State<'_, AppState>,
     reference: String,
-    action: String,
     local_version: Option<String>,
     active_order: Option<String>,
-) -> Result<Outcome, String> {
+) -> Result<(), String> {
     let _operation = state.workflow_operations.lock().await;
-    let mut result = Outcome::default();
-    if action == "keep" {
-        return Ok(result);
-    }
-    let pieces: Vec<_> = reference.rsplitn(4, ':').collect();
-    let [revision, key, kind, target] = pieces.as_slice() else {
-        return Err("请选择有效的备份或订单。".into());
+    let pieces: Vec<_> = reference.rsplitn(3, ':').collect();
+    let [revision, key, target] = pieces.as_slice() else {
+        return Err("请选择有效的共享订单。".into());
     };
-    if !matches!(*kind, "order" | "backup") {
-        return Err("记录类型无效。".into());
-    }
     let backend = Backend::bound(&state.store, &state.data_root, target)?;
-    let manifest = load_manifest(&backend, kind, key)
+    let manifest = load_manifest(&backend, key)
         .await?
-        .ok_or("远端记录已不存在。")?;
-    if revision.parse::<u64>().ok() != Some(manifest.revision) {
-        return Err("远端订单在查看期间发生变化，请重新预览。".into());
-    }
-    let action = match action.as_str() {
-        "replace" => ImportAction::Replace,
-        "copy" => ImportAction::Copy,
-        "download" if *kind == "order" && manifest.state == SharedState::Completed => {
-            ImportAction::Products
-        }
-        _ => return Err("恢复方式无效。".into()),
-    };
-    if matches!(action, ImportAction::Replace)
-        && active_order.as_deref() == Some(&manifest.order_number)
+        .ok_or("远端订单已不存在。")?;
+    if revision.parse::<u64>().ok() != Some(manifest.revision)
+        || manifest.state != SharedState::Pending
     {
-        return Err("这笔订单仍在编辑中，请先结束编辑或选择另存副本。".into());
+        return Err("远端订单已更新，请重新同步。".into());
     }
-    let products_only = matches!(action, ImportAction::Products);
-    let bind = *kind == "order"
-        && !matches!(action, ImportAction::Copy)
-        && (local_version.is_none()
-            || !products_only
-            || db::order_state(&state.store, &manifest.order_number)
-                .map_err(display)?
-                .as_ref()
-                .and_then(|state| state.target.as_deref())
-                == Some(target));
-    let downloaded = download(&state, &backend, &manifest, products_only).await?;
+    if active_order.as_deref() == Some(&manifest.order_number) {
+        return Err("这笔订单仍在编辑中，请切换编辑订单后再同步。".into());
+    }
+    let downloaded = download(&state, &backend, &manifest).await?;
     apply_download(
         &state.store,
         &manifest,
         downloaded,
-        action,
+        ImportAction::Replace,
         local_version.as_deref(),
-        bind.then_some(target),
-    )?;
-    result.updated = 1;
-    Ok(result)
+        Some(target),
+    )
 }
 
 #[cfg(test)]
@@ -1178,7 +1100,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "uses a configured NAS in an isolated fixture prefix"]
-    async fn nas_two_workstations_publish_complete_and_restore() {
+    async fn nas_two_workstations_publish_and_complete() {
         use crate::cloud::load_config;
         let config_dir = std::env::var_os("VAGAGA_TEST_NAS_CONFIG_DIR").unwrap();
         let mut config = load_config(Path::new(&config_dir));
@@ -1194,7 +1116,6 @@ mod tests {
         let c = workstation(&offline);
         let number = format!("FIXTURE-{}", random_hex_pub(16));
         let key = hash(&number);
-        let backup = random_hex_pub(16);
         let fixture_file = online_a.path().join("red.png");
         image::RgbImage::from_fn(10, 10, |x, y| {
             image::Rgb([rand::random(), x as u8, y as u8])
@@ -1296,45 +1217,8 @@ mod tests {
             .await
             .unwrap();
         assert!(c.store.list_orders().unwrap().is_empty());
-        {
-            let backend = connect();
-            run_task(
-                &b,
-                &backend,
-                &make_task(&b, &backend, "backup", backup.clone()),
-                false,
-            )
-            .await
-            .unwrap();
-        }
-        let (manifest, staged) = {
-            let backend = connect();
-            let manifest = load_manifest(&backend, "backup", &backup)
-                .await
-                .unwrap()
-                .unwrap();
-            let staged = download(&c, &backend, &manifest, false).await.unwrap();
-            (manifest, staged)
-        };
-        apply_download(
-            &c.store,
-            &manifest,
-            staged,
-            ImportAction::Replace,
-            None,
-            None,
-        )
-        .unwrap();
-        assert!(
-            db::order_state(&c.store, &number)
-                .unwrap()
-                .unwrap()
-                .local_completed
-        );
-        let restored = c.store.list_productions(&number).unwrap().pop().unwrap();
-        assert_eq!(std::fs::read(restored.file_path).unwrap(), production);
         connect()
-            .clean_fixture(&key, &backup, &[hash(original), hash(production)])
+            .clean_fixture(&key, &[hash(original), hash(production)])
             .await
             .unwrap();
     }

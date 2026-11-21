@@ -15,14 +15,10 @@ import type {
   QiniuSettings,
   QiniuSettingsInput,
   QiniuStatus,
-  WorkflowHistoryKind,
   WorkflowOrder,
-  WorkflowPreview,
-  WorkflowRestoreAction,
   WorkflowResult,
   WorkflowRole,
   WorkflowSettings,
-  WorkflowUploadKind,
 } from '../types'
 
 export function listOrders(): Promise<OrderSummary[]> {
@@ -180,8 +176,8 @@ export function workflowOrders(): Promise<WorkflowOrder[]> {
   return invoke('workflow_orders')
 }
 
-export function workflowUpload(orderNumbers: string[], kind: WorkflowUploadKind): Promise<WorkflowResult> {
-  return invoke('workflow_upload', { orderNumbers, kind })
+export function workflowUpload(orderNumbers: string[]): Promise<WorkflowResult> {
+  return invoke('workflow_upload', { orderNumbers })
 }
 
 export function workflowSync(activeOrder: string | null): Promise<WorkflowResult> {
@@ -192,17 +188,12 @@ export function workflowFinish(orderNumber: string): Promise<WorkflowResult> {
   return invoke('workflow_finish', { orderNumber })
 }
 
-export function workflowHistory(kind: WorkflowHistoryKind): Promise<WorkflowPreview[]> {
-  return invoke('workflow_history', { kind })
-}
-
-export function workflowRestore(
+export function workflowResolveConflict(
   reference: string,
-  action: WorkflowRestoreAction,
   localVersion: string | null,
   activeOrder: string | null,
 ): Promise<WorkflowResult> {
-  return invoke('workflow_restore', { reference, action, localVersion, activeOrder })
+  return invoke('workflow_resolve_conflict', { reference, localVersion, activeOrder })
 }
 
 export function workflowSetLayout(orderNumber: string, number: string): Promise<void> {

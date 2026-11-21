@@ -150,8 +150,7 @@ pub fn run() {
             workflow::workflow_upload,
             workflow::workflow_sync,
             workflow::workflow_finish,
-            workflow::workflow_history,
-            workflow::workflow_restore,
+            workflow::workflow_resolve_conflict,
         ])
         .run(tauri::generate_context!())
         .expect("vagaga 启动失败");
