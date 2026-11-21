@@ -42,7 +42,7 @@ function toggleUpload(orderNumber: string, checked: boolean) {
 }
 
 function sync() {
-  if (requireStorage()) void workflow.value?.sync()
+  if (store.workflow.role !== 'customer' && requireStorage()) void workflow.value?.sync()
 }
 
 function saveLayout() {
@@ -86,6 +86,7 @@ onBeforeUnmount(() => {
     <TitleBar
       :view="view"
       :before-close="saveLayoutBeforeClose"
+      :role="store.workflow.role"
       @change="view = $event"
       :upload-count="uploadSelection.length"
       :operation="workflow?.operation ?? null"

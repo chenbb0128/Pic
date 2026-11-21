@@ -115,18 +115,19 @@ impl MyClient {
 impl OrderIndex {
     pub async fn write(&mut self, storage: &str, order: &SharedOrder) -> Result<bool, String> {
         let metadata = order.metadata.as_ref().map(serde_json::Value::to_string);
-        // MySQL evaluates these assignments left to right. Keep the revision
-        // assignment after metadata so those fields compare against the previous revision.
-        // The completion guard also makes a terminal state sticky.
+        // The operation ID identifies a retry.  A completed row is terminal;
+        // otherwise the current metadata is simply replaced by the latest
+        // manifest.  The legacy numeric revision column remains for schema
+        // compatibility but is not used for ordering.
         self.0.exec_drop(
             "INSERT INTO vagaga_shared_orders
              (storage_id, order_number, revision, operation_id, metadata, completed)
              VALUES (UNHEX(SHA2(?, 256)), ?, ?, ?, ?, ?)
              ON DUPLICATE KEY UPDATE
-                operation_id = IF(VALUES(revision)>revision AND NOT completed, VALUES(operation_id), operation_id),
-                metadata = IF(VALUES(revision)>revision AND NOT completed, VALUES(metadata), metadata),
-                revision = IF(NOT completed, GREATEST(VALUES(revision),revision), revision),
-                completed = completed OR (VALUES(revision)=revision AND VALUES(operation_id)=operation_id AND VALUES(completed))",
+                operation_id = IF(NOT completed, VALUES(operation_id), operation_id),
+                metadata = IF(NOT completed, VALUES(metadata), metadata),
+                revision = IF(NOT completed, VALUES(revision), revision),
+                completed = completed OR VALUES(completed)",
             (storage, &order.number, order.revision, &order.operation_id, metadata, order.completed),
         ).await.map_err(mysql_error)?;
         Ok(self.0.affected_rows() != 0)

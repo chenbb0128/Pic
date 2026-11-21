@@ -16,12 +16,13 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS workflow_orders (
              order_number TEXT PRIMARY KEY, local_completed INTEGER NOT NULL DEFAULT 0,
              target TEXT, revision INTEGER NOT NULL DEFAULT 0, shared_state TEXT,
-             synced_generation INTEGER NOT NULL DEFAULT 0
+             synced_generation INTEGER NOT NULL DEFAULT 0,
+             remote_operation_id TEXT
          );
          CREATE TABLE IF NOT EXISTS workflow_tasks (
              order_number TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
              expected INTEGER NOT NULL, generation INTEGER NOT NULL,
-             manifest TEXT NOT NULL, error TEXT,
+             manifest TEXT NOT NULL, error TEXT, expected_operation_id TEXT,
              PRIMARY KEY(order_number, kind)
          );
          CREATE TABLE IF NOT EXISTS workflow_remote_ids (
@@ -34,6 +35,19 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
              DELETE FROM workflow_tasks WHERE order_number = OLD.order_number;
          END;",
     )?;
+    // Existing installations have the original numeric revision schema. Keep the
+    // columns for SQLite compatibility, but stop using that value as a workflow
+    // version and add the operation-id fields used by the current protocol.
+    let _ = conn.execute(
+        "ALTER TABLE workflow_orders ADD COLUMN remote_operation_id TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workflow_tasks ADD COLUMN expected_operation_id TEXT",
+        [],
+    );
+    conn.execute("UPDATE workflow_orders SET revision=0", [])?;
+    conn.execute("UPDATE workflow_tasks SET expected=0", [])?;
     let order = |row: &str| format!("SELECT order_number FROM orders WHERE id={row}.order_id");
     let template = |row: &str| {
         format!(
@@ -183,8 +197,8 @@ pub(crate) struct OrderState {
     id: String,
     pub(crate) local_completed: bool,
     pub(crate) target: Option<String>,
-    pub(crate) revision: u64,
     pub(crate) shared_state: Option<String>,
+    pub(crate) remote_operation_id: Option<String>,
     pub(crate) generation: i64,
     pub(crate) synced_generation: i64,
 }
@@ -197,8 +211,9 @@ impl OrderState {
 
 fn read_state(conn: &Connection, number: &str) -> rusqlite::Result<Option<OrderState>> {
     conn.query_row(
-        "SELECT o.id, COALESCE(s.local_completed,0), s.target, COALESCE(s.revision,0),
-                s.shared_state, COALESCE(c.generation,0), COALESCE(s.synced_generation,0)
+        "SELECT o.id, COALESCE(s.local_completed,0), s.target,
+                s.shared_state, s.remote_operation_id,
+                COALESCE(c.generation,0), COALESCE(s.synced_generation,0)
          FROM orders o LEFT JOIN workflow_orders s USING(order_number)
          LEFT JOIN workflow_changes c USING(order_number) WHERE o.order_number=?1",
         [number],
@@ -207,8 +222,8 @@ fn read_state(conn: &Connection, number: &str) -> rusqlite::Result<Option<OrderS
                 id: row.get(0)?,
                 local_completed: row.get(1)?,
                 target: row.get(2)?,
-                revision: row.get(3)?,
-                shared_state: row.get(4)?,
+                shared_state: row.get(3)?,
+                remote_operation_id: row.get(4)?,
                 generation: row.get(5)?,
                 synced_generation: row.get(6)?,
             })
@@ -267,17 +282,17 @@ pub(crate) struct Task {
     pub(crate) number: String,
     pub(crate) kind: String,
     pub(crate) target: String,
-    pub(crate) expected: u64,
+    pub(crate) expected_operation_id: Option<String>,
     pub(crate) generation: i64,
     pub(crate) manifest: String,
 }
 
 pub(crate) fn task(store: &Store, number: &str, kind: &str) -> rusqlite::Result<Option<Task>> {
     store.conn.lock().unwrap().query_row(
-        "SELECT target, expected, generation, manifest FROM workflow_tasks WHERE order_number=?1 AND kind=?2",
+        "SELECT target, expected_operation_id, generation, manifest FROM workflow_tasks WHERE order_number=?1 AND kind=?2",
         params![number, kind],
         |r| Ok(Task { number: number.into(), kind: kind.into(), target: r.get(0)?,
-            expected: r.get(1)?, generation: r.get(2)?, manifest: r.get(3)? }),
+            expected_operation_id: r.get(1)?, generation: r.get(2)?, manifest: r.get(3)? }),
     ).optional()
 }
 
@@ -286,15 +301,15 @@ pub(crate) fn insert_task(store: &Store, task: &Task, local_version: &str) -> Re
     let tx = conn.transaction().map_err(error)?;
     verify_version(&tx, &task.number, Some(local_version))?;
     tx.execute(
-        "INSERT INTO workflow_tasks(order_number,kind,target,expected,generation,manifest)
-         VALUES (?1,?2,?3,?4,?5,?6)",
+        "INSERT INTO workflow_tasks(order_number,kind,target,expected,generation,manifest,expected_operation_id)
+         VALUES (?1,?2,?3,0,?4,?5,?6)",
         params![
             task.number,
             task.kind,
             task.target,
-            task.expected,
             task.generation,
-            task.manifest
+            task.manifest,
+            task.expected_operation_id,
         ],
     )
     .map_err(error)?;
@@ -321,17 +336,17 @@ pub(crate) fn finish_task(
     store: &Store,
     task: &Task,
     state: &str,
-    revision: u64,
+    operation_id: &str,
 ) -> rusqlite::Result<()> {
     let mut conn = store.conn.lock().unwrap();
     let tx = conn.transaction()?;
-    if read_state(&tx, &task.number)?.is_some_and(|current| current.revision <= revision) {
+    if read_state(&tx, &task.number)?.is_some() {
         set_shared(
             &tx,
             &task.number,
             &task.target,
             state,
-            revision,
+            operation_id,
             task.generation,
         )?;
     }
@@ -362,13 +377,13 @@ pub(crate) fn mark_remote_complete(
     store: &Store,
     number: &str,
     target: &str,
-    revision: u64,
+    operation_id: &str,
 ) -> rusqlite::Result<bool> {
     let conn = store.conn.lock().unwrap();
     Ok(conn.execute(
-        "UPDATE workflow_orders SET shared_state='completed',revision=?3
-         WHERE order_number=?1 AND target=?2 AND revision<?3",
-        params![number, target, revision],
+        "UPDATE workflow_orders SET shared_state='completed',revision=0,remote_operation_id=?3
+         WHERE order_number=?1 AND target=?2 AND COALESCE(remote_operation_id,'')<>?3",
+        params![number, target, operation_id],
     )? > 0)
 }
 
@@ -377,14 +392,15 @@ fn set_shared(
     number: &str,
     target: &str,
     state: &str,
-    revision: u64,
+    operation_id: &str,
     generation: i64,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO workflow_orders(order_number,target,shared_state,revision,synced_generation) VALUES (?1,?2,?3,?4,?5)
+        "INSERT INTO workflow_orders(order_number,target,shared_state,revision,synced_generation,remote_operation_id) VALUES (?1,?2,?3,0,?4,?5)
          ON CONFLICT(order_number) DO UPDATE SET target=excluded.target,shared_state=excluded.shared_state,
-             revision=excluded.revision,synced_generation=excluded.synced_generation",
-        params![number, target, state, revision, generation],
+             revision=0,synced_generation=excluded.synced_generation,
+             remote_operation_id=excluded.remote_operation_id",
+        params![number, target, state, generation, operation_id],
     )?;
     Ok(())
 }
@@ -426,7 +442,7 @@ pub(crate) struct Import<'a> {
     pub(crate) number: &'a str,
     pub(crate) expected: Option<&'a str>,
     pub(crate) metadata: Option<&'a str>,
-    pub(crate) shared: Option<(&'a str, &'a str, u64)>,
+    pub(crate) shared: Option<(&'a str, &'a str, &'a str)>,
     pub(crate) completed: bool,
     pub(crate) action: ImportAction,
     pub(crate) assets: &'a [ImportedAsset],
@@ -504,7 +520,7 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
                             &number,
                             target,
                             state,
-                            current.revision,
+                            current.remote_operation_id.as_deref().unwrap_or_default(),
                             current.synced_generation,
                         )
                         .map_err(error)?;
@@ -590,7 +606,7 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
         )
         .map_err(error)?;
     }
-    if let Some((target, shared_state, revision)) = request.shared {
+    if let Some((target, shared_state, operation_id)) = request.shared {
         let state = read_state(&tx, &number)
             .map_err(error)?
             .ok_or("订单记录不存在")?;
@@ -599,7 +615,7 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
             &number,
             target,
             shared_state,
-            revision,
+            operation_id,
             state.generation,
         )
         .map_err(error)?;
@@ -638,6 +654,31 @@ mod tests {
     }
 
     #[test]
+    fn shared_state_keeps_operation_id_without_a_local_revision() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+        store
+            .find_or_create_order(&store.conn.lock().unwrap(), "A01")
+            .unwrap();
+        let local = order_state(&store, "A01").unwrap().unwrap();
+        import(
+            &store,
+            Import {
+                number: "A01",
+                expected: Some(&local.version()),
+                metadata: None,
+                shared: Some(("nas:test", "pending", "operation-1")),
+                completed: false,
+                action: ImportAction::Sync,
+                assets: &[],
+            },
+        )
+        .unwrap();
+        let current = order_state(&store, "A01").unwrap().unwrap();
+        assert_eq!(current.remote_operation_id.as_deref(), Some("operation-1"));
+    }
+
+    #[test]
     fn pending_finish_survives_restart_and_blocks_replacement() {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
@@ -651,7 +692,7 @@ mod tests {
                 number: "A01".into(),
                 kind: "finish".into(),
                 target: "nas".into(),
-                expected: 1,
+                expected_operation_id: None,
                 generation: local.generation,
                 manifest: "{}".into(),
             },

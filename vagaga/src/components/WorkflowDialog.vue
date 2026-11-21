@@ -102,11 +102,11 @@ async function finish(orderNumber: string) {
     if (result.errors.length) {
       reportErrors(result.errors)
     } else if (order?.pendingOperation === 'finish' || (order?.localCompleted && order.sharedState === 'pending')) {
-      toast('ok', '制作已完成，等待交付。')
+      toast('ok', '已标记完成，等待交付。')
     } else if (order?.sharedState === 'completed') {
       toast('ok', '共享交付已完成。')
     } else if (order?.localCompleted) {
-      toast('ok', '制作已完成。')
+      toast('ok', '已标记完成。')
     }
   })
 }
@@ -130,7 +130,7 @@ defineExpose({ upload, sync, finish, operation })
       <section v-else class="previewDetails" aria-label="订单差异">
         <h3>{{ preview.orderNumber }}</h3>
         <ul><li v-for="change in preview.changes" :key="change">{{ change }}</li></ul>
-        <p v-if="preview.localVersion" class="hint">使用共享版本会在本机保留一份原订单及已保存的成品。</p>
+        <p v-if="preview.localVersion" class="hint">使用共享内容会在本机保留一份原订单及已保存的成品。</p>
         <p v-if="activePreview" class="hint">同步成功后会关闭当前画布。需要保留画布上的调整时，请先导出成品。</p>
         <p v-if="resolveError" class="resolveError" role="alert">{{ resolveError }}</p>
       </section>
@@ -139,7 +139,7 @@ defineExpose({ upload, sync, finish, operation })
       <button v-if="conflicts.length > 1" type="button" :disabled="!!operation" @click="showPreview(null)">返回列表</button>
       <div class="actions">
         <button type="button" :disabled="!!operation" @click="dismiss(preview)">保留本机</button>
-        <button type="button" class="primary" :disabled="!!operation" @click="replace">{{ operation === 'resolve' ? '正在同步…' : '使用共享版本' }}</button>
+        <button type="button" class="primary" :disabled="!!operation" @click="replace">{{ operation === 'resolve' ? '正在同步…' : '使用共享内容' }}</button>
       </div>
     </footer>
   </dialog>

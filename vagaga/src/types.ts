@@ -26,7 +26,6 @@ export interface OrderSummary {
   id: string
   orderNumber: string
   imageCount: number
-  taskCount: number
   createdAt: string
   updatedAt: string
   metadata: string | null

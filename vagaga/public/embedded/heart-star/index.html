@@ -155,24 +155,41 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </style></head>
 <body>
 <link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
-<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-1">
+<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-2">
 <link rel="stylesheet" href="./product-preview.css?v=product-1">
 <header class="editor-toolbar" aria-label="排版工具栏">
- <div class="editor-toolbar-row">
- <div class="preview-head"><strong id="previewTitle">♡ 爱心星星排版</strong><span id="dimensions">正在载入模板…</span></div>
- <div class="preview-toolbar">
- <div class="preview-numbering"><label class="label" for="footerText" title="导出统一放底部 · 另加 3 mm（横版编辑时在右侧）">排版编号</label><label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label><div class="footer-text-row"><select id="footerPrefix" aria-label="编号前缀" title="编号前缀"><option value="ch" selected>ch</option><option value="yy">yy</option><option value="x">x</option></select><input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号，正式下载后清空" aria-label="本次排版编号" required><label class="sheet-field" title="本订单总张数">共<input id="sheetTotal" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="总张数">张</label><label class="sheet-field" title="当前是第几张">第<input id="sheetIndex" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="当前张数">张</label><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div></div>
- <div class="preview-tools"><button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button><button type="button" class="preview-tool" id="zoomIn" title="放大预览" aria-label="放大预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg></button><select class="preview-zoom" id="previewZoom" aria-label="预览缩放比例"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select></div>
+ <label class="label" for="footerText">排版编号</label>
+ <div class="footer-text-row">
+  <select id="footerPrefix" aria-label="编号前缀"><option value="ch" selected>ch</option><option value="yy">yy</option><option value="x">x</option></select>
+  <input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号" aria-label="本次排版编号" required>
  </div>
- <div class="editor-toolbar-actions" hidden><button type="button" class="btn" data-editor-action="shortcuts" aria-haspopup="dialog">快捷键指南</button></div>
- </div>
- <div class="editor-toolbar-secondary">
- <output class="small footer-filename" id="exportFilename" for="footerText template numberingEnabled"></output>
- </div>
+ <button type="button" class="btn primary" id="download" disabled>下载 PNG</button>
 </header>
 <main class="app">
 <section class="panel">
  <div class="pic-group-head">模板</div><div class="field"><div class="label">选择模板 <span class="small">16 款＋自定义</span></div><select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="甜心派对.png">甜心派对 · A5 竖版</option><option value="缤纷糖果.png">缤纷糖果 · A5 竖版</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select></div>
+ <details class="editor-options">
+  <summary>预览与导出设置</summary>
+  <div class="editor-options-body">
+   <div class="editor-preview-info"><strong id="previewTitle">♡ 爱心星星排版</strong><span id="dimensions">正在载入模板…</span></div>
+   <div class="preview-tools"><button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button><button type="button" class="preview-tool" id="zoomIn" title="放大预览" aria-label="放大预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg></button><select class="preview-zoom" id="previewZoom" aria-label="预览缩放比例"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select><button type="button" class="btn picture-preview-button" id="picturePreview" aria-haspopup="dialog" aria-expanded="false">预览图</button></div>
+   <div class="editor-numbering-options">
+    <label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label>
+    <div class="footer-text-row"><label class="sheet-field" title="本订单总张数">共<input id="sheetTotal" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="总张数">张</label><label class="sheet-field" title="当前是第几张">第<input id="sheetIndex" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="当前张数">张</label><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+   </div>
+   <div class="watermark-controls">
+    <label><input id="watermarkEnabled" type="checkbox" checked>预览水印</label>
+    <input id="watermarkText" type="text" maxlength="40" value="仅供确认 · 禁止盗用" aria-label="水印文字">
+    <label>浓度 <input id="watermarkOpacity" type="range" min="8" max="50" step="1" value="40" aria-label="水印浓度"><output id="watermarkOpacityValue">40%</output></label>
+   </div>
+   <div class="watermark-downloads">
+    <button type="button" class="btn" id="downloadWatermarked" disabled>下载带水印预览图</button>
+    <button type="button" class="btn product-preview-button" id="productPreview">商品展示图</button>
+   </div>
+   <output class="small footer-filename" id="exportFilename" for="footerText template numberingEnabled"></output>
+   <div class="editor-toolbar-actions" hidden><button type="button" class="btn" data-editor-action="shortcuts" aria-haspopup="dialog">快捷键指南</button></div>
+  </div>
+ </details>
  <div class="field" id="customField" hidden>
   <div class="label">逐排组合 <span class="small">保留原图大小</span></div>
   <p class="custom-help">点击缩略图选择图案的大款／小款，再设置数量。各款保持原模板尺寸，只调整位置和间距。</p>
@@ -228,7 +245,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <details><summary style="cursor:pointer">查看本模板图案尺寸</summary><p class="small">按当前输出宽高计算，单位 mm；为完整图案尺寸，不是照片框尺寸。</p><div id="heartTemplateSizeTable" style="max-height:320px;overflow:auto"></div></details>
  </div>
  <div class="hint">先在预览中选择图案，再上传照片或背景；只替换选中位置，其他图案不变。未启用裁剪时，照片等比完整放入图案内部的预设区域并留安全边距，可手动缩放、移动。多选可批量替换，点击“全选”后才替换全部。多张照片按选中位置的排版顺序循环填入。图片只在当前浏览器中处理。</div>
- <div class="actions"><button class="btn" id="clear">清空图片</button><button class="btn primary" id="download" disabled>下载 PNG</button></div><div class="status" id="status"></div>
+ <div class="actions"><button class="btn" id="clear">清空图片</button></div><div class="status" id="status"></div>
 </section>
 <section class="preview" id="previewPanel">
  <div class="stage" id="stage"><div class="preview-surface" id="previewSurface"><div class="empty" id="empty">正在准备模板…</div><canvas id="canvas" hidden></canvas></div></div><div class="footer-note">PNG 按上方毫米尺寸与 DPI 换算像素；导出前请确认尺寸和图案位置。</div>
@@ -290,13 +307,12 @@ function shapeLabel(type){return type==='text'?'文案':type==='heart'?'爱心':
 function targets(points){return points.map(([x,y,w,h])=>({x,y,w,h,type:'heart',bottom:true}))}
 const canvas=document.getElementById('canvas'),ctx=canvas.getContext('2d'),sel=document.getElementById('template'),filesEl=document.getElementById('files'),drop=document.getElementById('drop'),download=document.getElementById('download'),scale=document.getElementById('scale'),sizeNumber=document.getElementById('sizeNumber'),clip=document.getElementById('clip'),clipShape=document.getElementById('clipShape'),slotSelect=document.getElementById('slotSelect'),widthInput=document.getElementById('outWidth'),heightInput=document.getElementById('outHeight'),dpiInput=document.getElementById('dpi');let base=new Image(),photos=[],urls=[],thumbUrls=[],states=[],selectedSlot=0,selectedSlots=new Set([0]),multiMode=false;
 const stage=document.getElementById('stage'),previewSurface=document.getElementById('previewSurface'),previewPanel=document.getElementById('previewPanel'),previewZoom=document.getElementById('previewZoom'),zoomOut=document.getElementById('zoomOut'),zoomIn=document.getElementById('zoomIn');const zoomLevels=[1,1.25,1.5,2,3,4];let previewScale=1,previewSize={w:0,h:0};
-const watermarkControls=document.createElement('div');watermarkControls.className='watermark-controls';watermarkControls.innerHTML='<label><input id="watermarkEnabled" type="checkbox" checked>预览水印</label><input id="watermarkText" type="text" maxlength="40" value="仅供确认 · 禁止盗用" aria-label="水印文字"><label>浓度 <input id="watermarkOpacity" type="range" min="8" max="50" step="1" value="40" aria-label="水印浓度"><output id="watermarkOpacityValue">40%</output></label><button type="button" class="btn" id="downloadWatermarked">下载带水印预览图</button>';document.querySelector('.editor-toolbar-secondary').prepend(watermarkControls);
 HeartStarWatermark.create({surface:previewSurface,enabled:document.getElementById('watermarkEnabled'),text:document.getElementById('watermarkText'),opacity:document.getElementById('watermarkOpacity'),value:document.getElementById('watermarkOpacityValue')});
-const watermarkDownload=document.getElementById('downloadWatermarked');watermarkDownload.disabled=true;watermarkDownload.addEventListener('click',()=>exportPng(true));
-const watermarkDownloads=document.createElement('div');watermarkDownloads.className='watermark-downloads';watermarkControls.append(document.getElementById('exportFilename'),watermarkDownloads);watermarkDownloads.append(watermarkDownload,download);
-const productPreviewButton=document.createElement('button');productPreviewButton.type='button';productPreviewButton.className='btn product-preview-button';productPreviewButton.id='productPreview';productPreviewButton.textContent='商品展示图';watermarkDownloads.prepend(productPreviewButton);
+const watermarkDownload=document.getElementById('downloadWatermarked');
+watermarkDownload.addEventListener('click',()=>exportPng(true));
+const productPreviewButton=document.getElementById('productPreview');
 HeartStarProductPreview.mount({button:productPreviewButton,capture:productPreviewSnapshot,report:say});
-const picturePreviewButton=document.createElement('button');picturePreviewButton.type='button';picturePreviewButton.className='preview-tool picture-preview-button';picturePreviewButton.textContent='预览图';picturePreviewButton.setAttribute('aria-haspopup','dialog');picturePreviewButton.setAttribute('aria-expanded','false');document.querySelector('.preview-tools').append(picturePreviewButton);
+const picturePreviewButton=document.getElementById('picturePreview');
 const pictureDialog=document.createElement('dialog');pictureDialog.className='picture-dialog';pictureDialog.setAttribute('aria-labelledby','picturePreviewTitle');pictureDialog.innerHTML='<div class="picture-dialog-head"><h2 id="picturePreviewTitle">预览图</h2><button type="button" class="preview-tool" aria-label="关闭预览图">✕</button></div><div class="picture-dialog-content"></div>';document.body.append(pictureDialog);
 HeartStarWatermark.createDialog({button:picturePreviewButton,dialog:pictureDialog,close:pictureDialog.querySelector('button'),content:pictureDialog.querySelector('.picture-dialog-content'),render:picturePreviewSnapshot,onError:message=>say(message,true)});
 function picturePreviewSnapshot(){const cfg=templates[sel.value];if(canvas.hidden||exportBusy||photoUploadBusy||replacementBusy||slotBackgrounds.busy()||motifEditor.busy()||(cfg.custom&&(customBusy||customDirty))||(cfg.text&&fontBusy))throw new Error('请等待模板和图片准备完成后再预览。');if(!outputConfig())throw new Error('请输入有效的宽度和高度。');try{draw(false);return HeartStarWatermark.preview(canvas,document.getElementById('watermarkEnabled').checked)}finally{draw()}}

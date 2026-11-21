@@ -155,7 +155,7 @@ const mysqlForm = ref<MysqlConfig>({ enabled: false, host: '', port: 3306, user:
 const mysqlSaved = ref<MysqlConfig | null>(null)
 const canSyncMysql = computed(() => {
   const config = mysqlSaved.value
-  return Boolean(config?.enabled && mysqlConfigured(config))
+  return store.workflow.role !== 'customer' && Boolean(config?.enabled && mysqlConfigured(config))
 })
 const mysqlMessage = ref('')
 const mysqlBusy = ref(false)
@@ -545,7 +545,7 @@ async function openCutoutLogs() {
             <div class="row actions">
               <button class="btn" :disabled="mysqlBusy || !mysqlSaved" @click="saveMysql()">保存配置</button>
               <button class="btn" :disabled="mysqlBusy" @click="testMysql">测试连接</button>
-              <button class="btn" :disabled="mysqlBusy || !canSyncMysql" @click="syncMysql">立即同步</button>
+              <button v-if="store.workflow.role !== 'customer'" class="btn" :disabled="mysqlBusy || !canSyncMysql" @click="syncMysql">立即同步</button>
             </div>
             <div v-if="mysqlMessage" class="cloudMsg" role="status">{{ mysqlMessage }}</div>
           </div>
@@ -665,7 +665,7 @@ async function openCutoutLogs() {
                   <div class="row actions storageActions">
                     <button class="btn" :disabled="cloudBusy" @click="testCloud">测试连接</button>
                     <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('profile')">保存配置</button>
-                    <button v-if="selectedCloudIsRunning" class="btn" :disabled="cloudBusy" @click="syncNow">导入旧数据</button>
+                    <button v-if="selectedCloudIsRunning && store.workflow.role !== 'customer'" class="btn" :disabled="cloudBusy" @click="syncNow">导入旧数据</button>
                   </div>
                 </template>
                 <div v-if="cloudLoadError" class="cloudMsg" role="status">{{ cloudLoadError }}</div>
@@ -694,7 +694,7 @@ async function openCutoutLogs() {
                     <template v-if="qiniuSaved.deviceId"> · 设备 {{ qiniuSaved.deviceId }}</template>
                   </p>
                   <div class="row actions">
-                    <button class="btn" :disabled="qiniuBusy" @click="syncQiniu">导入旧数据</button>
+                    <button v-if="store.workflow.role !== 'customer'" class="btn" :disabled="qiniuBusy" @click="syncQiniu">导入旧数据</button>
                     <button class="btn" :disabled="qiniuBusy || !store.info?.dataRoot" @click="openQiniuLogs">打开日志目录</button>
                   </div>
                 </div>

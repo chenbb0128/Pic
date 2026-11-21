@@ -28,7 +28,6 @@ const props = defineProps<{
 const emit = defineEmits<{ finish: [orderNumber: string]; toggleUpload: [orderNumber: string, checked: boolean] }>()
 const store = useOrdersStore()
 const canDelete = computed(() => store.workflow.role !== 'production')
-const canEditTemplates = computed(() => store.workflow.role !== 'production')
 const canFinish = computed(() => store.workflow.role !== 'customer')
 
 const syncLabels: Record<SyncStatus, string> = {
@@ -76,15 +75,15 @@ function finishLabel(number: string) {
   if (state?.pendingOperation === 'finish' || (state?.localCompleted && state.sharedState === 'pending')) {
     return '重试交付'
   }
-  return isOrderComplete(number) ? '' : '制作完毕'
+  return isOrderComplete(number) ? '' : '标记完成'
 }
 
 function workflowLabel(number: string) {
   const state = store.workflowOrders[number]
-  if (state?.pendingOperation === 'finish') return state.error ? '制作已完成 · 交付失败，待重试' : '制作已完成 · 等待交付'
+  if (state?.pendingOperation === 'finish') return state.error ? '已标记完成 · 交付失败，待重试' : '已标记完成 · 等待交付'
   if (state?.sharedState === 'completed') return '共享已完成'
-  if (state?.localCompleted && state.sharedState === 'pending') return '制作已完成 · 待交付'
-  if (state?.localCompleted) return '制作已完成'
+  if (state?.localCompleted && state.sharedState === 'pending') return '已标记完成 · 待交付'
+  if (state?.localCompleted) return '已标记完成'
   if (state?.pendingOperation === 'publish') return state.error ? '发布失败 · 等待重试' : '等待发布'
   if (state?.sharedState === 'pending') return '已发布 · 待制作'
   return ''
@@ -178,7 +177,7 @@ function specificationsFor(img: OrderImage) {
 
 const editingTemplateIds = reactive(new Set<string>())
 async function toggleTemplate(img: OrderImage, webId: string) {
-  if (!canEditTemplates.value || props.workflowBusy || editingTemplateIds.has(img.id)) return
+  if (props.workflowBusy || editingTemplateIds.has(img.id)) return
   const matches = (templateId: string) => webIdOf(templateId) === webId
   const next = img.templates.some(t => matches(t.templateId))
     ? img.templates.filter(t => !matches(t.templateId))
@@ -284,7 +283,7 @@ async function applySharedVersion({ orderNumber, reference, localVersion }: Work
 function requestFinish(orderNumber: string) {
   if (savingProductions.has(orderNumber)
     || (lastInjectedOrder.value === orderNumber && frame.value?.contentWindow?.__picHasPendingExport?.())) {
-    toast('error', '成品正在导出或保存，请稍后再点击制作完毕。')
+    toast('error', '成品正在导出或保存，请稍后再点击标记完成。')
     return
   }
   emit('finish', orderNumber)
@@ -662,7 +661,7 @@ function orderProductions(orderNumber: string): Production[] {
             <div class="itemMain">
               <div class="num">{{ entry.summary.orderNumber }}</div>
               <div v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</div>
-              <div class="stat">{{ entry.images.length }} 图 · {{ entry.summary.taskCount }} 任务</div>
+              <div class="stat">{{ entry.images.length }} 图</div>
               <div class="stat dim">{{ fmtTime(entry.summary.updatedAt) }}</div>
               <div v-if="workflowLabel(entry.summary.orderNumber)" class="orderWorkflowLabel" :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">{{ workflowLabel(entry.summary.orderNumber) }}</div>
             </div>
@@ -704,26 +703,39 @@ function orderProductions(orderNumber: string): Production[] {
                     <span v-if="qualityLabel(img)" :class="{ caution: img.sourceQuality !== 'original' }">{{ qualityLabel(img) }}</span>
                     <span v-if="syncLabel(img)" class="syncLabel" :class="img.syncStatus">{{ syncLabel(img) }}</span>
                   </div>
-                  <div class="rules">
-                    <span v-for="spec in specificationsFor(img)" :key="spec.webId" class="ruleGroup" :class="{ selected: spec.quantity !== null }">
+                  <div class="specSection" role="group" aria-label="待制作规格">
+                    <span class="specLabel">待制作规格</span>
+                    <div class="rules">
+                      <span v-if="!img.templates.length" class="specEmpty">请在下方勾选规格</span>
+                      <span v-for="spec in specificationsFor(img).filter(spec => spec.quantity !== null)" :key="spec.webId" class="ruleGroup">
+                        <span class="selectedSpec">{{ spec.code }} × {{ spec.quantity }}</span>
+                        <button
+                          type="button"
+                          class="makeBtn"
+                          :disabled="workflowBusy || !!busyImageId || !!makeBlockReason(img)"
+                          :title="makeBlockReason(img) || spec.name"
+                          :aria-label="`制作 ${spec.code}`"
+                          @click.stop="injectImage(img, entry.summary, spec.webId)"
+                        >制作</button>
+                      </span>
+                    </div>
+                  </div>
+                  <div class="specSection" role="group" aria-label="全部模板规格">
+                    <span class="specLabel">全部模板规格</span>
+                    <div class="rules">
                       <button
+                        v-for="spec in specificationsFor(img)"
+                        :key="spec.webId"
                         type="button"
+                        role="checkbox"
                         class="ruleChip"
-                        :aria-pressed="spec.quantity !== null"
+                        :aria-checked="spec.quantity !== null"
                         :aria-label="`${spec.code} ${spec.name}`"
                         :title="spec.name"
-                        :disabled="!canEditTemplates || workflowBusy || editingTemplateIds.has(img.id)"
+                        :disabled="workflowBusy || editingTemplateIds.has(img.id)"
                         @click.stop="toggleTemplate(img, spec.webId)"
-                      >{{ spec.code }}<template v-if="spec.quantity !== null"> × {{ spec.quantity }}</template></button>
-                      <button
-                        v-if="spec.quantity !== null"
-                        type="button"
-                        class="makeBtn"
-                        :disabled="workflowBusy || !!busyImageId || !!makeBlockReason(img)"
-                        :title="makeBlockReason(img) || `注入素材并切换到 ${spec.code} 模板`"
-                        @click.stop="injectImage(img, entry.summary, spec.webId)"
-                      >制作</button>
-                    </span>
+                      >{{ spec.code }}</button>
+                    </div>
                   </div>
                 </div>
                 <button
@@ -750,17 +762,6 @@ function orderProductions(orderNumber: string): Production[] {
                   </button>
                 </div>
                 <p v-if="img.syncError" class="assetError">{{ img.syncError }}</p>
-                <div class="panelRow">
-                  <span class="panelLabel">制作</span>
-                  <button
-                    v-for="t in img.templates"
-                    :key="'make-' + t.templateId"
-                    class="miniBtn make"
-                    :disabled="workflowBusy || !!busyImageId || !!makeBlockReason(img)"
-                    :title="makeBlockReason(img) || `注入素材并切换到 ${codeOf(t.templateId)} 模板`"
-                    @click.stop="injectImage(img, entry.summary, t.templateId)"
-                  >{{ codeOf(t.templateId) }} × {{ t.quantity }}</button>
-                </div>
               </div>
             </div>
 
@@ -801,7 +802,6 @@ function orderProductions(orderNumber: string): Production[] {
       <div class="editorBar">
         <span class="makingFor" v-if="lastInjectedOrder">制作中：订单 {{ lastInjectedOrder }}</span>
         <span class="dim" v-else>从左侧选择规格「制作」开始排版</span>
-        <span class="dim">如需保存成品，点击「下载 PNG」。</span>
       </div>
       <div class="editorBox">
         <div v-if="!editorSrc" class="loading">
@@ -844,7 +844,7 @@ function orderProductions(orderNumber: string): Production[] {
             </div>
           </template>
           <div v-else class="hcRow dim">暂无千帆面板详情（该订单在功能上线前排单）</div>
-          <div class="hcRow"><span class="hcLabel">素材</span>{{ entry.images.length }} 张 · {{ entry.summary.taskCount }} 任务</div>
+          <div class="hcRow"><span class="hcLabel">素材</span>{{ entry.images.length }} 张</div>
         </template>
       </template>
     </div>
@@ -1124,31 +1124,66 @@ function orderProductions(orderNumber: string): Production[] {
   flex-wrap: wrap;
   gap: 4px;
 }
+.specSection + .specSection {
+  margin-top: 6px;
+}
+.specLabel, .specEmpty {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.specLabel {
+  margin-bottom: 3px;
+}
 .ruleGroup {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
   overflow: hidden;
-  border: 1px solid var(--stroke);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
-.ruleGroup.selected {
-  border-color: var(--accent-border);
+.selectedSpec {
+  padding: 2px 8px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 .ruleChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: 11px;
-  padding: 2px 8px;
-  border: none;
+  padding: 2px 4px;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
   background: var(--bg-input);
   color: var(--text-dim);
   font-family: inherit;
   white-space: nowrap;
   cursor: pointer;
 }
+.ruleChip::before {
+  content: '';
+  display: grid;
+  place-content: center;
+  width: 10px;
+  height: 10px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+}
+.ruleChip[aria-checked="true"]::before {
+  content: '✓';
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-size: 9px;
+}
 .ruleChip:disabled {
   cursor: default;
 }
 .ruleChip:hover:not(:disabled),
-.ruleChip[aria-pressed="true"] {
+.ruleChip[aria-checked="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -1212,13 +1247,6 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
   color: var(--text-dim);
 }
-.panelLabel {
-  font-size: 11px;
-  color: var(--text-dim);
-  flex-shrink: 0;
-  width: 58px;
-  line-height: 24px;
-}
 .miniBtn {
   font-size: 11px;
   padding: 3px 10px;
@@ -1229,15 +1257,6 @@ function orderProductions(orderNumber: string): Production[] {
   cursor: pointer;
   font-family: inherit;
   white-space: nowrap;
-}
-.miniBtn.make {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.miniBtn.make:hover:not(:disabled) {
-  background: var(--accent);
-  color: #fff;
 }
 /* 成品 */
 .prodRow {

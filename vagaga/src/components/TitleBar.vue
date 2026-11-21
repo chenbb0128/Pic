@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import type { WorkflowRole } from '../types'
 
 const props = defineProps<{
   view: 'orders' | 'settings'
   beforeClose: () => Promise<boolean>
+  role: WorkflowRole
   uploadCount: number
   operation: 'upload' | 'sync' | 'finish' | 'resolve' | null
 }>()
@@ -50,10 +52,10 @@ async function close() {
       >{{ tab.label }}</button>
     </nav>
     <div class="workflowActions" aria-label="订单同步操作">
-      <button type="button" class="workflowBtn" :disabled="!!operation || !uploadCount" @click="emit('upload')">
+      <button v-if="role !== 'production'" type="button" class="workflowBtn" :disabled="!!operation || !uploadCount" @click="emit('upload')">
         {{ operation === 'upload' ? '正在上传…' : uploadCount ? '数据上传（' + uploadCount + '）' : '数据上传' }}
       </button>
-      <button type="button" class="workflowBtn" :disabled="!!operation" @click="emit('sync')">
+      <button v-if="role !== 'customer'" type="button" class="workflowBtn" :disabled="!!operation" @click="emit('sync')">
         {{ operation === 'sync' ? '正在同步…' : '数据同步' }}
       </button>
     </div>

@@ -4,7 +4,11 @@ Vue 3 + Tauri 2 桌面工程。
 
 ## 构建和运行
 
-在本目录执行：
+改完代码后，双击本目录的 `build-vagaga.cmd`。构建结束后窗口会显示 EXE 的位置或错误信息。
+如果正式版 vagaga 正在运行，先保存制作内容并关闭它。
+
+首次在新机器构建时，在本目录运行 `pnpm install --frozen-lockfile` 安装前端依赖。
+也可以在终端执行同一个构建：
 
 ```powershell
 pnpm build:desktop

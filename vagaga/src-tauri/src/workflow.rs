@@ -73,7 +73,8 @@ impl Asset {
 struct Manifest {
     schema_version: u32,
     order_number: String,
-    revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<u64>,
     operation_id: String,
     state: SharedState,
     metadata: Option<serde_json::Map<String, serde_json::Value>>,
@@ -88,7 +89,7 @@ impl Manifest {
     fn mysql_order(&self) -> crate::mysql::SharedOrder {
         crate::mysql::SharedOrder {
             number: self.order_number.clone(),
-            revision: self.revision,
+            revision: self.revision.unwrap_or(0),
             operation_id: self.operation_id.clone(),
             metadata: self.metadata.clone().map(serde_json::Value::Object),
             completed: self.state == SharedState::Completed,
@@ -174,7 +175,7 @@ fn snapshot(
     root: &Path,
     number: &str,
     kind: &str,
-    expected: u64,
+    include_remote_revision: bool,
     operation: &str,
 ) -> Result<Manifest, String> {
     let detail = store
@@ -268,11 +269,10 @@ fn snapshot(
     Ok(Manifest {
         schema_version: 1,
         order_number: number.into(),
-        revision: if kind == "legacy" {
-            0
-        } else {
-            expected.checked_add(1).ok_or("订单版本溢出")?
-        },
+        // This is a remote protocol timestamp for MySQL/七牛 compatibility,
+        // not a value persisted in the local workflow database.
+        revision: include_remote_revision
+            .then(|| chrono::Utc::now().timestamp_millis().max(1) as u64),
         operation_id: operation.into(),
         state: if completed {
             SharedState::Completed
@@ -346,7 +346,7 @@ fn preview(store: &Store, manifest: &Manifest, reference: String) -> Result<Prev
         .count();
     let products = manifest.assets.len() - originals;
     changes.push(format!(
-        "远端含 {originals} 张素材、{products} 个成品，使用共享版本会更新本机素材。"
+        "远端含 {originals} 张素材、{products} 个成品，使用共享内容会更新本机素材。"
     ));
     Ok(Preview {
         reference,
@@ -418,29 +418,20 @@ async fn run_task_attempt(
     checked_capability: bool,
 ) -> Result<(), String> {
     let manifest = Manifest::parse(task.manifest.as_bytes())?;
-    let key = hash(&task.number);
+    let key = backend.key_for_order(&task.number)?;
     let result: Result<bool, String> = async {
         if let Some(bytes) = backend.latest(&key).await? {
             let latest = Manifest::parse(&bytes)?;
-            if latest.revision > task.expected {
-                // The original attempt may have succeeded before a later device advanced the head.
-                let applied = backend
-                    .commit(
-                        &key,
-                        task.expected,
-                        &manifest.operation_id,
-                        task.manifest.as_bytes().to_vec(),
-                    )
-                    .await?;
-                return Ok(applied);
-            }
             if latest.state == SharedState::Completed {
                 return Ok(false);
             }
+            if latest.operation_id != manifest.operation_id
+                && task.expected_operation_id.as_deref() != Some(latest.operation_id.as_str())
+            {
+                return Ok(false);
+            }
         }
-        // A published order already has a valid revision on this target.
-        // Subsequent writes still use the provider's conditional commit.
-        if task.expected == 0 && !checked_capability {
+        if task.expected_operation_id.is_none() && !checked_capability {
             check_capability(backend).await?;
         }
         for asset in &manifest.assets {
@@ -459,7 +450,7 @@ async fn run_task_attempt(
         backend
             .commit(
                 &key,
-                task.expected,
+                task.expected_operation_id.as_deref(),
                 &manifest.operation_id,
                 task.manifest.as_bytes().to_vec(),
             )
@@ -478,7 +469,7 @@ async fn run_task_attempt(
             &state.store,
             task,
             manifest.state.as_str(),
-            manifest.revision,
+            &manifest.operation_id,
         )
         .map_err(display)?;
     } else {
@@ -488,7 +479,7 @@ async fn run_task_attempt(
     if applied {
         Ok(())
     } else {
-        Err("共享订单版本已变化。请先同步，成品和本机修改会保留。".into())
+        Err("共享订单内容已变化。请先同步，成品和本机修改会保留。".into())
     }
 }
 
@@ -521,7 +512,7 @@ async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option
     if kind == "publish"
         && (local.local_completed || local.shared_state.as_deref() == Some("completed"))
     {
-        return Err("这笔订单已制作完毕。".into());
+        return Err("这笔订单已标记完成。".into());
     }
     let fresh_backend = if local.target.is_none() {
         Some(selected(state)?)
@@ -538,7 +529,6 @@ async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option
     if let Some(backend) = fresh_backend.as_ref().filter(|_| checked_capability) {
         check_capability(backend).await?;
     }
-    let expected = local.revision;
     let operation = random_hex_pub(16);
     let stage = || -> Result<Task, String> {
         let manifest = snapshot(
@@ -546,14 +536,14 @@ async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option
             &state.data_root,
             number,
             kind,
-            expected,
+            target.starts_with("qiniu:"),
             &operation,
         )?;
         let task = Task {
             number: number.into(),
             target,
             kind: kind.into(),
-            expected,
+            expected_operation_id: local.remote_operation_id.clone(),
             generation: local.generation,
             manifest: serde_json::to_string(&manifest).map_err(display)?,
         };
@@ -651,7 +641,7 @@ pub(crate) async fn workflow_finish(
     order_number: String,
 ) -> Result<Outcome, String> {
     if db::role(&state.store) == "customer" {
-        return Err("当前是订单端，请在制作端或二合一设备完成订单。".into());
+        return Err("当前是排单端，请在制作端或二合一设备标记完成。".into());
     }
     let _operation = state.workflow_operations.lock().await;
     let local = db::order_state(&state.store, &order_number)
@@ -667,7 +657,7 @@ pub(crate) async fn workflow_finish(
             .map_err(display)?
             .is_some()
     {
-        return Err("这笔订单还有一次待确认的发布。请重试发布，确认共享状态后再完成。".into());
+        return Err("这笔订单还有一次待确认的发布。请重试发布，确认共享状态后再标记完成。".into());
     }
     if local.target.is_some() {
         match upload_one(&state, &order_number, "finish").await {
@@ -687,19 +677,18 @@ pub(crate) async fn workflow_finish(
     Ok(result)
 }
 
-fn remote_reference(target: &str, key: &str, revision: u64) -> String {
-    format!("{target}:{key}:{revision}")
+fn remote_reference(target: &str, key: &str, operation_id: &str) -> String {
+    format!("{target}:{key}:{operation_id}")
 }
 
 async fn load_manifest(backend: &Backend, key: &str) -> Result<Option<Manifest>, String> {
-    if !hex_id(key, 64) {
-        return Err("共享订单编号无效。".into());
-    }
     let Some(bytes) = backend.latest(key).await? else {
         return Ok(None);
     };
     let manifest = Manifest::parse(&bytes)?;
-    if hash(&manifest.order_number) != key || manifest.revision == 0 {
+    if backend.key_for_order(&manifest.order_number)?.as_str() != key
+        || (backend.requires_remote_revision() && manifest.revision.unwrap_or(0) == 0)
+    {
         return Err("共享清单与订单位置不符。".into());
     }
     Ok(Some(manifest))
@@ -821,7 +810,7 @@ pub(crate) fn import_legacy(
             source_root,
             &number,
             "legacy",
-            0,
+            false,
             &random_hex_pub(16),
         )?;
         let directory = download_directory(&state.data_root)?;
@@ -873,7 +862,7 @@ fn apply_download(
             number: &manifest.order_number,
             expected,
             metadata: metadata.as_deref(),
-            shared: target.map(|target| (target, manifest.state.as_str(), manifest.revision)),
+            shared: target.map(|target| (target, manifest.state.as_str(), manifest.operation_id.as_str())),
             completed: target.is_none() && manifest.local_completed,
             action,
             assets: &request.assets,
@@ -910,15 +899,15 @@ async fn apply_shared_order(
     let local = db::order_state(&state.store, number).map_err(display)?;
     let same_target = local.as_ref().and_then(|local| local.target.as_deref()) == Some(&target);
     if same_target
-        && local
-            .as_ref()
-            .is_some_and(|local| local.revision >= manifest.revision)
+        && local.as_ref().is_some_and(|local| {
+            local.remote_operation_id.as_deref() == Some(manifest.operation_id.as_str())
+        })
     {
         return Ok(());
     }
     if manifest.state == SharedState::Completed {
         if same_target
-            && db::mark_remote_complete(&state.store, number, &target, manifest.revision)
+            && db::mark_remote_complete(&state.store, number, &target, &manifest.operation_id)
                 .map_err(display)?
         {
             result.completed += 1;
@@ -933,7 +922,7 @@ async fn apply_shared_order(
         result.conflicts.push(preview(
             &state.store,
             &manifest,
-            remote_reference(&target, key, manifest.revision),
+            remote_reference(&target, key, &manifest.operation_id),
         )?);
         return Ok(());
     }
@@ -965,6 +954,9 @@ pub(crate) async fn synchronize(
     require_mysql: bool,
 ) -> Result<Outcome, String> {
     let _operation = state.workflow_operations.lock().await;
+    if db::role(&state.store) == "customer" {
+        return Err("当前是排单端，请在制作端或二合一设备同步订单。".into());
+    }
     let backend = selected(state)?;
     let mut response = Outcome::default();
     let target = backend.target();
@@ -1024,14 +1016,14 @@ pub(crate) async fn workflow_resolve_conflict(
 ) -> Result<(), String> {
     let _operation = state.workflow_operations.lock().await;
     let pieces: Vec<_> = reference.rsplitn(3, ':').collect();
-    let [revision, key, target] = pieces.as_slice() else {
+    let [operation_id, key, target] = pieces.as_slice() else {
         return Err("请选择有效的共享订单。".into());
     };
     let backend = Backend::bound(&state.store, &state.data_root, target)?;
     let manifest = load_manifest(&backend, key)
         .await?
         .ok_or("远端订单已不存在。")?;
-    if revision.parse::<u64>().ok() != Some(manifest.revision)
+    if operation_id != &manifest.operation_id
         || manifest.state != SharedState::Pending
     {
         return Err("远端订单已更新，请重新同步。".into());
@@ -1112,15 +1104,34 @@ mod tests {
             &state.data_root,
             "shared-no-export",
             "finish",
-            2,
+            true,
             &random_hex_pub(16),
         )
         .unwrap();
         assert!(manifest.state == SharedState::Completed && manifest.local_completed);
-        assert_eq!(manifest.revision, 3);
+        assert!(manifest.revision.is_some());
         assert_eq!(manifest.assets.len(), 1);
         assert!(!manifest.assets[0].production());
         assert!(manifest.mysql_order().completed);
+    }
+
+    #[test]
+    fn nas_manifest_contains_metadata_without_a_revision_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        capture_order(&state, "nas-flat-manifest");
+        let manifest = snapshot(
+            &state.store,
+            &state.data_root,
+            "nas-flat-manifest",
+            "publish",
+            false,
+            &random_hex_pub(16),
+        )
+        .unwrap();
+        let json = serde_json::to_value(manifest).unwrap();
+        assert!(json.get("revision").is_none());
+        assert_eq!(json["orderNumber"], "nas-flat-manifest");
     }
 
     #[tokio::test]
@@ -1140,7 +1151,7 @@ mod tests {
         let b = workstation(&online_b);
         let c = workstation(&offline);
         let number = format!("FIXTURE-{}", random_hex_pub(16));
-        let key = hash(&number);
+        let key = number.clone();
         let fixture_file = online_a.path().join("red.png");
         image::RgbImage::from_fn(10, 10, |x, y| {
             image::Rgb([rand::random(), x as u8, y as u8])
@@ -1165,7 +1176,7 @@ mod tests {
                 &vm.data_root,
                 &number,
                 kind,
-                local.revision,
+                backend.target().starts_with("qiniu:"),
                 &operation,
             )
             .unwrap();
@@ -1173,7 +1184,7 @@ mod tests {
                 number: number.clone(),
                 kind: kind.into(),
                 target: backend.target(),
-                expected: local.revision,
+                expected_operation_id: local.remote_operation_id.clone(),
                 generation: local.generation,
                 manifest: serde_json::to_string(&manifest).unwrap(),
             };

@@ -136,7 +136,6 @@ pub struct OrderSummary {
     pub id: String,
     pub order_number: String,
     pub image_count: i64,
-    pub task_count: i64,
     pub created_at: String,
     pub updated_at: String,
     pub metadata: Option<String>,
@@ -600,9 +599,6 @@ impl Store {
         let mut statement = conn.prepare(
             "SELECT o.id, o.order_number, o.created_at, o.updated_at,
                     (SELECT COUNT(*) FROM images i WHERE i.order_id = o.id) AS image_count,
-                    COALESCE((SELECT SUM(t.quantity) FROM images i
-                              JOIN image_templates t ON t.image_id = i.id
-                              WHERE i.order_id = o.id), 0) AS task_count,
                     o.metadata
              FROM orders o
              ORDER BY o.updated_at DESC",
@@ -614,8 +610,7 @@ impl Store {
                 created_at: row.get(2)?,
                 updated_at: row.get(3)?,
                 image_count: row.get(4)?,
-                task_count: row.get(5)?,
-                metadata: row.get(6)?,
+                metadata: row.get(5)?,
             })
         })?;
         rows.collect()

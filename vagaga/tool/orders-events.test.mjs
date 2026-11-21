@@ -20,7 +20,7 @@ const image = id => ({ id, filePath: `D:/app/data/images/${id}.png`, thumbnailPa
   originalName: `${id}.png`, byteLength: 100, width: 10, height: 10,
   source: '千帆', createdAt: '2026-11-19T12:00:00', templates: [] })
 const order = (id, images = []) => ({ id, orderNumber: `ORDER-${id}`, images,
-  imageCount: images.length, taskCount: 0, createdAt: '2026-11-19T12:00:00',
+  imageCount: images.length, createdAt: '2026-11-19T12:00:00',
   updatedAt: '2026-11-19T12:00:00', metadata: null })
 
 function editorFixture() {

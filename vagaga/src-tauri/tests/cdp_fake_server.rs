@@ -212,7 +212,6 @@ async fn 捕获经fake_cdp回流后入库() {
     assert_eq!(orders.len(), 1);
     assert_eq!(orders[0].order_number, "610");
     assert_eq!(orders[0].image_count, 1);
-    assert_eq!(orders[0].task_count, 2);
     let detail = store.get_order(&orders[0].id).expect("get").expect("存在");
     let image = &detail.images[0];
     assert_eq!(image.id, ingested);
