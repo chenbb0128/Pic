@@ -813,9 +813,9 @@ function solidPhotoBoard(all=false){const cfg=templates[sel.value];return{token:
 const cutoutPhotoBoard=(all=false)=>{const board=solidPhotoBoard(all);return{...board,ready:board.ready&&!photoLightingEditor?.busy()}};
 const solidBackgroundButton=document.createElement('button');solidBackgroundButton.type='button';solidBackgroundButton.id='removeSolidBackground';solidBackgroundButton.className='btn';solidBackgroundButton.style.cssText='width:100%;height:36px;margin-top:8px;font-size:12px';document.getElementById('thumbs').after(solidBackgroundButton);
 const solidBackgroundStore=HeartStarSolidBackground.createStore({getBoard:cutoutPhotoBoard,apply:applySolidPhotos});
-var solidBackgroundEditor=HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:()=>photoThumbnails?.update()});
+var solidBackgroundEditor=HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw});
 const aiCutoutButton=document.createElement('button');aiCutoutButton.type='button';aiCutoutButton.id='aiCutout';aiCutoutButton.className='btn';aiCutoutButton.title='联网调用 AI 抠图服务去除照片背景，同图重复处理免费';aiCutoutButton.style.cssText='width:100%;height:36px;margin-top:8px;font-size:12px';solidBackgroundButton.after(aiCutoutButton);
-var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:()=>photoThumbnails?.update()});
+var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw});
 var photoLightingEditor=HeartStarPhotoLightingControls.mount({root:document.getElementById('photoLightingCompact'),processor:photoLighting,
  getBoard:()=>{const board=solidPhotoBoard();return{...board,states,ready:board.ready&&!solidBackgroundEditor?.busy()&&!aiCutoutEditor?.busy()}},
  apply:(ids,strength)=>{ids.forEach(id=>{if(strength)states[id].photoLight=strength;else delete states[id].photoLight});draw()},changed:draw,report:say});

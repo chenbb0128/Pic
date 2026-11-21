@@ -49,6 +49,11 @@ describe('heart-star selected photo upload', () => {
     expect(toolHtml).toContain('导入后会自动补光')
   })
 
+  it('refreshes lighting controls after background removal finishes', () => {
+    expect(toolHtml).toContain('HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw})')
+    expect(toolHtml).toContain('HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw})')
+  })
+
   it('persists the processed badge only after applying and clears it when restoring, uploading, or deleting', () => {
     const s = setup([1]), result = { name: 'transparent' }
     s.applySolid([{ id: 1, image: result, processed: true }])
