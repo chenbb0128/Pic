@@ -47,11 +47,38 @@
       pixels[i] = Math.round(r * gain); pixels[i + 1] = Math.round(g * gain); pixels[i + 2] = Math.round(b * gain);
     }
   }
+  function sharpen(pixels, width, height, strength) {
+    if (strength <= 0 || width * height < 2) return;
+    const luma = new Uint8Array(width * height);
+    for (let index = 0, pixel = 0; index < luma.length; index++, pixel += 4) {
+      if (pixels[pixel + 3] >= 26) luma[index] = Math.round(.2126 * pixels[pixel] + .7152 * pixels[pixel + 1] + .0722 * pixels[pixel + 2]);
+    }
+    const amount = .12 * strength / 100;
+    for (let y = 0, index = 0; y < height; y++) for (let x = 0; x < width; x++, index++) {
+      const pixel = index * 4;
+      if (pixels[pixel + 3] < 26) continue;
+      if (luma[index] >= 225) continue;
+      let total = 0, count = 0;
+      if (x > 0 && pixels[pixel - 4 + 3] >= 26) { total += luma[index - 1]; count++; }
+      if (x + 1 < width && pixels[pixel + 4 + 3] >= 26) { total += luma[index + 1]; count++; }
+      if (y > 0 && pixels[pixel - width * 4 + 3] >= 26) { total += luma[index - width]; count++; }
+      if (y + 1 < height && pixels[pixel + width * 4 + 3] >= 26) { total += luma[index + width]; count++; }
+      if (!count || !luma[index]) continue;
+      const detail = (luma[index] - total / count) * amount;
+      if (!detail) continue;
+      const max = Math.max(pixels[pixel], pixels[pixel + 1], pixels[pixel + 2]);
+      if (!max) continue;
+      const gain = Math.min((luma[index] + detail) / luma[index], 255 / max);
+      pixels[pixel] = Math.max(0, Math.min(255, Math.round(pixels[pixel] * gain)));
+      pixels[pixel + 1] = Math.max(0, Math.min(255, Math.round(pixels[pixel + 1] * gain)));
+      pixels[pixel + 2] = Math.max(0, Math.min(255, Math.round(pixels[pixel + 2] * gain)));
+    }
+  }
   function adjust(image, strength = 100) {
     validateSize(image.width, image.height); validateStrength(strength);
     if (image.data?.length !== image.width * image.height * 4) throw Error('无法读取照片像素，原图已保留。');
     const data = new Uint8ClampedArray(image.data);
-    if (strength) shade(data, curve(data, strength));
+    if (strength) { shade(data, curve(data, strength)); sharpen(data, image.width, image.height, strength); }
     return { width: image.width, height: image.height, data };
   }
   function create() {
@@ -81,7 +108,7 @@
       let result = cached(image, strength);
       if (!result) {
         const { canvas, context, pixels } = read(image);
-        shade(pixels.data, curve(pixels.data, strength)); context.putImageData(pixels, 0, 0);
+        shade(pixels.data, curve(pixels.data, strength)); sharpen(pixels.data, pixels.width, pixels.height, strength); context.putImageData(pixels, 0, 0);
         result = remember(image, strength, canvas);
       }
       if (slot) slots.set(slot, { image, strength, canvas: result });
@@ -98,6 +125,8 @@
           shade(pixels.data, gains, start, Math.min(start + 1048576, pixels.data.length));
           await new Promise(resolve => setTimeout(resolve, 0));
         }
+        if (cancelled()) throw Error('照片或选择已变化，补光已取消。');
+        sharpen(pixels.data, pixels.width, pixels.height, strength);
         if (cancelled()) throw Error('照片或选择已变化，补光已取消。');
         context.putImageData(pixels, 0, 0);
         return remember(image, strength, canvas);

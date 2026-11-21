@@ -33,6 +33,13 @@ describe('portrait lighting', () => {
     expect(result.data[8]).toBeLessThan(245)
   })
 
+  it('adds local edge contrast without changing transparency', () => {
+    const result = adjust(pixels([80, 70, 60, 255], [120, 110, 100, 255], [80, 70, 60, 255]), 100)
+    const luminance = (offset: number) => .2126 * result.data[offset] + .7152 * result.data[offset + 1] + .0722 * result.data[offset + 2]
+    expect(luminance(4) - luminance(0)).toBeGreaterThan(24)
+    expect([result.data[3], result.data[7], result.data[11]]).toEqual([255, 255, 255])
+  })
+
   it('keeps every alpha value and fully transparent RGB intact, including cutout edges', () => {
     const input = pixels([50, 40, 30, 0], [60, 45, 35, 32], [60, 45, 35, 128], [60, 45, 35, 255])
     const result = adjust(input)
