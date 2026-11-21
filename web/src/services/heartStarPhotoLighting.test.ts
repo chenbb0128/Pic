@@ -26,6 +26,13 @@ describe('portrait lighting', () => {
     expect(result.data[8]).toBeLessThanOrEqual(235)
   })
 
+  it('still lifts brighter skin midtones clearly at maximum strength', () => {
+    const result = adjust(pixels([160, 125, 105, 255], [190, 160, 140, 255], [235, 220, 210, 255]), 200)
+    expect(result.data[0]).toBeGreaterThan(180)
+    expect(result.data[4]).toBeGreaterThan(205)
+    expect(result.data[8]).toBeLessThan(245)
+  })
+
   it('keeps every alpha value and fully transparent RGB intact, including cutout edges', () => {
     const input = pixels([50, 40, 30, 0], [60, 45, 35, 32], [60, 45, 35, 128], [60, 45, 35, 255])
     const result = adjust(input)

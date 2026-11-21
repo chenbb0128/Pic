@@ -29,7 +29,10 @@
       // taper near white and retain RGB proportions without channel clipping.
       const blackProtection = y * y / (y * y + .0256);
       const shadowBoost = 1 + .5 * (1 - y);
-      const lifted = y + (Math.pow(y, gamma) - y) * blackProtection * (1 - y) * shadowBoost * strength / 100;
+      const toneLift = (Math.pow(y, gamma) - y) * blackProtection * (1 - y) * shadowBoost;
+      const midtoneGate = Math.max(0, Math.min(1, (y - .08) / .12));
+      const exposureLift = Math.pow(1 - y, 1.4) * .2 * blackProtection * shadowBoost * midtoneGate;
+      const lifted = y + (toneLift + exposureLift) * strength / 100;
       gains[i] = Math.max(1, lifted / y);
     }
     return gains;
