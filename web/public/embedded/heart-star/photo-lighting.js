@@ -28,7 +28,8 @@
       // Preserve the black point and dark hair while lifting skin midtones;
       // taper near white and retain RGB proportions without channel clipping.
       const blackProtection = y * y / (y * y + .0256);
-      const lifted = y + (Math.pow(y, gamma) - y) * blackProtection * (1 - y) * strength / 100;
+      const shadowBoost = 1 + .5 * (1 - y);
+      const lifted = y + (Math.pow(y, gamma) - y) * blackProtection * (1 - y) * shadowBoost * strength / 100;
       gains[i] = Math.max(1, lifted / y);
     }
     return gains;

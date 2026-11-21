@@ -19,6 +19,13 @@ describe('portrait lighting', () => {
     expect(input.data).toEqual(before)
   })
 
+  it('gives midtone shadows a visible lift at the normal one-click strength', () => {
+    const result = adjust(pixels([60, 45, 35, 255], [100, 75, 60, 255], [230, 230, 230, 255]))
+    expect(result.data[0]).toBeGreaterThan(112)
+    expect(result.data[4]).toBeGreaterThan(155)
+    expect(result.data[8]).toBeLessThanOrEqual(235)
+  })
+
   it('keeps every alpha value and fully transparent RGB intact, including cutout edges', () => {
     const input = pixels([50, 40, 30, 0], [60, 45, 35, 32], [60, 45, 35, 128], [60, 45, 35, 255])
     const result = adjust(input)
