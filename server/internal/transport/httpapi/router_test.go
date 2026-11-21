@@ -198,7 +198,7 @@ func TestRouterDispatchesPaidanSyncBeforeWebLibrary(t *testing.T) {
 		LibraryHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("X-Test-Handler", "library")
 		}),
-		PaidanHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		VagagaHandler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/api/v1/paidan/orders/123" || r.Header.Get("Authorization") != "Bearer test" || r.Method != "DELETE" {
 				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 			}

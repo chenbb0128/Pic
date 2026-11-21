@@ -23,7 +23,7 @@ WORKDIR /app
 COPY --from=build /out/app /app/app
 COPY configs /app/configs
 COPY database/migrations /app/database/migrations
-COPY database/paidan_migrations /app/database/paidan_migrations
+COPY database/vagaga_migrations /app/database/vagaga_migrations
 COPY --chown=nonroot:nonroot storage /data/assets
 USER nonroot:nonroot
 EXPOSE 8080

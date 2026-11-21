@@ -65,7 +65,7 @@ MySQL 只保存订单、文件编号和校验信息。两端各自在 `data/` �
    `PAIDAN_MYSQL_DSN` 指向本次要迁移的库。
 
    ```powershell
-   go run ./cmd/migrate -target paidan -command up
+   go run ./cmd/migrate -target vagaga -command up
    ```
 
 4. 在 `PAIDAN_DEVICES_JSON` 中配置每台设备的 `deviceId`、`workspaceId`、

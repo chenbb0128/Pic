@@ -11,7 +11,7 @@ import (
 
 	"github.com/chenbb0128/Pic/server/internal/config"
 	"github.com/chenbb0128/Pic/server/internal/modules/library"
-	"github.com/chenbb0128/Pic/server/internal/modules/paidan"
+	"github.com/chenbb0128/Pic/server/internal/modules/vagaga"
 	"github.com/chenbb0128/Pic/server/internal/platform/database"
 	platformmetrics "github.com/chenbb0128/Pic/server/internal/platform/metrics"
 	redisclient "github.com/chenbb0128/Pic/server/internal/platform/redis"
@@ -23,7 +23,7 @@ type API struct {
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
 	database        *database.DB
-	paidanDB        *sql.DB
+	vagagaDB        *sql.DB
 	redis           *redisclient.Client
 }
 
@@ -102,12 +102,12 @@ func NewAPI(cfg config.Config, logger *slog.Logger) (*API, error) {
 		}
 		return nil, err
 	}
-	paidanHandler, paidanDB, err := paidan.FromEnvironment()
+	vagagaHandler, vagagaDB, err := vagaga.FromEnvironment()
 	if err != nil {
-		logger.Error("paidan configuration unavailable", "error", err)
-		paidanHandler = http.HandlerFunc(paidan.Unavailable)
+		logger.Error("vagaga configuration unavailable", "error", err)
+		vagagaHandler = http.HandlerFunc(vagaga.Unavailable)
 	}
-	api := &API{database: db, redis: redis, paidanDB: paidanDB}
+	api := &API{database: db, redis: redis, vagagaDB: vagagaDB}
 	router, err := httpapi.NewRouter(httpapi.RouterOptions{
 		App:             cfg.App,
 		HTTP:            cfg.HTTP,
@@ -116,7 +116,7 @@ func NewAPI(cfg config.Config, logger *slog.Logger) (*API, error) {
 		ReadinessChecks: checks,
 		Metrics:         metrics,
 		LibraryHandler:  libraryHandler,
-		PaidanHandler:   paidanHandler,
+		VagagaHandler:   vagagaHandler,
 	})
 	if err != nil {
 		_ = api.close()
@@ -178,9 +178,9 @@ func (a *API) Run(ctx context.Context) (err error) {
 
 func (a *API) close() error {
 	var err error
-	if a.paidanDB != nil {
-		if closeErr := a.paidanDB.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close paidan mysql: %w", closeErr))
+	if a.vagagaDB != nil {
+		if closeErr := a.vagagaDB.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close vagaga mysql: %w", closeErr))
 		}
 	}
 	if a.database != nil {

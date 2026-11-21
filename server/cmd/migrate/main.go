@@ -13,30 +13,30 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/chenbb0128/Pic/server/internal/config"
-	"github.com/chenbb0128/Pic/server/internal/modules/paidan"
+	"github.com/chenbb0128/Pic/server/internal/modules/vagaga"
 	"github.com/chenbb0128/Pic/server/internal/platform/database"
 )
 
 func main() {
 	configPath := flag.String("config", "", "path to a YAML configuration file")
-	target := flag.String("target", "app", "migration target: app or paidan")
+	target := flag.String("target", "app", "migration target: app or vagaga")
 	migrationsDir := flag.String("dir", "", "override the migration directory")
 	command := flag.String("command", "status", "migration command: up, down, status, redo")
 	dsnOverride := flag.String("dsn", "", "optional main application database DSN override")
 	flag.Parse()
 
 	switch *target {
-	case "paidan":
+	case "vagaga", "paidan":
 		if *dsnOverride != "" {
-			slog.Error("paidan migration expects PAIDAN_MYSQL_DSN")
+			slog.Error("vagaga migration expects PAIDAN_MYSQL_DSN")
 			os.Exit(1)
 		}
 		dir := *migrationsDir
 		if dir == "" {
-			dir = "database/paidan_migrations"
+			dir = "database/vagaga_migrations"
 		}
-		if err := migratePaidan(dir, *command); err != nil {
-			slog.Error("paidan migration failed", "command", *command, "error", err)
+		if err := migrateVagaga(dir, *command); err != nil {
+			slog.Error("vagaga migration failed", "command", *command, "error", err)
 			os.Exit(1)
 		}
 		return
@@ -103,12 +103,12 @@ func main() {
 	}
 }
 
-func migratePaidan(dir, command string) error {
+func migrateVagaga(dir, command string) error {
 	dsn := strings.TrimSpace(os.Getenv("PAIDAN_MYSQL_DSN"))
 	if dsn == "" {
 		return fmt.Errorf("PAIDAN_MYSQL_DSN is required")
 	}
-	db, err := paidan.OpenDatabase(dsn)
+	db, err := vagaga.OpenDatabase(dsn)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func migratePaidan(dir, command string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
-		return fmt.Errorf("paidan MySQL connection failed")
+		return fmt.Errorf("vagaga MySQL connection failed")
 	}
 	if err := goose.SetDialect("mysql"); err != nil {
 		return err

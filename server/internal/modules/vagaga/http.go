@@ -1,4 +1,4 @@
-package paidan
+package vagaga
 
 import (
 	"crypto/sha256"

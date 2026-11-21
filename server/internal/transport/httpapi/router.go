@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/chenbb0128/Pic/server/internal/config"
-	"github.com/chenbb0128/Pic/server/internal/modules/paidan"
+	"github.com/chenbb0128/Pic/server/internal/modules/vagaga"
 	platformmetrics "github.com/chenbb0128/Pic/server/internal/platform/metrics"
 	"github.com/chenbb0128/Pic/server/internal/transport/httpapi/middleware"
 	"github.com/chenbb0128/Pic/server/internal/transport/httpapi/response"
@@ -30,7 +30,7 @@ type RouterOptions struct {
 	ReadinessChecks []ReadyCheck
 	Metrics         *platformmetrics.Metrics
 	LibraryHandler  http.Handler
-	PaidanHandler   http.Handler
+	VagagaHandler   http.Handler
 }
 
 func NewRouter(opts RouterOptions) (*gin.Engine, error) {
@@ -74,11 +74,11 @@ func NewRouter(opts RouterOptions) (*gin.Engine, error) {
 		response.OK(c, gin.H{"status": "ok"})
 	})
 	router.GET("/ready", readyHandler(opts.Logger, opts.ReadyTimeout, opts.ReadinessChecks))
-	if opts.LibraryHandler != nil || opts.PaidanHandler != nil {
+	if opts.LibraryHandler != nil || opts.VagagaHandler != nil {
 		router.Any("/api/v1/*path", func(c *gin.Context) {
 			path := c.Request.URL.Path
-			if opts.PaidanHandler != nil && (path == paidan.Prefix || strings.HasPrefix(path, paidan.Prefix+"/")) {
-				opts.PaidanHandler.ServeHTTP(c.Writer, c.Request)
+			if opts.VagagaHandler != nil && (path == vagaga.Prefix || strings.HasPrefix(path, vagaga.Prefix+"/")) {
+				opts.VagagaHandler.ServeHTTP(c.Writer, c.Request)
 				return
 			}
 			if opts.LibraryHandler != nil {
