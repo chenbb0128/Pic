@@ -73,6 +73,11 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 .photo-tune-reset{border:0;background:none;padding:3px 0;color:var(--tune-accent);font-size:12px;font-weight:400;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
 .photo-tune-reset:disabled{opacity:.4;cursor:not-allowed}
 .photo-tune-control{margin:0 0 17px}
+.photo-tune-control-label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:#51484d}
+.photo-tune-percent-input{display:inline-flex;align-items:center;gap:3px;color:#92848c;font-size:12px;font-variant-numeric:tabular-nums}
+.photo-tune-percent-input input{width:58px;height:28px;border:1px solid #e6dce0;border-radius:7px;padding:0 6px;text-align:right;color:var(--ink);font-size:12px;background:#fff}
+.photo-tune-percent-input input:disabled{opacity:.45;cursor:not-allowed}
+.photo-tune-percent-input input:focus-visible{outline:2px solid var(--tune-accent);outline-offset:1px}
 .photo-tune-control label{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:#51484d}
 .photo-tune-control output{color:#92848c;font-size:12px;font-variant-numeric:tabular-nums}
 .photo-tune-control input[type=range]{display:block;appearance:none;width:100%;height:24px;margin:5px 0 0;background:transparent;cursor:pointer;accent-color:var(--tune-accent)}
@@ -208,11 +213,11 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
  <div class="field"><div class="label">图片形状 <span class="small">只影响选中的图形</span></div><label class="check clip-toggle"><input id="clip" type="checkbox"><span>启用裁剪</span></label><select class="select" id="clipShape"><option value="mixed" disabled>混合</option><option value="template" selected>跟随图案</option><option value="heart">爱心</option><option value="star">星星</option><option value="circle">圆形</option><option value="oval">椭圆</option><option value="roundRect">圆角方形</option><option value="square">正方形</option><option value="diamond">菱形</option><option value="hexagon">六边形</option></select></div>
  <div class="field photo-tune" id="photoFrameField">
   <div class="label">头像微调 <button type="button" class="photo-tune-reset" id="resetPhoto" aria-label="重置头像大小和位置">重置</button></div>
-  <div class="photo-tune-control"><label for="photoScale">头像大小 <output id="photoScaleOut" for="photoScale">100%</output></label><input id="photoScale" type="range" min="25" max="400" step="1" value="100" aria-label="头像大小"></div>
+  <div class="photo-tune-control"><div class="photo-tune-control-label"><label for="photoScale">头像大小</label><span class="photo-tune-percent-input"><input id="photoScaleNumber" type="number" min="25" max="400" step="1" value="100" aria-label="头像大小百分比"><span>%</span></span><output id="photoScaleOut" for="photoScale" hidden>100%</output></div><input id="photoScale" type="range" min="25" max="400" step="1" value="100" aria-label="头像大小"></div>
   <div class="photo-tune-control"><label for="photoOffsetY">上下位置 <output id="photoOffsetYOut" for="photoOffsetY">居中</output></label><input id="photoOffsetY" type="range" min="-200" max="200" step="1" value="0" aria-label="头像上下位置"></div>
   <div class="photo-tune-control"><label for="photoOffsetX">左右位置 <output id="photoOffsetXOut" for="photoOffsetX">居中</output></label><input id="photoOffsetX" type="range" min="-200" max="200" step="1" value="0" aria-label="头像左右位置"></div>
   <p class="photo-tune-help">仅调整选中的头像，多选可批量微调。</p>
-  <div hidden><input id="photoScaleNumber" type="number" min="25" max="400" value="100"><input id="photoDragMode" type="checkbox"><select id="photoMoveStep"><option value="5">5 px</option></select><span id="photoOffsetReadout"></span></div>
+  <div hidden><input id="photoDragMode" type="checkbox"><select id="photoMoveStep"><option value="5">5 px</option></select><span id="photoOffsetReadout"></span></div>
  </div>
  <div class="field" id="slotBackgroundField">
   <div class="label">替换图案背景 <span class="small">只影响选中位置 · 可多选</span></div>
