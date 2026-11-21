@@ -1,10 +1,10 @@
 //! 千帆客服工作台 CDP 注入器（Rust 版）。
 //!
 //! 周期扫描 `http://127.0.0.1:<port>/json/list`，对每个客服工作台页面建立
-//! WebSocket 连接并注入 `assets/paidan_core.js`；页面内「进入排单」捕获的
+//! WebSocket 连接并注入 `assets/vagaga_capture.js`；页面内「进入排单」捕获的
 //! 图片经 `qianfanBridge` binding 回流后写收件暂存并落库。
 //!
-//! 语义与 Flutter 注入器（desktop/paidan_cdp_injector.dart）一致：
+//! 与 Flutter 客户端的千帆注入器行为一致：
 //! 多 target 自动接入、失败 30s 退避、断线清理重连、无订单号跳过。
 
 use std::collections::HashMap;

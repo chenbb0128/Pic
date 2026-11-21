@@ -5,12 +5,12 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import 'order_controller.dart';
-import 'paidan_ingest_service.dart' show PaidanIngestEvent, PaidanIngestStatus;
+import 'vagaga_ingest_service.dart' show PaidanIngestEvent, PaidanIngestStatus;
 
 /// 千帆客服工作台 CDP 注入器。
 ///
 /// 订单素材台自身通过 `http://127.0.0.1:<port>/json/list` 发现工作台页面，
-/// WebSocket 连入后注入 `assets/paidan_core.js`（右键「进入排单」菜单 + 抓图），
+/// WebSocket 连入后注入 `assets/vagaga_capture.js`（右键「进入排单」菜单 + 抓图），
 /// 捕获结果经 `qianfanBridge` binding 回流，直接按订单号入库 —— 无需 Node 注入器
 /// 与收件箱文件中转。
 ///

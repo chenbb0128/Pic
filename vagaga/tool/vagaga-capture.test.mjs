@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import vm from 'node:vm'
 
-const source = readFileSync(new URL('../src-tauri/assets/paidan_core.js', import.meta.url), 'utf8')
+const source = readFileSync(new URL('../src-tauri/assets/vagaga_capture.js', import.meta.url), 'utf8')
 const window = { addEventListener() {} }
 window.top = window
 vm.runInNewContext(source.replace(/\}\)\(\)\s*$/, `

@@ -1,7 +1,7 @@
-// 给 paidan_core.js 注入菜单替换 emoji 为 SVG 图标
+// 给 vagaga_capture.js 注入菜单替换 emoji 为 SVG 图标
 import { readFileSync, writeFileSync } from 'node:fs'
 
-const p = new URL('../src-tauri/assets/paidan_core.js', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')
+const p = new URL('../src-tauri/assets/vagaga_capture.js', import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')
 let s = readFileSync(p, 'utf8')
 
 const ICONS = {

@@ -1,7 +1,7 @@
 // 从 web 端权威源同步模板目录：
 //   读取 web/public/embedded/heart-star/index.html 的 select#template 下拉框，
-//   校验 src-tauri/assets/paidan_core.js 内嵌 TEMPLATES 目录的 id 全部有效，
-//   并打印 A01–A12 对照（若 web 模板有增删，先更新 paidan_core.js 的 TEMPLATES）。
+//   校验 src-tauri/assets/vagaga_capture.js 内嵌 TEMPLATES 目录的 id 全部有效，
+//   并打印 A01–A12 对照（若 web 模板有增删，先更新 vagaga_capture.js 的 TEMPLATES）。
 // 用法: node tool/sync_templates.mjs [--json]
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const project = join(here, '..')
 const webSource = join(project, '..', 'web', 'public', 'embedded', 'heart-star', 'index.html')
-const coreAsset = join(project, 'src-tauri', 'assets', 'paidan_core.js')
+const coreAsset = join(project, 'src-tauri', 'assets', 'vagaga_capture.js')
 
 const html = readFileSync(webSource, 'utf8')
 const selectMatch = html.match(/<select\b[^>]*\bid="template"[^>]*>([\s\S]*?)<\/select>/)
@@ -23,11 +23,11 @@ const options = [...selectMatch[1].matchAll(/<option value="([^"]+)">([^<]*)<\/o
 )
 const webIds = new Set(options.map(o => o.id))
 
-// 提取 paidan_core.js 中内嵌的 TEMPLATES 数组
+// 提取 vagaga_capture.js 中内嵌的 TEMPLATES 数组
 const core = readFileSync(coreAsset, 'utf8')
 const arrayMatch = core.match(/const TEMPLATES = (\[[\s\S]*?\])\s*\n/)
 if (!arrayMatch) {
-  console.error('未找到 paidan_core.js 的 TEMPLATES 目录')
+  console.error('未找到 vagaga_capture.js 的 TEMPLATES 目录')
   process.exit(1)
 }
 const baked = [
@@ -45,7 +45,7 @@ for (const t of baked) {
   console.log(` ${ok ? '✓' : '✗'} ${t.code} ${t.name} → ${t.id}`)
 }
 if (missing.length) {
-  console.error('\n✗ 以下内嵌模板在 web 端已不存在，请修正 paidan_core.js：')
+  console.error('\n✗ 以下内嵌模板在 web 端已不存在，请修正 vagaga_capture.js：')
   for (const t of missing) console.error('  -', t.id)
 }
 if (unused.length) {

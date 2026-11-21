@@ -4,8 +4,8 @@ import 'dart:io';
 import 'package:flutter/services.dart' show rootBundle;
 
 import '../features/orders/application/order_controller.dart';
-import '../features/orders/application/paidan_cdp_injector.dart';
-import '../features/orders/application/paidan_ingest_service.dart';
+import '../features/orders/application/vagaga_cdp_injector.dart';
+import '../features/orders/application/vagaga_ingest_service.dart';
 import '../features/orders/data/local_order_repository.dart';
 import '../features/settings/storage_settings.dart';
 import '../features/templates/template_definition.dart';
@@ -44,7 +44,7 @@ class AppDependencies {
       paidan: PaidanIngestService(orders, Directory('${root.path}/inbox')),
       paidanCdp: PaidanCdpInjector(
         orders,
-        coreScript: await rootBundle.loadString('assets/paidan_core.js'),
+        coreScript: await rootBundle.loadString('assets/vagaga_capture.js'),
         incomingDirectory: Directory('${root.path}/incoming'),
       ),
       dataPath: root.path,

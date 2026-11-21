@@ -48,7 +48,7 @@ windows/runner/               Flutter 标准宿主和 Windows API 适配
 千帆客服右键图片点击「进入排单」后，订单素材台**自身**完成捕获与入库（无外部注入器进程）：
 
 - 前置条件：千帆客服工作台以 `--remote-debugging-port=9222` 启动（桌面快捷方式「排单小助手 / 千帆客服工作台(排单版)」负责）。
-- `PaidanCdpInjector` 周期扫描 `http://127.0.0.1:9222/json/list`，对每个客服工作台页面建立 CDP WebSocket 连接，注入内置资产 `assets/paidan_core.js`：右键图片 → 融合进平台菜单的「进入排单」项 → 页面内抓取原图（对 arkgoods 链接去掉 imageView2/ 缩图参数，与 EVA 拖入同款规则）→ 经 `qianfanBridge` binding 回流。
+- `PaidanCdpInjector` 周期扫描 `http://127.0.0.1:9222/json/list`，对每个客服工作台页面建立 CDP WebSocket 连接，注入内置资产 `assets/vagaga_capture.js`：右键图片 → 融合进平台菜单的「进入排单」项 → 页面内抓取原图（对 arkgoods 链接去掉 imageView2/ 缩图参数，与 EVA 拖入同款规则）→ 经 `qianfanBridge` binding 回流。
 - 捕获按订单号找单或建单（同号复用）入库，来源标记为 `ImageSource.paidan`；临时文件先写 `incoming/`，成功后删除，失败保留供人工处理。控制器忙时捕获在内存中排队重试（约 10 次 × 2s），持续忙碌则保留文件。
 - 与用户操作串行：`OrderController.ingestPaidan` 与拖入导入共用忙碌保护，不与切单、导入竞争写入。捕获 payload 无订单号时跳过入库（右侧订单面板未显示订单）。
 - 测试经内嵌 fake CDP 服务端（`HttpServer` + `WebSocketTransformer`）覆盖协议客户端：脚本注入、binding 回流入库、无订单号跳过。

@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pic_order_desktop/features/orders/application/order_controller.dart';
-import 'package:pic_order_desktop/features/orders/application/paidan_ingest_service.dart';
+import 'package:pic_order_desktop/features/orders/application/vagaga_ingest_service.dart';
 import 'package:pic_order_desktop/features/orders/data/local_order_repository.dart';
 import 'package:pic_order_desktop/features/orders/domain/order_document.dart';
 import 'package:pic_order_desktop/features/orders/domain/order_image.dart';

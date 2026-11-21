@@ -6,7 +6,7 @@ import '../../../platform/desktop_gateway.dart';
 import '../../settings/presentation/storage_settings_dialog.dart';
 import '../../settings/storage_settings.dart';
 import '../application/order_controller.dart';
-import '../application/paidan_ingest_service.dart';
+import '../application/vagaga_ingest_service.dart';
 import '../domain/order_document.dart';
 import '../domain/order_image.dart';
 import 'widgets/image_assignment_panel.dart';

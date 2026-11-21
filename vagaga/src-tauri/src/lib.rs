@@ -62,7 +62,7 @@ pub fn run() {
 
             // CDP 注入器后台运行；事件转发到前端（分流入库/失败两个频道）。
             let core_script =
-                include_str!("../assets/paidan_core.js").to_string();
+                include_str!("../assets/vagaga_capture.js").to_string();
             let (events_tx, mut events_rx) = tokio::sync::mpsc::channel::<cdp::PaidanEvent>(64);
             let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
             let handle = app.handle().clone();
@@ -78,7 +78,7 @@ pub fn run() {
                     scan_interval: std::time::Duration::from_secs(3),
                 }.run().await;
             });
-            let log_path = data_root.join("paidan-center.log");
+            let log_path = data_root.join("vagaga.log");
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = events_rx.recv().await {
                     let line = match &event {
