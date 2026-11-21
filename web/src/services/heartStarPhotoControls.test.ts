@@ -19,6 +19,11 @@ function setup() {
 }
 
 describe('heart-star portrait fine tuning', () => {
+  it('renders a direct percentage input for portrait size', () => {
+    expect(html).toContain('<input id="photoScaleNumber" type="number" min="25" max="400" step="1" value="100" aria-label="头像大小百分比">')
+    expect(html).toContain('photo-tune-percent-input')
+  })
+
   it('shows photo shape controls for image templates and hides them for text templates', () => {
     const nodes = new Map<string, any>()
     const node = (id: string): any => {
@@ -48,6 +53,7 @@ describe('heart-star portrait fine tuning', () => {
     const { env, feature, element } = setup(), untouched = structuredClone(env.states[1])
     feature.updatePhotoControls()
     expect(element('photoScaleOut').value).toBe('95%')
+    expect(element('photoScaleNumber').value).toBe('95')
     expect(element('photoOffsetXOut').value).toBe('居中')
     expect(element('photoOffsetYOut').value).toBe('居中')
     feature.setPhotoOffset('y', -24)
@@ -55,6 +61,8 @@ describe('heart-star portrait fine tuning', () => {
     expect(env.states[0]).toMatchObject({ imageDy: -24, imageScale: 1.1, size: .62 })
     expect(env.states[1]).toEqual(untouched)
     expect(element('photoOffsetYOut').value).toBe('上 24 px')
+    feature.setPhotoScale(999)
+    expect(element('photoScaleNumber').value).toBe('400')
   })
 
   it('shows mixed selections and resets only the selected portraits', () => {

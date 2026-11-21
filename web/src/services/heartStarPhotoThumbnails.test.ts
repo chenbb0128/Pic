@@ -42,7 +42,12 @@ describe('manual photo background controls in upload thumbnails', () => {
     s.container.children[0]!.children[0]!.click()
     const dialog = s.document.body.children[0]!
     expect(dialog.children[0]!.children[0]!.textContent).toContain('已补光')
-    expect(dialog.children[1]!.children[0]!.drawnImage).toBe(lit)
+    const body = dialog.children[1]!
+    expect(body.children).toHaveLength(2)
+    expect(body.children[0]!.children[0]!.textContent).toBe('原图')
+    expect(body.children[0]!.children[1]!.drawnImage).toBe(s.a)
+    expect(body.children[1]!.children[0]!.textContent).toBe('当前效果')
+    expect(body.children[1]!.children[1]!.drawnImage).toBe(lit)
     s.button(s.container.children[0]!).click()
     expect(s.processedIds).toEqual([[0, 1]])
   })
@@ -103,7 +108,7 @@ describe('manual photo background controls in upload thumbnails', () => {
     expect(dialog().open).toBe(true)
     const head = dialog().children[0]!, body = dialog().children[1]!
     expect(head.children[0]!.textContent).toBe('照片 1 · 原图 · 80 × 80 px')
-    expect([body.children[0]!.width, body.children[0]!.height]).toEqual([80, 80])
+    expect([body.children[0]!.children[1]!.width, body.children[0]!.children[1]!.height]).toEqual([80, 80])
     head.children[1]!.click()
     expect(dialog().open).toBe(false)
     // Processed photos are labelled in the preview title.
@@ -115,7 +120,7 @@ describe('manual photo background controls in upload thumbnails', () => {
     const huge = s.container.children[2]!
     expect(huge.children[1]!.textContent === '一键去底').toBe(true)
     huge.children[0]!.click()
-    const canvas = dialog().children[1]!.children[0]!
+    const canvas = dialog().children[1]!.children[1]!.children[1]!
     expect([canvas.width, canvas.height]).toEqual([2048, 1024])
   })
 })

@@ -4,7 +4,7 @@ import toolHtml from '../../public/embedded/heart-star/index.html?raw'
 function setup(ids: number[]) {
   const old = { image: { name: 'old' }, url: 'old-url' }
   const states = Array.from({ length: 4 }, () => ({ imageScale: 2, imageDx: 7 }))
-  const images: any[] = [], messages: string[] = [], revoked: string[] = []
+  const images: any[] = [], messages: string[] = [], revoked: string[] = [], lightCalls: any[] = []
   const controls: Record<string, any> = {}
   const control = (id: string) => controls[id] ||= { value: '', textContent: '', disabled: false }
   const env: any = {
@@ -15,6 +15,7 @@ function setup(ids: number[]) {
     exportBusy: false, replacementTarget: null, replacePhotoFile: { value: '' }, filesEl: { value: '' },
     clip: { checked: false }, HeartStarBackground: { photoOnly: (state: any) => ['transparent', 'outline'].includes(state?.background?.type) },
     selectedSlot: ids[0] ?? 0, multiMode: ids.length > 1, updateCopyEditor() {},
+    photoLightingEditor: { setStrength: (strength: number, targetIds: number[]) => { lightCalls.push({ strength, targetIds }); return Promise.resolve() } },
     document: { getElementById: control, querySelectorAll: () => [] },
     slotSelect: control('slotSelect'), scale: control('scale'), sizeNumber: control('sizeNumber'), clipShape: control('clipShape'),
     Image: class { constructor() { images.push(this) } },
@@ -34,10 +35,28 @@ function setup(ids: number[]) {
     updateControls,applySolid:typeof applySolidPhotos==='function'?applySolidPhotos:null,
     remove:typeof removeSelectedPhotos==='function'?removeSelectedPhotos:null}}`)(env)
   const file = (name: string) => ({ name, type: 'image/png' })
-  return { env, states, old, images, messages, revoked, controls, ...feature, file }
+  return { env, states, old, images, messages, revoked, lightCalls, controls, ...feature, file }
 }
 
 describe('heart-star selected photo upload', () => {
+  it('uses the right preview as the drag target and hides manual lighting controls', () => {
+    expect(toolHtml).not.toContain('id="photoLightingField"')
+    expect(toolHtml).toContain('id="photoLightingCompact"')
+    expect(toolHtml).toContain('data-light-strength')
+    expect(toolHtml).toContain('id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="100"')
+    expect(toolHtml).toContain('id="cancelPhotoLighting"')
+    expect(toolHtml).toContain('photoLightingEditor?.cancel?.()')
+    expect(toolHtml).toContain("previewPanel.addEventListener('drop',onPreviewDrop)")
+    expect(toolHtml).toContain('导入后会自动补光')
+    expect(toolHtml).toContain("replacePhotoActions.addEventListener('drop',onReplacePhotoDrop)")
+    expect(toolHtml).toContain('replaceSelectedPhoto(file)')
+  })
+
+  it('refreshes lighting controls after background removal finishes', () => {
+    expect(toolHtml).toContain('HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw})')
+    expect(toolHtml).toContain('HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw})')
+  })
+
   it('persists the processed badge only after applying and clears it when restoring, uploading, or deleting', () => {
     const s = setup([1]), result = { name: 'transparent' }
     s.applySolid([{ id: 1, image: result, processed: true }])
@@ -102,6 +121,15 @@ describe('heart-star selected photo upload', () => {
     expect(s.env.replacedPhotos.get(1)?.image).toBe(s.images[0])
     expect([0, 2, 3].map(i => s.env.replacedPhotos.get(i))).toEqual([s.old, s.old, s.old])
     expect(s.states[0]).toEqual({ imageScale: 2, imageDx: 7 })
+  })
+
+  it('automatically applies strong lighting to imported positions after all files load', () => {
+    const s = setup([1, 3])
+    s.upload([s.file('a'), s.file('b')])
+    s.images[1].onload()
+    expect(s.lightCalls).toEqual([])
+    s.images[0].onload()
+    expect(s.lightCalls).toEqual([{ strength: 100, targetIds: [1, 3] }])
   })
 
   it('clears the old lighting when replacing a portrait and retains lighting on other positions', () => {

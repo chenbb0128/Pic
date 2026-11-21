@@ -19,6 +19,27 @@ describe('portrait lighting', () => {
     expect(input.data).toEqual(before)
   })
 
+  it('gives midtone shadows a visible lift at the normal one-click strength', () => {
+    const result = adjust(pixels([60, 45, 35, 255], [100, 75, 60, 255], [230, 230, 230, 255]))
+    expect(result.data[0]).toBeGreaterThan(112)
+    expect(result.data[4]).toBeGreaterThan(155)
+    expect(result.data[8]).toBeLessThanOrEqual(235)
+  })
+
+  it('still lifts brighter skin midtones clearly at maximum strength', () => {
+    const result = adjust(pixels([160, 125, 105, 255], [190, 160, 140, 255], [235, 220, 210, 255]), 200)
+    expect(result.data[0]).toBeGreaterThan(180)
+    expect(result.data[4]).toBeGreaterThan(205)
+    expect(result.data[8]).toBeLessThan(245)
+  })
+
+  it('adds local edge contrast without changing transparency', () => {
+    const result = adjust(pixels([80, 70, 60, 255], [120, 110, 100, 255], [80, 70, 60, 255]), 100)
+    const luminance = (offset: number) => .2126 * result.data[offset] + .7152 * result.data[offset + 1] + .0722 * result.data[offset + 2]
+    expect(luminance(4) - luminance(0)).toBeGreaterThan(24)
+    expect([result.data[3], result.data[7], result.data[11]]).toEqual([255, 255, 255])
+  })
+
   it('keeps every alpha value and fully transparent RGB intact, including cutout edges', () => {
     const input = pixels([50, 40, 30, 0], [60, 45, 35, 32], [60, 45, 35, 128], [60, 45, 35, 255])
     const result = adjust(input)
@@ -98,6 +119,14 @@ describe('selected portrait lighting controls', () => {
     expect(s.states).toEqual([{ dx: 10 }, { dx: -2 }, { dx: 0 }])
   })
 
+  it('can target imported positions explicitly even when the canvas selection differs', async () => {
+    const s = setup(); s.board.ids = [0, 1]
+    await s.feature.setStrength(200, [2])
+    expect(s.applied).toEqual([{ ids: [2], strength: 200 }])
+    expect(s.states[2]).toHaveProperty('photoLight', 200)
+    expect(s.states[0]).not.toHaveProperty('photoLight')
+  })
+
   it('displays mixed strengths and disables controls without selected photos', () => {
     const s = setup()
     s.states[0].photoLight = 70; s.feature.update()
@@ -127,6 +156,19 @@ describe('selected portrait lighting controls', () => {
     const first = s.feature.setStrength(100), second = s.feature.setStrength(160)
     await Promise.all([first, second])
     expect(s.applied).toEqual([{ ids: [0, 1], strength: 160 }])
+    expect(s.feature.busy()).toBe(false)
+  })
+
+  it('cancels an active lighting run without applying partial results', async () => {
+    const s = setup()
+    let release!: () => void
+    s.setProcessor(() => new Promise(resolve => { release = resolve }))
+    const pending = s.feature.setStrength(200)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    s.feature.cancel()
+    release()
+    await pending
+    expect(s.applied).toEqual([])
     expect(s.feature.busy()).toBe(false)
   })
 })
