@@ -11,23 +11,35 @@
     const close = document.createElement('button'); close.type = 'button'; close.className = 'photo-thumb-action';
     close.textContent = '✕ 关闭'; close.setAttribute('aria-label', '关闭大图');
     const body = document.createElement('div'); body.className = 'photo-zoom-body';
-    const canvas = document.createElement('canvas');
-    head.append(title, close); body.append(canvas); dialog.append(head, body);
+    const createPanel = labelText => {
+      const panel = document.createElement('div'); panel.className = 'photo-zoom-panel';
+      const label = document.createElement('span'); label.className = 'photo-zoom-label'; label.textContent = labelText;
+      const canvas = document.createElement('canvas'); panel.append(label, canvas); body.append(panel);
+      return canvas;
+    };
+    const originalCanvas = createPanel('原图'), previewCanvas = createPanel('当前效果');
+    head.append(title, close); dialog.append(head, body);
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
     (document.body || document.documentElement).append(dialog);
-    zoomDialog = { dialog, title, canvas };
+    zoomDialog = { dialog, title, originalCanvas, previewCanvas };
     return zoomDialog;
+  }
+  function drawZoomCanvas(canvas, image) {
+    const width = image.naturalWidth || image.width || 0, height = image.naturalHeight || image.height || 0;
+    const cap = width > 0 && height > 0 ? Math.min(1, 2048 / Math.max(width, height)) : 1;
+    canvas.width = Math.max(1, Math.round((width || 1) * cap));
+    canvas.height = Math.max(1, Math.round((height || 1) * cap));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    return { width, height };
   }
   function openZoom(item, index) {
     const zoom = ensureZoomDialog();
-    const image = item.preview || item.image;
-    const width = image.naturalWidth || image.width || 0, height = image.naturalHeight || image.height || 0;
-    const cap = width > 0 && height > 0 ? Math.min(1, 2048 / Math.max(width, height)) : 1;
-    zoom.canvas.width = Math.max(1, Math.round((width || 1) * cap));
-    zoom.canvas.height = Math.max(1, Math.round((height || 1) * cap));
-    zoom.canvas.getContext('2d').drawImage(image, 0, 0, zoom.canvas.width, zoom.canvas.height);
-    const lit = image !== item.image;
+    const originalSize = drawZoomCanvas(zoom.originalCanvas, item.image);
+    const currentImage = item.preview || item.image;
+    const currentSize = drawZoomCanvas(zoom.previewCanvas, currentImage);
+    const lit = currentImage !== item.image;
+    const width = currentSize.width || originalSize.width, height = currentSize.height || originalSize.height;
     zoom.title.textContent = `照片 ${index + 1} · ${item.processed ? '已处理' : lit ? '已补光' : '原图'}${item.processed && lit ? ' · 已补光' : ''}${width > 0 ? ` · ${width} × ${height} px` : ''}`;
     if (zoom.dialog.open !== true) zoom.dialog.showModal();
   }
