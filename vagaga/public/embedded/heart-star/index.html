@@ -428,6 +428,9 @@ function say(t,error=false){const s=document.getElementById('status');s.textCont
 function currentSlots(){return templates[sel.value].slots}
 const footerHeightMm=3,footerText=document.getElementById('footerText'),numberingEnabled=document.getElementById('numberingEnabled'),footerPrefix=document.getElementById('footerPrefix'),sheetTotal=document.getElementById('sheetTotal'),sheetIndex=document.getElementById('sheetIndex');
 let orderNumberingOrder = null, orderNumberingEdited = false, orderImageId = null;
+let pendingOrderExports = 0;
+window.__picHasPendingExport = () => exportBusy || pendingOrderExports > 0;
+window.__picAcknowledgeOrderExport = () => { if (pendingOrderExports) pendingOrderExports--; };
 
 function applyOrderNumbering(data) {
   if (typeof data.orderNumber !== 'string' || !data.orderNumber) return;
@@ -625,7 +628,15 @@ async function exportPng(withWatermark=false){
   const finalBlob=proof?blob:await addDpiMetadata(blob,d.dpi);
   if(numberingEnabled.checked!==numbered||(numbered&&composeFooterNumber()!==label))throw new Error('编号设置已更新，请重新下载。');
   const a=document.createElement('a');a.href=URL.createObjectURL(finalBlob);a.download=pngFilename(name,label,d).replace(/\.png$/i,proof?'_水印预览.png':'.png');a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-  if(!proof&&window.parent&&window.parent!==window&&window.parent.__TAURI_INTERNALS__){try{const bin=new Uint8Array(await finalBlob.arrayBuffer());let binary='';for(let i=0;i<bin.length;i+=0x8000)binary+=String.fromCharCode(...bin.subarray(i,i+0x8000));window.parent.postMessage({type:'pic-make-exported',b64:btoa(binary),fileName:a.download,orderNumber,imageId},'*')}catch(error){console.error('[pic-make] export bridge failed',error)}}
+  if(!proof&&window.parent&&window.parent!==window&&window.parent.__TAURI_INTERNALS__){
+   try{
+    const bin=new Uint8Array(await finalBlob.arrayBuffer());
+    let binary='';
+    for(let i=0;i<bin.length;i+=0x8000)binary+=String.fromCharCode(...bin.subarray(i,i+0x8000));
+    window.parent.postMessage({type:'pic-make-exported',b64:btoa(binary),fileName:a.download,orderNumber,imageId},'*');
+    pendingOrderExports++;
+   }catch(error){console.error('[pic-make] export bridge failed',error)}
+  }
   if(!proof&&numbered){footerText.value='';orderNumberingEdited=false}
   say(proof?`带水印预览图已导出：${a.download}，${output.width} × ${output.height} px（白底预览，非印刷文件）。`:`PNG 已导出：${a.download}，${output.width} × ${output.height} px，${d.dpi} DPI。${numbered?'编号输入框已清空。':''}`)
  }catch(err){say(err.message||'导出失败，请重试。',true)}finally{exportBusy=false;draw()}

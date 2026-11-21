@@ -18,7 +18,6 @@ import {
   saveQiniuSettings,
   testQiniuSettings,
   workflowSetRole,
-  workflowTest,
 } from '../lib/tauri'
 import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, SmbConfig, WebDavConfig, WorkflowRole } from '../types'
 
@@ -43,8 +42,6 @@ function loadTemplatePreviews() {
 }
 const roleBusy = ref(false)
 const roleMessage = ref('')
-const capabilityBusy = ref(false)
-const capabilityMessage = ref('')
 const role = ref<WorkflowRole>(store.workflow.role)
 
 async function saveRole() {
@@ -57,19 +54,6 @@ async function saveRole() {
     roleMessage.value = String(error)
   } finally {
     roleBusy.value = false
-  }
-}
-
-async function testWorkflow() {
-  capabilityBusy.value = true
-  capabilityMessage.value = ''
-  try {
-    const result = await workflowTest()
-    capabilityMessage.value = result.message
-  } catch (error) {
-    capabilityMessage.value = String(error)
-  } finally {
-    capabilityBusy.value = false
   }
 }
 
@@ -151,7 +135,15 @@ const activeCloudProvider = computed(() =>
 const selectedCloudIsRunning = computed(() =>
   selectedCloudProvider.value !== null && selectedCloudProvider.value === activeCloudProvider.value,
 )
+const selectedStorageEnabled = computed(() =>
+  storageProvider.value === 'qiniu' ? Boolean(qiniuSaved.value?.enabled) : selectedCloudIsRunning.value,
+)
 const canSaveCloud = computed(() => cloudSaved.value !== null && qiniuSaved.value !== null)
+const canToggleStorage = computed(() =>
+  storageProvider.value === 'qiniu'
+    ? Boolean(qiniuSaved.value && (qiniuSaved.value.enabled || qiniuForm.value.apiUrl.trim()))
+    : Boolean(cloud.value && canSaveCloud.value && !qiniuSaved.value?.enabled),
+)
 const currentStorage = computed(() => {
   if (!qiniuSaved.value) return '正在读取'
   if (qiniuSaved.value.enabled) return storageNames.qiniu
@@ -159,15 +151,19 @@ const currentStorage = computed(() => {
   return activeCloudProvider.value ? storageNames[activeCloudProvider.value] : '共享存储未启用'
 })
 
-const pgc = ref<MysqlConfig>({ enabled: false, host: '', port: 3306, user: '', password: '', dbname: 'vagaga', pollSeconds: 30 })
+const mysqlForm = ref<MysqlConfig>({ enabled: false, host: '', port: 3306, user: '', password: '', dbname: 'vagaga', pollSeconds: 30 })
 const mysqlSaved = ref<MysqlConfig | null>(null)
 const canSyncMysql = computed(() => {
   const config = mysqlSaved.value
-  return Boolean(config?.enabled && config.host.trim() && config.user.trim() && config.dbname.trim()
-    && Number.isInteger(config.port) && config.port > 0 && config.port <= 65535)
+  return Boolean(config?.enabled && mysqlConfigured(config))
 })
-const pgMsg = ref('')
-const pgBusy = ref(false)
+const mysqlMessage = ref('')
+const mysqlBusy = ref(false)
+
+function mysqlConfigured(config: MysqlConfig) {
+  return config.host.trim() && config.user.trim() && config.dbname.trim()
+    && Number.isInteger(config.port) && config.port > 0 && config.port <= 65535
+}
 
 const cutc = ref<CutoutConfig>({ apiKey: '', kind: 'person', timeoutSecs: 90 })
 const cutMsg = ref('')
@@ -175,7 +171,7 @@ const cutBusy = ref(false)
 
 const sections = [
   { key: 'basics', label: '基础信息' },
-  { key: 'mysql', label: 'MySQL 数据库' },
+  { key: 'database', label: '共享数据库' },
   { key: 'storage', label: '共享存储' },
   { key: 'cutout', label: 'AI 抠图' },
   { key: 'templates', label: '制作模板' },
@@ -197,9 +193,9 @@ onMounted(async () => {
   try {
     const config = await getMysqlConfig()
     mysqlSaved.value = config
-    pgc.value = { ...config }
-  } catch {
-    /* 首次无配置 */
+    mysqlForm.value = { ...config }
+  } catch (error) {
+    mysqlMessage.value = `读取共享数据库配置失败：${error}`
   }
   try {
     cutc.value = await getCutoutConfig()
@@ -262,7 +258,6 @@ function saveQiniu(enabled: boolean) {
     qiniuSaved.value = saved
     if (enabled) qiniuForm.value = { apiUrl: saved.apiUrl, token: '' }
     await refreshWorkflowSettings()
-    capabilityMessage.value = ''
     qiniuMsg.value = '七牛设置已保存。'
   })
 }
@@ -284,47 +279,52 @@ function openQiniuLogs() {
   })
 }
 
-async function savePg() {
-  pgBusy.value = true
+async function saveMysql(enabled = mysqlSaved.value?.enabled ?? false) {
+  const saved = mysqlSaved.value
+  if (!saved || mysqlBusy.value) return
+  const config = { ...(saved.enabled && !enabled ? saved : mysqlForm.value), enabled }
+  if (enabled && !mysqlConfigured(config)) {
+    mysqlMessage.value = '请填写主机、端口、用户名和数据库名。'
+    return
+  }
+  mysqlBusy.value = true
   try {
-    const config = { ...pgc.value }
     await saveMysqlConfig(config)
     mysqlSaved.value = config
-    pgMsg.value = 'MySQL 配置已保存。'
+    mysqlForm.value.enabled = enabled
+    mysqlMessage.value = 'MySQL 配置已保存。'
   } catch (error) {
-    pgMsg.value = String(error)
+    mysqlMessage.value = String(error)
   } finally {
-    pgBusy.value = false
+    mysqlBusy.value = false
   }
 }
 
-async function testPg() {
-  pgBusy.value = true
-  pgMsg.value = '正在测试连接…'
+async function testMysql() {
+  mysqlBusy.value = true
+  mysqlMessage.value = '正在测试连接…'
   try {
-    pgMsg.value = await mysqlTest(JSON.parse(JSON.stringify(pgc.value)))
-    toast('ok', 'MySQL 连接成功')
+    mysqlMessage.value = await mysqlTest({ ...mysqlForm.value })
   } catch (error) {
-    pgMsg.value = String(error)
-    toast('error', 'MySQL 连接失败')
+    mysqlMessage.value = String(error)
   } finally {
-    pgBusy.value = false
+    mysqlBusy.value = false
   }
 }
 
-async function syncPgNow() {
+async function syncMysql() {
   if (!canSyncMysql.value) return
-  pgBusy.value = true
-  pgMsg.value = '正在同步…'
+  mysqlBusy.value = true
+  mysqlMessage.value = '正在同步…'
   try {
     const result = await mysqlSyncNow(props.activeOrder)
     const conflicts = result.conflicts.length ? '有本机修改的订单，请在「数据同步」中查看。' : ''
-    pgMsg.value = [result.errors[0] || '同步完成。', conflicts].filter(Boolean).join(' ')
+    mysqlMessage.value = [result.errors[0] || '同步完成。', conflicts].filter(Boolean).join(' ')
     await loadOrders()
   } catch (error) {
-    pgMsg.value = String(error)
+    mysqlMessage.value = String(error)
   } finally {
-    pgBusy.value = false
+    mysqlBusy.value = false
   }
 }
 
@@ -375,7 +375,6 @@ function saveCloud(action: CloudSaveAction) {
     await saveCloudConfig(config)
     cloudSaved.value = config
     await refreshWorkflowSettings()
-    capabilityMessage.value = ''
     const name = storageNames[provider]
     const messages = {
       profile: `${name} 配置已保存。`,
@@ -384,6 +383,14 @@ function saveCloud(action: CloudSaveAction) {
     }
     setCloudMsg(provider, messages[action])
   })
+}
+
+function toggleStorage() {
+  if (cloudBusy.value || qiniuBusy.value || !canToggleStorage.value) return
+  const enabled = !selectedStorageEnabled.value
+  return storageProvider.value === 'qiniu'
+    ? saveQiniu(enabled)
+    : saveCloud(enabled ? 'activate' : 'pause')
 }
 
 function testCloud() {
@@ -493,40 +500,54 @@ async function openCutoutLogs() {
             </div>
           </div>
 
-          <div v-show="activeSection === 'mysql'" class="card">
-            <h3>MySQL 数据库</h3>
-            <label class="row checkRow">
-              <input v-model="pgc.enabled" type="checkbox" />
-              <span>启用数据同步</span>
+          <div v-show="activeSection === 'database'" class="card">
+            <h3>共享数据库</h3>
+            <label class="row">
+              <span class="label">数据库类型</span>
+              <select class="input providerSelect" :disabled="mysqlBusy">
+                <option value="mysql">MySQL</option>
+              </select>
             </label>
+            <div class="row">
+              <span class="label">启用</span>
+              <button
+                type="button"
+                class="settingSwitch"
+                role="switch"
+                aria-label="启用共享数据库"
+                :aria-checked="Boolean(mysqlSaved?.enabled)"
+                :disabled="mysqlBusy || !mysqlSaved"
+                @click="saveMysql(!mysqlSaved?.enabled)"
+              ></button>
+            </div>
             <div class="formGrid">
-              <div class="row">
+              <label class="row">
                 <span class="label">主机</span>
-                <input v-model="pgc.host" class="input" placeholder="192.168.31.200" spellcheck="false" />
-              </div>
-              <div class="row">
+                <input v-model.trim="mysqlForm.host" class="input" placeholder="192.168.31.200" spellcheck="false" :disabled="mysqlBusy" />
+              </label>
+              <label class="row">
                 <span class="label">端口</span>
-                <input v-model.number="pgc.port" class="input narrow" type="number" placeholder="3306" />
-              </div>
-              <div class="row">
+                <input v-model.number="mysqlForm.port" class="input narrow" type="number" min="1" max="65535" placeholder="3306" :disabled="mysqlBusy" />
+              </label>
+              <label class="row">
                 <span class="label">用户名</span>
-                <input v-model="pgc.user" class="input" placeholder="root" spellcheck="false" />
-              </div>
-              <div class="row">
+                <input v-model="mysqlForm.user" class="input" placeholder="root" spellcheck="false" :disabled="mysqlBusy" />
+              </label>
+              <label class="row">
                 <span class="label">密码</span>
-                <input v-model="pgc.password" class="input" type="password" placeholder="数据库密码" />
-              </div>
-              <div class="row">
+                <input v-model="mysqlForm.password" class="input" type="password" placeholder="数据库密码" autocomplete="new-password" :disabled="mysqlBusy" />
+              </label>
+              <label class="row">
                 <span class="label">数据库</span>
-                <input v-model="pgc.dbname" class="input" placeholder="vagaga" spellcheck="false" />
-              </div>
+                <input v-model="mysqlForm.dbname" class="input" placeholder="vagaga" spellcheck="false" :disabled="mysqlBusy" />
+              </label>
             </div>
             <div class="row actions">
-              <button class="btn" :disabled="pgBusy" @click="savePg">保存</button>
-              <button class="btn" :disabled="pgBusy" @click="testPg">测试连接</button>
-              <button class="btn" :disabled="pgBusy || !canSyncMysql" @click="syncPgNow">立即同步</button>
+              <button class="btn" :disabled="mysqlBusy || !mysqlSaved" @click="saveMysql()">保存配置</button>
+              <button class="btn" :disabled="mysqlBusy" @click="testMysql">测试连接</button>
+              <button class="btn" :disabled="mysqlBusy || !canSyncMysql" @click="syncMysql">立即同步</button>
             </div>
-            <div v-if="pgMsg" class="cloudMsg">{{ pgMsg }}</div>
+            <div v-if="mysqlMessage" class="cloudMsg" role="status">{{ mysqlMessage }}</div>
           </div>
 
           <div v-show="activeSection === 'storage'" class="card">
@@ -535,10 +556,6 @@ async function openCutoutLogs() {
               <div class="storageStatus" role="status">
                 <span class="storageState">当前存储 <strong>{{ currentStorage }}</strong></span>
               </div>
-            </div>
-            <div class="row actions storageActions">
-              <button type="button" class="btn" :disabled="capabilityBusy || !store.workflow.target" @click="testWorkflow">检查协作能力</button>
-              <div v-if="capabilityMessage" class="cloudMsg" role="status">{{ capabilityMessage }}</div>
             </div>
             <div class="storageTabs" role="tablist" aria-label="共享存储类型" @keydown="onStorageTabKey">
               <button
@@ -564,10 +581,21 @@ async function openCutoutLogs() {
                   </option>
                 </select>
               </label>
+              <div class="row">
+                <span class="label">启用</span>
+                <button
+                  type="button"
+                  class="settingSwitch"
+                  role="switch"
+                  :aria-label="`启用${storageNames[storageProvider]}`"
+                  :aria-checked="selectedStorageEnabled"
+                  :disabled="cloudBusy || qiniuBusy || !canToggleStorage"
+                  @click="toggleStorage"
+                ></button>
+              </div>
 
               <template v-if="selectedCloudProvider">
-                <p v-if="qiniuSaved?.enabled" class="hint">七牛正在使用。可先保存此配置，暂停七牛后再启用。</p>
-                <p v-else-if="!selectedCloudIsRunning" class="hint">可先保存连接配置，点击「保存并启用」后切换当前存储。</p>
+                <p v-if="qiniuSaved?.enabled" class="hint">请先关闭七牛，再启用此存储。</p>
                 <template v-if="cloud">
                   <p v-if="selectedCloudProvider === 'minio'" class="hint">客服机与制作机共用一个 MinIO Bucket，同步素材和订单清单。</p>
                   <div class="formGrid">
@@ -637,11 +665,7 @@ async function openCutoutLogs() {
                   <div class="row actions storageActions">
                     <button class="btn" :disabled="cloudBusy" @click="testCloud">测试连接</button>
                     <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('profile')">保存配置</button>
-                    <button v-if="!selectedCloudIsRunning" class="btn" :disabled="cloudBusy || !canSaveCloud || qiniuSaved?.enabled" @click="saveCloud('activate')">保存并启用</button>
-                    <template v-else>
-                      <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('pause')">暂停共享存储</button>
-                      <button class="btn" :disabled="cloudBusy" @click="syncNow">导入旧数据</button>
-                    </template>
+                    <button v-if="selectedCloudIsRunning" class="btn" :disabled="cloudBusy" @click="syncNow">导入旧数据</button>
                   </div>
                 </template>
                 <div v-if="cloudLoadError" class="cloudMsg" role="status">{{ cloudLoadError }}</div>
@@ -661,10 +685,7 @@ async function openCutoutLogs() {
                 </div>
                 <div class="row actions">
                   <button class="btn" :disabled="qiniuBusy || !qiniuSaved || !qiniuForm.apiUrl.trim()" @click="testQiniu">测试连接</button>
-                  <button class="btn" :disabled="qiniuBusy || !qiniuSaved || !qiniuForm.apiUrl.trim()" @click="saveQiniu(true)">
-                    {{ qiniuSaved?.enabled ? '保存七牛配置' : '保存并启用七牛' }}
-                  </button>
-                  <button v-if="qiniuSaved?.enabled" class="btn" :disabled="qiniuBusy" @click="saveQiniu(false)">暂停使用七牛</button>
+                  <button v-if="qiniuSaved?.enabled" class="btn" :disabled="qiniuBusy || !qiniuForm.apiUrl.trim()" @click="saveQiniu(true)">保存配置</button>
                 </div>
                 <div v-if="qiniuSaved?.hasToken" class="qiniuLegacy">
                   <p v-if="qiniuSaved.role" class="hint">
@@ -836,8 +857,33 @@ h2 {
   color: var(--text-dim);
   line-height: 1.7;
 }
-.checkRow {
+.settingSwitch {
+  display: flex;
+  align-items: center;
+  width: 36px;
+  height: 20px;
+  padding: 2px;
+  border: 1px solid var(--stroke);
+  border-radius: 999px;
+  background: #737f92;
   cursor: pointer;
+}
+.settingSwitch::before {
+  content: '';
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+}
+.settingSwitch[aria-checked="true"] {
+  justify-content: flex-end;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.settingSwitch:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 .input {
   flex: 1;
@@ -993,7 +1039,7 @@ h2 {
 .back:hover {
   background: var(--bg-card-hover);
 }
-.back:focus-visible, .storageTab:focus-visible, .navBtn:focus-visible {
+.back:focus-visible, .storageTab:focus-visible, .navBtn:focus-visible, .settingSwitch:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

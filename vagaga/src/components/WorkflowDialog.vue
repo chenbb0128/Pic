@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { workflowFinish, workflowResolveConflict, workflowSync, workflowUpload } from '../lib/tauri'
+import { workflowFinish, workflowSync, workflowUpload } from '../lib/tauri'
 import { loadOrders, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
 import type { WorkflowPreview } from '../types'
 
 const props = defineProps<{
   activeOrder: string | null
   saveLayout: () => Promise<void>
+  applySharedVersion: (target: WorkflowPreview) => Promise<void>
 }>()
 const store = useOrdersStore()
 const dialog = ref<HTMLDialogElement | null>(null)
@@ -14,6 +15,7 @@ const operation = ref<'upload' | 'sync' | 'finish' | 'resolve' | null>(null)
 const preview = ref<WorkflowPreview | null>(null)
 const conflicts = ref<WorkflowPreview[]>([])
 const activePreview = computed(() => preview.value?.orderNumber === props.activeOrder)
+const resolveError = ref('')
 
 function close() {
   if (!operation.value) dialog.value?.close()
@@ -26,7 +28,8 @@ async function run<T>(kind: NonNullable<typeof operation.value>, task: () => Pro
     await props.saveLayout()
     return await task()
   } catch (error) {
-    toast('error', String(error))
+    if (kind === 'resolve') resolveError.value = error instanceof Error ? error.message : String(error)
+    else toast('error', String(error))
   } finally {
     operation.value = null
   }
@@ -63,26 +66,31 @@ async function sync() {
         : result.conflicts.length ? '有订单需要确认。' : '没有新数据。')
     }
     conflicts.value = result.conflicts
-    preview.value = null
-    if (conflicts.value.length === 1) preview.value = conflicts.value[0]
+    showPreview(conflicts.value.length === 1 ? conflicts.value[0] : null)
     if (conflicts.value.length && !dialog.value?.open) dialog.value?.showModal()
   })
 }
 
+function showPreview(target: WorkflowPreview | null) {
+  resolveError.value = ''
+  preview.value = target
+}
+
 function dismiss(target: WorkflowPreview) {
   conflicts.value = conflicts.value.filter(row => row.reference !== target.reference)
-  preview.value = null
+  showPreview(null)
   if (!conflicts.value.length) dialog.value?.close()
 }
 
 async function replace() {
   const target = preview.value
-  if (!target || activePreview.value) return
+  if (!target || operation.value) return
+  resolveError.value = ''
   await run('resolve', async () => {
-    await workflowResolveConflict(target.reference, target.localVersion, props.activeOrder)
-    await refresh()
+    await props.applySharedVersion(target)
     dismiss(target)
     toast('ok', '订单已同步。')
+    await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
   })
 }
 
@@ -115,21 +123,23 @@ defineExpose({ upload, sync, finish, operation })
     <div class="dialogBody" :aria-busy="!!operation">
       <p class="hint">以下订单有本机修改或正在编辑，已保留本机内容。</p>
       <div v-if="!preview" class="rowList" aria-label="等待确认的订单">
-        <button v-for="row in conflicts" :key="row.reference" class="previewRow" type="button" @click="preview = row">
+        <button v-for="row in conflicts" :key="row.reference" class="previewRow" type="button" :disabled="!!operation" @click="showPreview(row)">
           <span>{{ row.orderNumber }}</span><span>查看差异 →</span>
         </button>
       </div>
       <section v-else class="previewDetails" aria-label="订单差异">
         <h3>{{ preview.orderNumber }}</h3>
         <ul><li v-for="change in preview.changes" :key="change">{{ change }}</li></ul>
-        <p v-if="activePreview" class="hint">正在编辑此订单。切换编辑订单后可使用共享版本。</p>
+        <p v-if="preview.localVersion" class="hint">使用共享版本会在本机保留一份原订单及已保存的成品。</p>
+        <p v-if="activePreview" class="hint">同步成功后会关闭当前画布。需要保留画布上的调整时，请先导出成品。</p>
+        <p v-if="resolveError" class="resolveError" role="alert">{{ resolveError }}</p>
       </section>
     </div>
     <footer v-if="preview" class="dialogFoot">
-      <button v-if="conflicts.length > 1" type="button" :disabled="!!operation" @click="preview = null">返回列表</button>
+      <button v-if="conflicts.length > 1" type="button" :disabled="!!operation" @click="showPreview(null)">返回列表</button>
       <div class="actions">
         <button type="button" :disabled="!!operation" @click="dismiss(preview)">保留本机</button>
-        <button type="button" class="primary" :disabled="!!operation || activePreview" @click="replace">{{ operation === 'resolve' ? '正在同步…' : '使用共享版本' }}</button>
+        <button type="button" class="primary" :disabled="!!operation" @click="replace">{{ operation === 'resolve' ? '正在同步…' : '使用共享版本' }}</button>
       </div>
     </footer>
   </dialog>
@@ -178,6 +188,7 @@ button.primary:hover:not(:disabled) { background: var(--accent); filter: brightn
 .closeBtn { font-size: 17px; line-height: 1; }
 .hint { color: var(--text-dim); font-size: 12px; }
 .hint { margin: 0; }
+.resolveError { margin: 0; color: #ae2424; font-size: 12px; }
 .dialogBody > * + * { margin-top: 12px; }
 .rowList { display: grid; max-height: 230px; overflow: auto; }
 .previewRow { padding: 8px 4px; border-bottom: 1px solid var(--stroke); }

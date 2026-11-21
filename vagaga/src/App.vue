@@ -5,6 +5,7 @@ import OrdersView from './views/OrdersView.vue'
 import WorkflowDialog from './components/WorkflowDialog.vue'
 import SettingsView from './views/SettingsView.vue'
 import { useOrdersStore, loadOrders, loadInfo, bindEvents, refreshQiniuStatus, refreshWorkflowOrders, refreshWorkflowSettings, toast } from './stores/orders'
+import type { WorkflowPreview } from './types'
 
 const store = useOrdersStore()
 const view = ref<'orders' | 'settings'>('orders')
@@ -46,6 +47,11 @@ function sync() {
 
 function saveLayout() {
   return ordersView.value?.persistLayout() ?? Promise.resolve()
+}
+
+function applySharedVersion(target: WorkflowPreview) {
+  if (!ordersView.value) throw new Error('订单列表尚未加载，请稍后重试。')
+  return ordersView.value.applySharedVersion(target)
 }
 let stopEvents: (() => void) | undefined
 let disposed = false
@@ -96,7 +102,12 @@ onBeforeUnmount(() => {
       @finish="workflow?.finish($event)"
       @toggle-upload="toggleUpload"
     />
-    <WorkflowDialog ref="workflow" :active-order="ordersView?.lastInjectedOrder ?? null" :save-layout="saveLayout" />
+    <WorkflowDialog
+      ref="workflow"
+      :active-order="ordersView?.lastInjectedOrder ?? null"
+      :save-layout="saveLayout"
+      :apply-shared-version="applySharedVersion"
+    />
     <SettingsView v-if="view === 'settings'" :active-order="ordersView?.lastInjectedOrder ?? null" @back="view = 'orders'" />
     <div class="toasts">
       <div v-for="t in store.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>

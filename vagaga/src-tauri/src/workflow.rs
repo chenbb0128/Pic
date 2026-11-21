@@ -261,9 +261,6 @@ fn snapshot(
     if kind == "publish" && assets.is_empty() {
         return Err("订单至少需要一张原图才能发布。".into());
     }
-    if kind == "finish" && !assets.iter().any(Asset::production) {
-        return Err("请先导出这笔订单的成品。".into());
-    }
     let metadata = store.order_metadata_by_number(number).map_err(display)?;
     let is_completed = state.local_completed || state.shared_state.as_deref() == Some("completed");
     let completed = kind == "finish" || (kind == "legacy" && is_completed);
@@ -314,12 +311,6 @@ pub(crate) struct Outcome {
 pub(crate) struct Settings {
     role: String,
     target: Option<String>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct ConnectionTest {
-    collaboration: bool,
-    message: String,
 }
 
 fn preview(store: &Store, manifest: &Manifest, reference: String) -> Result<Preview, String> {
@@ -394,21 +385,6 @@ pub(crate) fn workflow_set_role(
 #[tauri::command]
 pub(crate) fn workflow_orders(state: State<'_, AppState>) -> Result<Vec<db::OrderRow>, String> {
     db::list(&state.store).map_err(display)
-}
-
-#[tauri::command]
-pub(crate) async fn workflow_test(state: State<'_, AppState>) -> Result<ConnectionTest, String> {
-    let backend = selected(&state)?;
-    Ok(match backend.test().await {
-        Ok(()) => ConnectionTest {
-            collaboration: true,
-            message: "共享存储支持多人协作。".into(),
-        },
-        Err(error) => ConnectionTest {
-            collaboration: false,
-            message: format!("多人协作测试失败：{error}"),
-        },
-    })
 }
 
 #[tauri::command]
@@ -659,7 +635,7 @@ pub(crate) async fn workflow_upload(
                 result.uploaded_order_numbers.push(number.clone());
                 if let Some(warning) = warning {
                     result.errors.push(format!(
-                        "{number} 已发布，{warning}。可在 MySQL 设置中重新同步。"
+                        "{number} 已发布，{warning}。可在共享数据库设置中重新同步。"
                     ));
                 }
             }
@@ -686,15 +662,6 @@ pub(crate) async fn workflow_finish(
     if local.shared_state.as_deref() == Some("completed") && pending.is_none() {
         return Ok(result);
     }
-    if pending.is_none()
-        && state
-            .store
-            .list_productions(&order_number)
-            .map_err(display)?
-            .is_empty()
-    {
-        return Err("请先导出这笔订单的成品。".into());
-    }
     if local.target.is_none()
         && db::task(&state.store, &order_number, "publish")
             .map_err(display)?
@@ -705,7 +672,7 @@ pub(crate) async fn workflow_finish(
     if local.target.is_some() {
         match upload_one(&state, &order_number, "finish").await {
             Ok(Some(warning)) => result.errors.push(format!(
-                "共享交付已完成，{warning}。可在 MySQL 设置中重新同步。"
+                "共享交付已完成，{warning}。可在共享数据库设置中重新同步。"
             )),
             Ok(None) => {}
             Err(error) => {
@@ -1018,7 +985,7 @@ pub(crate) async fn synchronize(
             Err(error) => response.errors.push(error),
         }
     } else if require_mysql {
-        return Err("请先启用 MySQL 数据同步。".into());
+        return Err("请先启用共享数据库。".into());
     }
     let keys = backend.list_orders().await?;
     for key in keys.into_iter().filter(|key| hex_id(key, 64)) {
@@ -1096,6 +1063,64 @@ mod tests {
             cloud: Arc::new(crate::cloud::Sync::new()),
             workflow_operations: tokio::sync::Mutex::new(()),
         }
+    }
+
+    fn capture_order(state: &AppState, number: &str) {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(2, 2)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        state
+            .store
+            .ingest_image(number, bytes.get_ref(), "image/png", &[], "fixture")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn local_order_can_be_completed_without_an_export() {
+        use tauri::Manager;
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        capture_order(&state, "local-no-export");
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let result = workflow_finish(app.state(), "local-no-export".into())
+            .await
+            .unwrap();
+        assert_eq!(result.completed, 1);
+        let state = app.state::<AppState>();
+        let order = db::order_state(&state.store, "local-no-export")
+            .unwrap()
+            .unwrap();
+        assert!(order.local_completed);
+        assert!(state
+            .store
+            .list_productions("local-no-export")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn shared_completion_manifest_does_not_require_an_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        capture_order(&state, "shared-no-export");
+        let manifest = snapshot(
+            &state.store,
+            &state.data_root,
+            "shared-no-export",
+            "finish",
+            2,
+            &random_hex_pub(16),
+        )
+        .unwrap();
+        assert!(manifest.state == SharedState::Completed && manifest.local_completed);
+        assert_eq!(manifest.revision, 3);
+        assert_eq!(manifest.assets.len(), 1);
+        assert!(!manifest.assets[0].production());
+        assert!(manifest.mysql_order().completed);
     }
 
     #[tokio::test]

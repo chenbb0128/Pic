@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useOrdersStore, loadOrders, toast } from '../stores/orders'
 import {
   assetUrl,
@@ -14,9 +14,10 @@ import {
   saveOrderImage,
   saveProduction,
   setImageTemplates,
+  workflowResolveConflict,
   workflowSetLayout,
 } from '../lib/tauri'
-import type { OrderImage, OrderSummary, Production, SyncStatus } from '../types'
+import type { OrderImage, OrderSummary, Production, SyncStatus, WorkflowPreview } from '../types'
 
 const props = defineProps<{
   visible?: boolean
@@ -161,23 +162,36 @@ function webIdOf(code: string): string {
   return store.info?.templates.find(t => t.code === code)?.webId ?? code
 }
 
-/** 切换素材关联的模板（详情页 ImageCard 的同款语义，移入左栏） */
-async function toggleTemplate(img: OrderImage, code: string) {
-  if (!canEditTemplates.value) return
-  const webId = webIdOf(code)
-  const current = img.templates.map(t => ({ id: t.templateId, qty: t.quantity }))
-  const exists = current.find(t => t.id === webId)
-  const next = exists
-    ? current.filter(t => t.id !== webId)
-    : [...current, { id: webId, qty: 1 }]
+function specificationsFor(img: OrderImage) {
+  const assigned = new Map(img.templates.map(t => [webIdOf(t.templateId), t.quantity]))
+  const specs = (store.info?.templates ?? []).map(({ code, name, webId }) => {
+    const quantity = assigned.get(webId) ?? null
+    assigned.delete(webId)
+    return { code, name, webId, quantity }
+  })
+  for (const [webId, quantity] of assigned) {
+    const code = codeOf(webId)
+    specs.push({ code, name: code, webId, quantity })
+  }
+  return specs
+}
+
+const editingTemplateIds = reactive(new Set<string>())
+async function toggleTemplate(img: OrderImage, webId: string) {
+  if (!canEditTemplates.value || props.workflowBusy || editingTemplateIds.has(img.id)) return
+  const matches = (templateId: string) => webIdOf(templateId) === webId
+  const next = img.templates.some(t => matches(t.templateId))
+    ? img.templates.filter(t => !matches(t.templateId))
+    : [...img.templates, { templateId: webId, quantity: 1 }]
+  editingTemplateIds.add(img.id)
   try {
-    await setImageTemplates(
-      img.id,
-      next.map(t => ({ templateId: t.id, quantity: t.qty })),
-    )
+    await setImageTemplates(img.id, next)
+    img.templates = next
     await loadOrders()
   } catch (error) {
     toast('error', `保存模板失败：${error}`)
+  } finally {
+    editingTemplateIds.delete(img.id)
   }
 }
 
@@ -194,6 +208,7 @@ let numberingDocument: Document | null = null
 let layoutTimer: ReturnType<typeof setTimeout> | undefined
 let layoutWrites: Promise<void> = Promise.resolve()
 const pendingLayouts = new Map<string, string>()
+const savingProductions = new Map<string | null, number>()
 const lastExport = ref<Production | null>(null)
 
 function reportLayoutError(error: unknown) {
@@ -237,16 +252,48 @@ function onNumberingEdit(event: Event) {
 function removeNumberingListeners() {
   numberingDocument?.removeEventListener('input', onNumberingEdit)
   numberingDocument?.removeEventListener('change', onNumberingEdit)
+  numberingDocument = null
+}
+
+async function applySharedVersion({ orderNumber, reference, localVersion }: WorkflowPreview) {
+  const activeOrder = lastInjectedOrder.value
+  const replacingOpenOrder = activeOrder === orderNumber
+  if (busyImageId.value) throw new Error('素材正在载入，请稍后重试。')
+  if (savingProductions.has(orderNumber)
+    || frame.value?.contentWindow?.__picHasPendingExport?.()) {
+    throw new Error('成品正在导出或保存，请稍后重试。')
+  }
+
+  // The modal keeps the canvas inactive while the server checks and applies the replacement.
+  await workflowResolveConflict(reference, localVersion, replacingOpenOrder ? null : activeOrder)
+  numberingDrafts.delete(orderNumber)
+  if (expandedOrderNumber.value === orderNumber) {
+    expandedOrderId.value = null
+    expandedImageId.value = null
+  }
+  if (!replacingOpenOrder) return
+  removeNumberingListeners()
+  lastInjectedOrder.value = null
+  lastInjectedImageId = null
+  lastExport.value = null
+  editorReady.value = false
+  editorSrc.value = ''
+  status.value = ''
 }
 
 function requestFinish(orderNumber: string) {
+  if (savingProductions.has(orderNumber)
+    || (lastInjectedOrder.value === orderNumber && frame.value?.contentWindow?.__picHasPendingExport?.())) {
+    toast('error', '成品正在导出或保存，请稍后再点击制作完毕。')
+    return
+  }
   emit('finish', orderNumber)
 }
 
 watch(() => props.visible, visible => {
   if (visible === false) void persistLayout().catch(reportLayoutError)
 })
-defineExpose({ lastInjectedOrder, persistLayout })
+defineExpose({ lastInjectedOrder, persistLayout, applySharedVersion })
 const exportStatus = computed(() => {
   const saved = lastExport.value
   if (!saved) return ''
@@ -296,7 +343,7 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
     status.value = blocked
     return
   }
-  if (busyImageId.value) return
+  if (busyImageId.value || props.workflowBusy) return
   const { orderNumber, metadata } = order
   const layoutNumber = parseMeta(metadata)?.layoutNumber ?? null
   const template = templateId ? webIdOf(templateId) : ''
@@ -363,7 +410,8 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
 
 /* ---------- 编辑器 → 主窗口桥 ---------- */
 async function onMessage(event: MessageEvent) {
-  if (event.source !== frame.value?.contentWindow) return
+  const editor = frame.value?.contentWindow
+  if (!editor || event.source !== editor) return
   const data = event.data as
     | {
         type?: string
@@ -385,19 +433,21 @@ async function onMessage(event: MessageEvent) {
     try {
       const config = await getCutoutConfig()
       const timeoutSecs = config.timeoutSecs >= 30 ? config.timeoutSecs : 90
-      frame.value?.contentWindow?.postMessage(
+      editor.postMessage(
         { type: 'pic-cutout-started', id: data.id, timeoutMs: timeoutSecs * 2000 + 15000 },
         '*',
       )
       const result = await cutoutImageBytes(data.dataB64 ?? '')
+      if (editor !== frame.value?.contentWindow) return
       status.value = result.cached ? 'AI 抠图完成（缓存命中）。' : 'AI 抠图完成。'
-      frame.value?.contentWindow?.postMessage(
+      editor.postMessage(
         { type: 'pic-cutout-response', id: data.id, pngB64: result.pngB64, cached: result.cached },
         '*',
       )
     } catch (error) {
+      if (editor !== frame.value?.contentWindow) return
       status.value = `AI 抠图失败：${error}`
-      frame.value?.contentWindow?.postMessage(
+      editor.postMessage(
         { type: 'pic-cutout-response', id: data.id, error: String(error) },
         '*',
       )
@@ -407,6 +457,8 @@ async function onMessage(event: MessageEvent) {
   if (data?.type === 'pic-make-exported') {
     const orderNumber = data.orderNumber === undefined ? lastInjectedOrder.value : data.orderNumber
     const imageId = data.imageId === undefined ? lastInjectedImageId : data.imageId
+    savingProductions.set(orderNumber, (savingProductions.get(orderNumber) ?? 0) + 1)
+    editor.__picAcknowledgeOrderExport?.()
     try {
       const saved = await saveProduction(orderNumber, data.b64 ?? '', data.fileName || '成品.png', imageId)
       if (orderNumber) numberingDrafts.delete(orderNumber)
@@ -423,6 +475,10 @@ async function onMessage(event: MessageEvent) {
     } catch (error) {
       status.value = `成品保存失败：${error}`
       toast('error', '成品保存失败')
+    } finally {
+      const count = savingProductions.get(orderNumber) ?? 1
+      if (count === 1) savingProductions.delete(orderNumber)
+      else savingProductions.set(orderNumber, count - 1)
     }
   }
 }
@@ -649,14 +705,23 @@ function orderProductions(orderNumber: string): Production[] {
                     <span v-if="syncLabel(img)" class="syncLabel" :class="img.syncStatus">{{ syncLabel(img) }}</span>
                   </div>
                   <div class="rules">
-                    <span v-if="!img.templates.length" class="noRule">未关联模板</span>
-                    <span v-for="t in img.templates" :key="t.templateId" class="ruleGroup">
-                      <span class="ruleChip">{{ codeOf(t.templateId) }} × {{ t.quantity }}</span>
+                    <span v-for="spec in specificationsFor(img)" :key="spec.webId" class="ruleGroup" :class="{ selected: spec.quantity !== null }">
                       <button
+                        type="button"
+                        class="ruleChip"
+                        :aria-pressed="spec.quantity !== null"
+                        :aria-label="`${spec.code} ${spec.name}`"
+                        :title="spec.name"
+                        :disabled="!canEditTemplates || workflowBusy || editingTemplateIds.has(img.id)"
+                        @click.stop="toggleTemplate(img, spec.webId)"
+                      >{{ spec.code }}<template v-if="spec.quantity !== null"> × {{ spec.quantity }}</template></button>
+                      <button
+                        v-if="spec.quantity !== null"
+                        type="button"
                         class="makeBtn"
-                        :disabled="!!busyImageId || !!makeBlockReason(img)"
-                        :title="makeBlockReason(img) || `注入素材并切换到 ${codeOf(t.templateId)} 模板`"
-                        @click.stop="injectImage(img, entry.summary, t.templateId)"
+                        :disabled="workflowBusy || !!busyImageId || !!makeBlockReason(img)"
+                        :title="makeBlockReason(img) || `注入素材并切换到 ${spec.code} 模板`"
+                        @click.stop="injectImage(img, entry.summary, spec.webId)"
                       >制作</button>
                     </span>
                   </div>
@@ -691,23 +756,10 @@ function orderProductions(orderNumber: string): Production[] {
                     v-for="t in img.templates"
                     :key="'make-' + t.templateId"
                     class="miniBtn make"
-                    :disabled="!!busyImageId || !!makeBlockReason(img)"
+                    :disabled="workflowBusy || !!busyImageId || !!makeBlockReason(img)"
                     :title="makeBlockReason(img) || `注入素材并切换到 ${codeOf(t.templateId)} 模板`"
                     @click.stop="injectImage(img, entry.summary, t.templateId)"
                   >{{ codeOf(t.templateId) }} × {{ t.quantity }}</button>
-                </div>
-                <div class="panelRow" v-if="canEditTemplates">
-                  <span class="panelLabel">关联模板</span>
-                  <div class="tplBtns">
-                    <button
-                      v-for="t in store.info?.templates ?? []"
-                      :key="t.code"
-                      class="miniBtn tpl"
-                      :class="{ on: img.templates.some(x => x.templateId === t.webId) }"
-                      :title="`点击${img.templates.some(x => x.templateId === t.webId) ? '取消' : '关联'} ${t.name}`"
-                      @click.stop="toggleTemplate(img, t.code)"
-                    >{{ t.code }}</button>
-                  </div>
                 </div>
               </div>
             </div>
@@ -749,7 +801,7 @@ function orderProductions(orderNumber: string): Production[] {
       <div class="editorBar">
         <span class="makingFor" v-if="lastInjectedOrder">制作中：订单 {{ lastInjectedOrder }}</span>
         <span class="dim" v-else>从左侧选择规格「制作」开始排版</span>
-        <span class="dim">点击「下载 PNG」保存成品，做完后在订单上点击「制作完毕」。</span>
+        <span class="dim">如需保存成品，点击「下载 PNG」。</span>
       </div>
       <div class="editorBox">
         <div v-if="!editorSrc" class="loading">
@@ -1077,14 +1129,31 @@ function orderProductions(orderNumber: string): Production[] {
   align-items: center;
   border-radius: 999px;
   overflow: hidden;
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--stroke);
+}
+.ruleGroup.selected {
+  border-color: var(--accent-border);
 }
 .ruleChip {
   font-size: 11px;
   padding: 2px 8px;
+  border: none;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ruleChip:disabled {
+  cursor: default;
+}
+.ruleChip:hover:not(:disabled),
+.ruleChip[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
-  white-space: nowrap;
+}
+.ruleChip:focus-visible {
+  outline-offset: -2px;
 }
 .makeBtn {
   border: none;
@@ -1102,10 +1171,6 @@ function orderProductions(orderNumber: string): Production[] {
 .makeBtn:disabled, .miniBtn:disabled {
   opacity: .55;
   cursor: default;
-}
-.noRule {
-  font-size: 11px;
-  color: var(--text-dim);
 }
 .imgDel {
   flex-shrink: 0;
@@ -1173,17 +1238,6 @@ function orderProductions(orderNumber: string): Production[] {
 .miniBtn.make:hover:not(:disabled) {
   background: var(--accent);
   color: #fff;
-}
-.miniBtn.tpl.on {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
-}
-.tplBtns {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  flex: 1;
 }
 /* 成品 */
 .prodRow {

@@ -45,6 +45,28 @@ func TestWorkflowManifestAndRoleValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowCanCompleteWithoutAnExport(t *testing.T) {
+	name, complete := "photo.png", true
+	original := workflowAsset{ID: originalID, Name: &name, Kind: kindOriginal, SHA: testSHA, Size: 1}
+	m := workflowManifest{Schema: 1, Order: "A", Operation: requestID, State: "completed", Revision: 2, UpdatedAt: "now", LocalCompleted: &complete}
+	order := workflowDigest([]byte(m.Order))
+	for _, assets := range [][]workflowAsset{{original}, {}} {
+		m.Assets = assets
+		if !m.valid("orders", order, 1) {
+			t.Fatalf("completed order with %d originals was rejected", len(assets))
+		}
+	}
+	m.State, m.Revision = "pending", 1
+	if m.valid("orders", order, 0) {
+		t.Fatal("publishing an order with no original was accepted")
+	}
+	original.Kind = kindProduction
+	m.Assets = []workflowAsset{original}
+	if m.valid("orders", order, 0) {
+		t.Fatal("publishing a pending order with a production was accepted")
+	}
+}
+
 func TestWorkflowMySQLAtomicPublication(t *testing.T) {
 	dsn := os.Getenv("PAIDAN_TEST_MYSQL_DSN")
 	if dsn == "" {

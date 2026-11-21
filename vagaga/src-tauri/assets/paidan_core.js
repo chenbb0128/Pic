@@ -257,7 +257,7 @@
   }
 
   /* ---------- 排单区块构建（dark=独立面板配色） ----------
-     结构：头部（订单号和排版编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
+     结构：头部（订单号和备注编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
      嵌入模式：区块透明融入平台菜单容器，行风格与平台菜单项一致 */
   function buildSection(img, dark) {
     const section = document.createElement('div')
@@ -306,7 +306,7 @@
     const layoutRow = document.createElement('label')
     layoutRow.style.cssText = head.style.cssText
     const layoutLabel = document.createElement('span')
-    layoutLabel.textContent = '排版编号'
+    layoutLabel.textContent = '备注编号'
     layoutLabel.style.cssText = ordLabel.style.cssText
     const layoutInput = document.createElement('input')
     layoutInput.placeholder = '例如 ch-00123，可留空'

@@ -233,7 +233,7 @@ func (m workflowManifest) valid(collection, id string, expected int64) bool {
 	if collection == "backups" {
 		return m.Revision == 0
 	}
-	if len(m.Assets) == 0 || (m.State == "completed") != hasProduction {
+	if m.State == "pending" && (len(m.Assets) == 0 || hasProduction) {
 		return false
 	}
 	return workflowDigest([]byte(m.Order)) == id && expected >= 0 && m.Revision > 0 && m.Revision-1 == expected

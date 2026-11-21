@@ -192,14 +192,10 @@ export function workflowResolveConflict(
   reference: string,
   localVersion: string | null,
   activeOrder: string | null,
-): Promise<WorkflowResult> {
+): Promise<void> {
   return invoke('workflow_resolve_conflict', { reference, localVersion, activeOrder })
 }
 
 export function workflowSetLayout(orderNumber: string, number: string): Promise<void> {
   return invoke('workflow_set_layout', { orderNumber, number })
-}
-
-export function workflowTest(): Promise<{ collaboration: boolean; message: string }> {
-  return invoke('workflow_test')
 }

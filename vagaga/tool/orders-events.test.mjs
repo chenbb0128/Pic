@@ -10,6 +10,9 @@ const storeSource = readFileSync(new URL('../src/stores/orders.ts', import.meta.
 const viewSource = compileScript(parse(readFileSync(
   new URL('../src/views/OrdersView.vue', import.meta.url), 'utf8',
 )).descriptor, { id: 'orders-events-test' }).content
+const workflowSource = compileScript(parse(readFileSync(
+  new URL('../src/components/WorkflowDialog.vue', import.meta.url), 'utf8',
+)).descriptor, { id: 'workflow-dialog-test' }).content
 const editorSource = readFileSync(new URL('../public/embedded/heart-star/index.html', import.meta.url), 'utf8')
 const templateLinkSource = readFileSync(new URL('../public/embedded/heart-star/template-link.js', import.meta.url), 'utf8')
 const flush = () => new Promise(resolve => setImmediate(resolve))
@@ -201,11 +204,14 @@ test('formal PNG download clears the saved draft after the watermarked preview p
   assert.match(downloads[1], /^ch-\d{8}-0009 .*_preset_100x100mm_300dpi\.png$/)
   assert.equal(posted[0].orderNumber, 'ORDER-one')
   assert.equal(posted[0].imageId, 'photo-one')
+  assert.equal(frame.__picHasPendingExport(), true)
+  frame.__picAcknowledgeOrderExport()
+  assert.equal(frame.__picHasPendingExport(), false)
   assert.equal(input.value, '')
   assert.equal(frame.__picReadOrderNumbering(), null)
 })
 
-function environment(t) {
+function environment(t, overrides = {}) {
   let rows = [], timerId = 0, delayedDetail = null
   let productions = [], qiniuStatus = { enabled: false, legacyEnabled: true }, fetchImage
   const handlers = { ingested: new Set(), failed: new Set(), cloud: new Set() }
@@ -237,6 +243,7 @@ function environment(t) {
       return production
     },
     assetUrl: path => path,
+    ...overrides,
   }
   function evaluate(source, dependencies) {
     const module = { exports: {} }
@@ -287,6 +294,12 @@ function environment(t) {
       for (const mount of mounted.splice(0)) await mount()
       await flush()
       return view
+    },
+    mountWorkflow(props) {
+      const component = evaluate(workflowSource, {
+        vue, '../stores/orders': store, '../lib/tauri': api,
+      }).default
+      return component.setup(props, { expose() {} })
     },
   }
   t.after(() => {
@@ -494,4 +507,68 @@ test('making with different templates reuses the already loaded editor', async t
     await pending
   }
   assert.deepEqual(Array.from(received, data => data.template), ['模板爱心.png', '爱心横版.png', '爱心横版.png'])
+})
+
+test('the full specification list preselects saved assignments and keeps their quantities when adding a spec', async t => {
+  const catalog = [
+    { code: 'A01', name: '爱心款', webId: '模板爱心.png' },
+    { code: 'A02', name: '爱心横版', webId: '爱心横版.png' },
+  ]
+  const edits = []
+  const env = environment(t, {
+    getAppInfo: async () => ({ templates: catalog }),
+    setImageTemplates: async (id, templates) => { edits.push({ id, templates }) },
+  })
+  await env.store.loadInfo()
+  const view = await env.mountView()
+  const material = { ...image('photo'), templates: [{ templateId: 'A01', quantity: 3 }] }
+  const specs = view.specificationsFor(material)
+  assert.deepEqual(Array.from(specs, spec => [spec.code, spec.quantity]), [['A01', 3], ['A02', null]])
+  await view.toggleTemplate(material, '爱心横版.png')
+  assert.deepEqual(Array.from(edits[0].templates, spec => [spec.templateId, spec.quantity]), [
+    ['A01', 3], ['爱心横版.png', 1],
+  ])
+})
+
+test('selecting the shared version replaces an open order only after the replacement succeeds', async t => {
+  const replacements = []
+  const conflict = { orderNumber: 'ORDER-one', reference: 'remote:5', localVersion: 'local:2', changes: [] }
+  let failure = '订单已变化，请重新同步。'
+  const env = environment(t, {
+    workflowOrders: async () => [],
+    workflowSync: async () => ({ conflicts: [conflict], errors: [], updated: 0, completed: 0 }),
+    workflowResolveConflict: async (...args) => {
+      replacements.push(args)
+      if (failure) throw new Error(failure)
+    },
+  })
+  const view = await env.mountView()
+  view.openEditor()
+  view.lastInjectedOrder.value = conflict.orderNumber
+  let pendingExport = true
+  view.frame.value = vue.markRaw({ contentWindow: { __picHasPendingExport: () => pendingExport } })
+  const workflow = env.mountWorkflow({
+    get activeOrder() { return view.lastInjectedOrder.value },
+    saveLayout: view.persistLayout,
+    applySharedVersion: (...args) => view.applySharedVersion(...args),
+  })
+  await workflow.sync()
+  await workflow.replace()
+  assert.equal(replacements.length, 0)
+  assert.equal(view.lastInjectedOrder.value, conflict.orderNumber)
+  pendingExport = false
+  await workflow.replace()
+  assert.equal(view.lastInjectedOrder.value, conflict.orderNumber)
+  assert.ok(view.editorSrc.value)
+  assert.match(workflow.resolveError.value, /重新同步/)
+  assert.equal(workflow.preview.value.reference, conflict.reference)
+  failure = null
+  await workflow.replace()
+  assert.equal(view.lastInjectedOrder.value, null)
+  assert.equal(view.editorSrc.value, '')
+  assert.equal(workflow.preview.value, null)
+  assert.deepEqual(replacements, [
+    ['remote:5', 'local:2', null],
+    ['remote:5', 'local:2', null],
+  ])
 })

@@ -10,4 +10,6 @@ interface Window {
     numberingDraft?: { prefix: string; value: string }
   }) => Promise<void>
   __picReadOrderNumbering?: () => { orderNumber: string; prefix: string; value: string } | null
+  __picHasPendingExport?: () => boolean
+  __picAcknowledgeOrderExport?: () => void
 }

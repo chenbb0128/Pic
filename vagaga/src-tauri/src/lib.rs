@@ -145,7 +145,6 @@ pub fn run() {
             workflow::workflow_settings,
             workflow::workflow_set_role,
             workflow::workflow_orders,
-            workflow::workflow_test,
             workflow::workflow_set_layout,
             workflow::workflow_upload,
             workflow::workflow_sync,
