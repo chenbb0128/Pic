@@ -43,10 +43,13 @@ describe('heart-star selected photo upload', () => {
     expect(toolHtml).not.toContain('id="photoLightingField"')
     expect(toolHtml).toContain('id="photoLightingCompact"')
     expect(toolHtml).toContain('data-light-strength')
+    expect(toolHtml).toContain('id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="100"')
     expect(toolHtml).toContain('id="cancelPhotoLighting"')
     expect(toolHtml).toContain('photoLightingEditor?.cancel?.()')
     expect(toolHtml).toContain("previewPanel.addEventListener('drop',onPreviewDrop)")
     expect(toolHtml).toContain('导入后会自动补光')
+    expect(toolHtml).toContain("replacePhotoActions.addEventListener('drop',onReplacePhotoDrop)")
+    expect(toolHtml).toContain('replaceSelectedPhoto(file)')
   })
 
   it('refreshes lighting controls after background removal finishes', () => {
@@ -126,7 +129,7 @@ describe('heart-star selected photo upload', () => {
     s.images[1].onload()
     expect(s.lightCalls).toEqual([])
     s.images[0].onload()
-    expect(s.lightCalls).toEqual([{ strength: 200, targetIds: [1, 3] }])
+    expect(s.lightCalls).toEqual([{ strength: 100, targetIds: [1, 3] }])
   })
 
   it('clears the old lighting when replacing a portrait and retains lighting on other positions', () => {
