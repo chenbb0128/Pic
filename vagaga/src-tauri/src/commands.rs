@@ -140,38 +140,9 @@ pub fn get_order(state: State<'_, AppState>, id: String) -> Result<Option<OrderD
         .map_err(|error| error.to_string())?;
     let Some(detail) = detail else { return Ok(None) };
     let mut detail = detail_to_dto(detail);
-    if !state.qiniu.legacy() {
-        for image in &mut detail.images {
-            if let Some(status) = state.store.qiniu_asset_state(&image.id).map_err(|e| e.to_string())? {
-                let missing = status.state == "synced" && !status.file_ready(std::path::Path::new(&image.file_path));
-                image.source_quality = status.quality;
-                if missing {
-                    image.file_path.clear();
-                    image.thumbnail_path = None;
-                }
-                image.sync_status = Some(if missing { "downloading".into() } else { status.state });
-                image.sync_error = status.error;
-            }
-        }
-        if let Some(snapshot) = state.store.qiniu_pending_snapshot(&detail.order_number).map_err(|e| e.to_string())? {
-            if !snapshot.order.deleted {
-                for asset in snapshot.order.assets {
-                    if asset.kind != "original" || asset.deleted || detail.images.iter().any(|image| image.id == asset.id) {
-                        continue;
-                    }
-                    detail.images.push(ImageDto {
-                        id: asset.id, file_path: String::new(), thumbnail_path: None,
-                        original_name: asset.file_name, byte_length: asset.byte_length as i64,
-                        width: i64::from(asset.width), height: i64::from(asset.height), source: "七牛同步".into(),
-                        created_at: asset.created_at, source_quality: Some("original".into()),
-                        sync_status: Some(if snapshot.error.is_some() { "failed" } else { "downloading" }.into()),
-                        sync_error: snapshot.error.clone(),
-                        templates: asset.templates.into_iter().map(|template| TemplateQtyDto {
-                            template_id: template.template_id, quantity: template.quantity,
-                        }).collect(),
-                    });
-                }
-            }
+    for image in &mut detail.images {
+        if let Some(status) = state.store.qiniu_asset_state(&image.id).map_err(|e| e.to_string())? {
+            image.source_quality = status.quality;
         }
     }
     Ok(Some(detail))
@@ -183,49 +154,23 @@ pub fn set_image_templates(
     image_id: String,
     templates: Vec<TemplateQtyDto>,
 ) -> Result<(), String> {
-    if !state.qiniu.legacy() {
-        state.store.qiniu_set_templates(&image_id, templates.into_iter().map(|entry| {
-            crate::qiniu_transport::Template { template_id: entry.template_id, quantity: entry.quantity }
-        }).collect())?;
-        state.qiniu.wake();
-        return Ok(());
-    }
-    let mapped: Vec<(String, i64)> = templates
-        .into_iter()
-        .map(|t| (t.template_id, t.quantity))
-        .collect();
-    // 模板调整后同步该订单的清单。
-    let store = state.store.clone();
-    let data_root = state.data_root.clone();
-    let order_number = state.cloud.update_templates(&store, &data_root, &image_id, &mapped)?;
-    tauri::async_runtime::spawn(async move {
-        let mysql_config = crate::mysql::load_config(&data_root);
-        if mysql_config.enabled && mysql_config.valid() {
-            let client = crate::mysql::MyClient::new(&mysql_config);
-            if let Err(error) = client.push_order(&store, &order_number).await {
-                eprintln!("[mysql] 模板更新推送失败 {order_number}: {error}");
-            }
-        }
-    });
-    Ok(())
+    let mapped: Vec<_> = templates.into_iter().map(|entry| (entry.template_id, entry.quantity)).collect();
+    state.store.set_image_templates(&image_id, &mapped).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub fn delete_image(state: State<'_, AppState>, image_id: String) -> Result<(), String> {
-    if !state.qiniu.legacy() {
-        state.store.qiniu_delete(&image_id, false, state.qiniu.settings.enabled && state.qiniu.settings.captures())?;
-        state.qiniu.wake();
-        return Ok(());
-    }
     state.store.delete_image(&image_id).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub fn delete_order(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    if !state.qiniu.legacy() {
-        state.store.qiniu_delete(&id, true, state.qiniu.settings.enabled && state.qiniu.settings.captures())?;
-        state.qiniu.wake();
-        return Ok(());
+pub async fn delete_order(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let _operation = state.workflow_operations.lock().await;
+    if let Some(order) = state.store.get_order(&id).map_err(|error| error.to_string())? {
+        let conn = state.store.conn.lock().unwrap();
+        if crate::workflow_db::has_tasks(&conn, &order.order_number).map_err(|error| error.to_string())? {
+            return Err("这笔订单有待上传操作，请先确认上传结果。".into());
+        }
     }
     state.store.delete_order(&id).map_err(|error| error.to_string())
 }
@@ -275,14 +220,6 @@ pub fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MysqlNoticeDto {
-    pub order_number: String,
-    pub new_images: usize,
-    pub new_productions: usize,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ProductionDto {
     pub id: String,
     pub order_number: String,
@@ -317,29 +254,14 @@ pub async fn mysql_test(config: crate::mysql::MysqlConfig) -> Result<String, Str
 }
 
 #[tauri::command]
-pub async fn mysql_sync_now(state: State<'_, AppState>) -> Result<Vec<MysqlNoticeDto>, String> {
-    if !state.qiniu.legacy() {
-        return Err("此数据目录使用七牛同步，请在七牛设置中同步订单".into());
-    }
-    let config = crate::mysql::load_config(&state.data_root);
-    if !config.valid() {
-        return Err("未配置 MySQL 同步。".into());
-    }
-    let client = crate::mysql::MyClient::new(&config);
-    let store = state.store.clone();
-    let data_root = state.data_root.clone();
-    let notices = client.pull_all(&store, &data_root).await?;
-    Ok(notices
-        .into_iter()
-        .map(|n| MysqlNoticeDto {
-            order_number: n.order_number,
-            new_images: n.new_images,
-            new_productions: n.new_productions,
-        })
-        .collect())
+pub(crate) async fn mysql_sync_now(
+    state: State<'_, AppState>,
+    active_order: Option<String>,
+) -> Result<crate::workflow::Outcome, String> {
+    crate::workflow::synchronize(&state, active_order.as_deref(), true).await
 }
 
-/// 成品保存：本地落盘 + 记录 +（已启用时）回写 MySQL 供客服机查看。
+/// 成品保存到本机，交付时再上传。
 #[tauri::command]
 pub async fn save_production(
     state: State<'_, AppState>,
@@ -368,34 +290,16 @@ pub async fn save_production(
     let path = directory.join(format!("{id}_{file_name}"));
     std::fs::write(&path, &bytes).map_err(|error| format!("成品写入失败：{error}"))?;
     let order = order_number.clone().unwrap_or_default();
-    if !state.qiniu.legacy() {
-        state.store.add_qiniu_production(
-            &id, &order, image_id.as_deref(), &path,
-            state.qiniu.settings.enabled && state.qiniu.settings.publishes_production() && order_number.is_some(),
-        ).map_err(|error| error.to_string())?;
-        state.qiniu.wake();
-    } else {
-        state.store.add_production(&id, &order, image_id.as_deref(), &path)
-            .map_err(|error| error.to_string())?;
-    }
-
-    let config = crate::mysql::load_config(&state.data_root);
-    if let (Some(number), true) = (&order_number, state.qiniu.legacy() && config.enabled && config.valid()) {
-        let client = crate::mysql::MyClient::new(&config);
-        client
-            .put_production(&id, number, image_id.as_deref(), &file_name, &bytes)
-            .await?;
-    }
-
-    let sync = state.store.qiniu_asset_state(&id).map_err(|e| e.to_string())?;
+    state.store.add_production(&id, &order, image_id.as_deref(), &path)
+        .map_err(|error| error.to_string())?;
     Ok(ProductionDto {
         id,
         order_number: order,
         image_id,
         file_path: path.to_string_lossy().to_string(),
         created_at: crate::store::now(),
-        sync_status: sync.as_ref().map(|status| status.state.clone()),
-        sync_error: sync.and_then(|status| status.error),
+        sync_status: None,
+        sync_error: None,
     })
 }
 
@@ -435,9 +339,7 @@ pub async fn save_cloud_config(
     state: State<'_, AppState>,
     config: crate::cloud::CloudConfig,
 ) -> Result<(), String> {
-    if config.enabled && !state.qiniu.legacy() {
-        return Err("此数据目录已绑定七牛。请用独立的数据目录启用其他存储。".into());
-    }
+    let _guard = state.workflow_operations.lock().await;
     state.cloud.save(&state.data_root, &config).await
 }
 
@@ -448,22 +350,15 @@ pub async fn cloud_test(config: crate::cloud::CloudConfig) -> Result<String, Str
 
 #[tauri::command]
 pub async fn cloud_sync_now(state: State<'_, AppState>) -> Result<Vec<CloudNoticeDto>, String> {
-    if !state.qiniu.legacy() {
-        return Err("此数据目录使用七牛同步，请在七牛设置中同步订单".into());
-    }
-    let notices = state.cloud.cycle(&state.store, &state.data_root).await?;
-    Ok(notices
-        .into_iter()
-        .map(|n| CloudNoticeDto { order_number: n.order_number, new_images: n.new_images })
-        .collect())
-}
-
-#[tauri::command]
-pub async fn cloud_backfill(state: State<'_, AppState>) -> Result<usize, String> {
-    if !state.qiniu.legacy() {
-        return Err("此数据目录已绑定七牛。".into());
-    }
-    state.cloud.backfill(&state.store, &state.data_root, false).await
+    let _guard = state.workflow_operations.lock().await;
+    let config = crate::cloud::load_config(&state.data_root);
+    let temporary = tempfile::tempdir().map_err(|error| error.to_string())?;
+    let imported = crate::store::Store::open(temporary.path()).map_err(|error| error.to_string())?;
+    crate::cloud::import_legacy(&imported, &config).await?;
+    Ok(crate::workflow::import_legacy(&state, &imported, temporary.path())?
+        .into_iter().map(|(order_number, new_images, _)| CloudNoticeDto {
+            order_number, new_images,
+        }).collect())
 }
 
 /// AI 抠图返回：成品 PNG（base64）+ 是否命中本地缓存。

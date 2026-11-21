@@ -66,7 +66,7 @@
     return numbers.size === 1 ? numbers.values().next().value : ''
   }
 
-  function readOrderLayoutNumbers(panel) {
+  function readOrderRemarks(panel) {
     const remarksByNumber = new Map()
     for (const card of panel.querySelectorAll('.order-card')) {
       if (!card.getClientRects().length) continue
@@ -75,10 +75,13 @@
       if (!orderNumber) continue
       if (!remarksByNumber.has(orderNumber)) remarksByNumber.set(orderNumber, [])
       for (const remark of card.querySelectorAll('.delivery-row-note .mark-note-text')) {
-        if (remark.getClientRects().length) remarksByNumber.get(orderNumber).push(remark.textContent || '')
+        const value = remark.textContent?.trim()
+        if (value && remark.getClientRects().length && !remarksByNumber.get(orderNumber).includes(value)) {
+          remarksByNumber.get(orderNumber).push(value)
+        }
       }
     }
-    return new Map(Array.from(remarksByNumber, ([number, remarks]) => [number, readLayoutNumber(remarks)]))
+    return remarksByNumber
   }
 
   /* ---------- 订单面板解析：订单号 + 每规格数量 ---------- */
@@ -92,7 +95,7 @@
     const text = (panel.textContent || '').replace(/\s+/g, ' ')
     const matches = [...text.matchAll(ORDER_NUMBER_PATTERN)]
     if (!matches.length) return []
-    const layoutNumbers = readOrderLayoutNumbers(panel)
+    const remarksByOrder = readOrderRemarks(panel)
     const orders = []
     for (let i = 0; i < matches.length; i++) {
       const start = matches[i].index
@@ -119,13 +122,15 @@
         const qty = parseInt(qtyMatches[0][1], 10)
         if (price > 0) amount = (price * qty).toFixed(2)
       }
+      const remarks = remarksByOrder.get(orderNumber) || []
       orders.push({
         orderNumber,
         specs,
         status: statusMatch ? statusMatch[1] : '',
         amount,
         specText: specs.map(sp => `${sp.code}×${sp.qty}`).join(' '),
-        layoutNumber: layoutNumbers.get(orderNumber) || '',
+        layoutNumber: readLayoutNumber(remarks),
+        merchantRemark: remarks.join('\n').slice(0, 4096),
       })
     }
     return orders
@@ -561,6 +566,7 @@
           status: meta?.status || '',
           amount: meta?.amount || '',
           specText: meta?.specText || '',
+          merchantRemark: meta?.merchantRemark || '',
           layoutNumber: meta?.layoutNumber || '',
         },
         templates,

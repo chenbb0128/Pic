@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useOrdersStore, toast, loadOrders, refreshQiniuStatus } from '../stores/orders'
+import { useOrdersStore, toast, loadOrders, refreshQiniuStatus, refreshWorkflowSettings } from '../stores/orders'
 import {
-  cloudBackfill,
   cloudSyncNow,
   cloudTest,
   getCloudConfig,
@@ -12,19 +11,67 @@ import {
   mysqlSyncNow,
   mysqlTest,
   openPath,
-  qiniuRetryFailed,
   qiniuSyncNow,
   saveCloudConfig,
   saveCutoutConfig,
   saveMysqlConfig,
   saveQiniuSettings,
   testQiniuSettings,
+  workflowSetRole,
+  workflowTest,
 } from '../lib/tauri'
-import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, SmbConfig, WebDavConfig } from '../types'
+import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, SmbConfig, WebDavConfig, WorkflowRole } from '../types'
 
 defineEmits<{ back: [] }>()
 
 const store = useOrdersStore()
+const props = defineProps<{ activeOrder: string | null }>()
+const previewFrame = ref<HTMLIFrameElement | null>(null)
+const templatePreviews = ref<Record<string, string>>({})
+const templatePreviewUrl = new URL('embedded/heart-star/index.html?catalog', document.baseURI).href
+
+function loadTemplatePreviews() {
+  const frame = previewFrame.value?.contentWindow as (Window & {
+    __picTemplateThumbnail?: (name: string) => Promise<string>
+  }) | null
+  const getThumbnail = frame?.__picTemplateThumbnail
+  if (!getThumbnail) return
+  for (const { webId } of store.info?.templates ?? []) {
+    if (webId in templatePreviews.value) continue
+    void getThumbnail(webId).then(url => { templatePreviews.value[webId] = url }).catch(() => {})
+  }
+}
+const roleBusy = ref(false)
+const roleMessage = ref('')
+const capabilityBusy = ref(false)
+const capabilityMessage = ref('')
+const role = ref<WorkflowRole>(store.workflow.role)
+
+async function saveRole() {
+  roleBusy.value = true
+  roleMessage.value = ''
+  try {
+    store.workflow = await workflowSetRole(role.value)
+    roleMessage.value = '设备角色已保存。'
+  } catch (error) {
+    roleMessage.value = String(error)
+  } finally {
+    roleBusy.value = false
+  }
+}
+
+async function testWorkflow() {
+  capabilityBusy.value = true
+  capabilityMessage.value = ''
+  try {
+    const result = await workflowTest()
+    capabilityMessage.value = result.message
+  } catch (error) {
+    capabilityMessage.value = String(error)
+  } finally {
+    capabilityBusy.value = false
+  }
+}
 
 type StorageProvider = CloudProvider | 'qiniu'
 const storageTabs = [
@@ -47,24 +94,13 @@ const storageNames: Record<StorageProvider, string> = {
 const editedStorageGroup = ref<StorageGroup | null>(null)
 const editedStorageProviders = ref<Partial<Record<StorageGroup, StorageProvider>>>({})
 const qiniuSaved = ref<QiniuSettings | null>(null)
-const qiniuForm = ref({ apiUrl: '', pollSeconds: 15, token: '' })
+const qiniuForm = ref({ apiUrl: '', token: '' })
 const qiniuMsg = ref('')
 const qiniuBusy = ref(false)
-const qiniuIsRunning = computed(() => store.qiniu?.enabled === true)
-const legacyIsRunning = computed(() => store.qiniu?.legacyEnabled === true)
-const qiniuNeedsRestart = computed(() => Boolean(store.qiniu && qiniuSaved.value && (
-  qiniuIsRunning.value !== qiniuSaved.value.enabled ||
-  legacyIsRunning.value !== (!qiniuSaved.value.enabled && !qiniuSaved.value.hasToken) ||
-  (qiniuSaved.value.enabled && store.qiniuSettingsChanged)
-)))
-const qiniuRestartNote = computed(() => {
-  if (!qiniuSaved.value?.enabled) return '重启后暂停七牛同步'
-  return qiniuIsRunning.value ? '重启后应用七牛配置' : '重启后使用七牛'
-})
 const qiniuRoleName: Record<QiniuDevice['role'], string> = {
-  customer: '客服',
+  customer: '排单',
   production: '制作',
-  both: '客服与制作',
+  both: '排单与制作',
 }
 
 const emptyWebDav: WebDavConfig = { endpoint: '', root: '', username: '', password: '' }
@@ -78,7 +114,7 @@ const cloudMsg = ref<{ provider: CloudProvider; text: string } | null>(null)
 const cloudBusy = ref(false)
 const qiniuHasBinding = computed(() => Boolean(qiniuSaved.value?.enabled || qiniuSaved.value?.hasToken))
 const defaultStorageProvider = computed<StorageProvider>(() =>
-  qiniuHasBinding.value ? 'qiniu' : cloudSaved.value?.provider ?? 'minio',
+  qiniuSaved.value?.enabled ? 'qiniu' : cloudSaved.value?.provider ?? (qiniuHasBinding.value ? 'qiniu' : 'minio'),
 )
 function storageGroupFor(provider: StorageProvider): StorageGroup {
   return provider === 'qiniu' || provider === 'minio' ? 'object' : 'private'
@@ -110,21 +146,26 @@ function onStorageTabKey(event: KeyboardEvent) {
 }
 const selectedCloudProvider = computed(() => storageProvider.value === 'qiniu' ? null : storageProvider.value)
 const activeCloudProvider = computed(() =>
-  legacyIsRunning.value && cloudSaved.value?.enabled ? cloudSaved.value.provider ?? 'minio' : null,
+  !qiniuSaved.value?.enabled && cloudSaved.value?.enabled ? cloudSaved.value.provider ?? 'minio' : null,
 )
 const selectedCloudIsRunning = computed(() =>
   selectedCloudProvider.value !== null && selectedCloudProvider.value === activeCloudProvider.value,
 )
-const canSaveCloud = computed(() => legacyIsRunning.value && qiniuSaved.value !== null && !qiniuHasBinding.value)
+const canSaveCloud = computed(() => cloudSaved.value !== null && qiniuSaved.value !== null)
 const currentStorage = computed(() => {
-  if (!store.qiniu) return '正在读取'
-  if (qiniuIsRunning.value) return storageNames.qiniu
-  if (!legacyIsRunning.value) return '七牛已暂停'
+  if (!qiniuSaved.value) return '正在读取'
+  if (qiniuSaved.value.enabled) return storageNames.qiniu
   if (!cloudSaved.value) return cloudLoadError.value ? '读取失败' : '正在读取'
   return activeCloudProvider.value ? storageNames[activeCloudProvider.value] : '共享存储未启用'
 })
 
-const pgc = ref<MysqlConfig>({ enabled: true, host: '192.168.31.200', port: 3306, user: 'root', password: 'admin123', dbname: 'vagaga', pollSeconds: 30 })
+const pgc = ref<MysqlConfig>({ enabled: false, host: '', port: 3306, user: '', password: '', dbname: 'vagaga', pollSeconds: 30 })
+const mysqlSaved = ref<MysqlConfig | null>(null)
+const canSyncMysql = computed(() => {
+  const config = mysqlSaved.value
+  return Boolean(config?.enabled && config.host.trim() && config.user.trim() && config.dbname.trim()
+    && Number.isInteger(config.port) && config.port > 0 && config.port <= 65535)
+})
 const pgMsg = ref('')
 const pgBusy = ref(false)
 
@@ -148,10 +189,15 @@ function goto(key: string) {
 }
 
 onMounted(async () => {
+  void refreshWorkflowSettings().then(() => { role.value = store.workflow.role }).catch(error => {
+    roleMessage.value = String(error)
+  })
   void loadQiniuSettings()
   void loadCloudSettings()
   try {
-    pgc.value = await getMysqlConfig()
+    const config = await getMysqlConfig()
+    mysqlSaved.value = config
+    pgc.value = { ...config }
   } catch {
     /* 首次无配置 */
   }
@@ -166,7 +212,7 @@ async function loadQiniuSettings() {
   try {
     const settings = await getQiniuSettings()
     qiniuSaved.value = settings
-    qiniuForm.value = { apiUrl: settings.apiUrl, pollSeconds: settings.pollSeconds, token: '' }
+    qiniuForm.value = { apiUrl: settings.apiUrl, token: '' }
   } catch (error) {
     qiniuMsg.value = `读取七牛设置失败：${error}`
   }
@@ -210,37 +256,24 @@ function saveQiniu(enabled: boolean) {
   return runQiniuAction(async () => {
     const previous = qiniuSaved.value
     if (!previous) return
-    const pollSeconds = enabled ? qiniuForm.value.pollSeconds : previous.pollSeconds
-    if (!Number.isInteger(pollSeconds) || pollSeconds < 10 || pollSeconds > 60) {
-      qiniuMsg.value = '轮询间隔请输入 10 到 60 秒之间的整数。'
-      return
-    }
     const token = enabled ? qiniuForm.value.token.trim() || undefined : undefined
     const apiUrl = enabled ? qiniuForm.value.apiUrl.trim() : previous.apiUrl
-    const saved = await saveQiniuSettings({ enabled, pollSeconds, apiUrl, token })
-    if (saved.apiUrl !== previous.apiUrl || saved.pollSeconds !== previous.pollSeconds || token ||
-      saved.role !== previous.role || saved.deviceId !== previous.deviceId || saved.workspaceId !== previous.workspaceId) {
-      store.qiniuSettingsChanged = true
-    }
+    const saved = await saveQiniuSettings({ enabled, pollSeconds: previous.pollSeconds, apiUrl, token })
     qiniuSaved.value = saved
-    if (enabled) qiniuForm.value = { apiUrl: saved.apiUrl, pollSeconds: saved.pollSeconds, token: '' }
-    qiniuMsg.value = qiniuNeedsRestart.value ? '设置已保存，重启 vagaga 后生效。' : '设置已保存。'
+    if (enabled) qiniuForm.value = { apiUrl: saved.apiUrl, token: '' }
+    await refreshWorkflowSettings()
+    capabilityMessage.value = ''
+    qiniuMsg.value = '七牛设置已保存。'
   })
 }
 
 function syncQiniu() {
   return runQiniuAction(async () => {
-    await qiniuSyncNow()
-    qiniuMsg.value = '已通知后台立即同步。'
-    await refreshQiniuStatus()
-  })
-}
-
-function retryQiniu() {
-  return runQiniuAction(async () => {
-    await qiniuRetryFailed()
-    qiniuMsg.value = '已提交失败任务重试。'
-    await refreshQiniuStatus()
+    if (!confirm('确认从七牛导入旧数据？')) return
+    qiniuMsg.value = '正在导入七牛旧数据…'
+    const count = await qiniuSyncNow()
+    qiniuMsg.value = count ? `已导入 ${count} 条七牛旧数据。` : '没有新的七牛旧数据。'
+    await Promise.all([refreshQiniuStatus(), loadOrders()])
   })
 }
 
@@ -254,7 +287,9 @@ function openQiniuLogs() {
 async function savePg() {
   pgBusy.value = true
   try {
-    await saveMysqlConfig(JSON.parse(JSON.stringify(pgc.value)))
+    const config = { ...pgc.value }
+    await saveMysqlConfig(config)
+    mysqlSaved.value = config
     pgMsg.value = 'MySQL 配置已保存。'
   } catch (error) {
     pgMsg.value = String(error)
@@ -278,15 +313,13 @@ async function testPg() {
 }
 
 async function syncPgNow() {
+  if (!canSyncMysql.value) return
   pgBusy.value = true
   pgMsg.value = '正在同步…'
   try {
-    const notices = await mysqlSyncNow()
-    const images = notices.reduce((sum, n) => sum + n.newImages, 0)
-    const productions = notices.reduce((sum, n) => sum + n.newProductions, 0)
-    pgMsg.value = notices.length
-      ? `同步完成：${notices.length} 个订单更新，新增 ${images} 张素材、${productions} 个成品。`
-      : '同步完成：远端没有新变化。'
+    const result = await mysqlSyncNow(props.activeOrder)
+    const conflicts = result.conflicts.length ? '有本机修改的订单，请在「数据同步」中查看。' : ''
+    pgMsg.value = [result.errors[0] || '同步完成。', conflicts].filter(Boolean).join(' ')
     await loadOrders()
   } catch (error) {
     pgMsg.value = String(error)
@@ -296,8 +329,8 @@ async function syncPgNow() {
 }
 
 function cloudDraft(provider: CloudProvider, saved: CloudConfig, form: CloudForm): CloudConfig {
-  const { endpoint, bucket, accessKey, secretKey, region, pollSeconds, webdav, smb } = form
-  const config = { ...saved, provider, pollSeconds }
+  const { endpoint, bucket, accessKey, secretKey, region, webdav, smb } = form
+  const config = { ...saved, provider }
   switch (provider) {
     case 'minio':
       return { ...config, endpoint, bucket, accessKey, secretKey, region }
@@ -329,27 +362,25 @@ function saveCloud(action: CloudSaveAction) {
   const form = cloud.value
   if (!provider || !saved || !form || !canSaveCloud.value) return
   if (action === 'pause' && !selectedCloudIsRunning.value) return
+  if (action === 'activate' && qiniuSaved.value?.enabled) return
 
-  const preserveActive = action === 'profile' && saved.enabled && !selectedCloudIsRunning.value
+  const preserveActive = action === 'profile' && saved.enabled && provider !== (saved.provider ?? 'minio')
   const config = action === 'pause' ? { ...saved, enabled: false } : {
     ...cloudDraft(provider, saved, form),
     provider: preserveActive ? saved.provider ?? 'minio' : provider,
     enabled: action === 'activate' || saved.enabled,
-    pollSeconds: preserveActive ? saved.pollSeconds : form.pollSeconds,
-  }
-  if (action !== 'pause' && !preserveActive && (!Number.isSafeInteger(config.pollSeconds) || config.pollSeconds < 10)) {
-    setCloudMsg(provider, '轮询间隔请输入至少 10 秒的整数。')
-    return
   }
 
   return runCloudAction(provider, async () => {
     await saveCloudConfig(config)
     cloudSaved.value = config
+    await refreshWorkflowSettings()
+    capabilityMessage.value = ''
     const name = storageNames[provider]
     const messages = {
       profile: `${name} 配置已保存。`,
       activate: `配置已保存，正在使用 ${name}。`,
-      pause: `已暂停 ${name} 同步。`,
+      pause: `已暂停使用 ${name}。`,
     }
     setCloudMsg(provider, messages[action])
   })
@@ -377,23 +408,14 @@ function syncNow() {
   const provider = selectedCloudProvider.value
   if (!provider || !selectedCloudIsRunning.value) return
   return runCloudAction(provider, async () => {
-    setCloudMsg(provider, '正在同步…')
+    if (!confirm('确认从这个存储导入旧数据？')) return
+    setCloudMsg(provider, '正在导入旧数据…')
     const notices = await cloudSyncNow()
     const total = notices.reduce((sum, n) => sum + n.newImages, 0)
     setCloudMsg(provider, notices.length
-      ? `同步完成，更新 ${notices.length} 个订单，新增 ${total} 张素材。`
-      : '同步完成，云端没有新素材。')
+      ? `导入完成，更新 ${notices.length} 个订单，新增 ${total} 张素材。`
+      : '导入完成，没有新素材。')
     await loadOrders()
-  })
-}
-
-function backfillCloud() {
-  const provider = selectedCloudProvider.value
-  if (!selectedCloudIsRunning.value || (provider !== 'webdav' && provider !== 'smb')) return
-  return runCloudAction(provider, async () => {
-    setCloudMsg(provider, '正在补传历史素材…')
-    const count = await cloudBackfill()
-    setCloudMsg(provider, count ? `已补传 ${count} 个订单的历史素材。` : '没有需要补传的历史素材。')
   })
 }
 
@@ -448,6 +470,16 @@ async function openCutoutLogs() {
           <div v-show="activeSection === 'basics'" class="card">
             <h3>基础信息</h3>
             <div class="row">
+              <label for="workflow-role" class="label">设备角色</label>
+              <select id="workflow-role" v-model="role" class="input providerSelect" :disabled="roleBusy">
+                <option value="customer">排单</option>
+                <option value="production">制作</option>
+                <option value="both">排单与制作</option>
+              </select>
+              <button type="button" class="btn" :disabled="roleBusy || role === store.workflow.role" @click="saveRole">保存角色</button>
+            </div>
+            <div v-if="roleMessage" class="cloudMsg" role="status">{{ roleMessage }}</div>
+            <div class="row">
               <span class="label">数据目录</span>
               <span class="value">{{ store.info?.dataRoot ?? '-' }}</span>
             </div>
@@ -463,12 +495,9 @@ async function openCutoutLogs() {
 
           <div v-show="activeSection === 'mysql'" class="card">
             <h3>MySQL 数据库</h3>
-            <p class="hint">客户端直连时，同步订单信息和导出的成品。</p>
-            <p v-if="qiniuIsRunning" class="hint">当前使用七牛同步，订单数据库由排单服务配置。</p>
-            <p v-else-if="store.qiniu && !legacyIsRunning" class="hint">七牛同步已暂停，客户端的 MySQL 同步也已暂停。</p>
             <label class="row checkRow">
               <input v-model="pgc.enabled" type="checkbox" />
-              <span>启用 MySQL 同步</span>
+              <span>启用数据同步</span>
             </label>
             <div class="formGrid">
               <div class="row">
@@ -491,15 +520,11 @@ async function openCutoutLogs() {
                 <span class="label">数据库</span>
                 <input v-model="pgc.dbname" class="input" placeholder="vagaga" spellcheck="false" />
               </div>
-              <div class="row">
-                <span class="label">轮询间隔(秒)</span>
-                <input v-model.number="pgc.pollSeconds" class="input narrow" type="number" min="10" step="5" />
-              </div>
             </div>
             <div class="row actions">
               <button class="btn" :disabled="pgBusy" @click="savePg">保存</button>
               <button class="btn" :disabled="pgBusy" @click="testPg">测试连接</button>
-              <button class="btn" :disabled="pgBusy || !legacyIsRunning" @click="syncPgNow">立即同步</button>
+              <button class="btn" :disabled="pgBusy || !canSyncMysql" @click="syncPgNow">立即同步</button>
             </div>
             <div v-if="pgMsg" class="cloudMsg">{{ pgMsg }}</div>
           </div>
@@ -509,8 +534,11 @@ async function openCutoutLogs() {
               <h3>共享存储</h3>
               <div class="storageStatus" role="status">
                 <span class="storageState">当前存储 <strong>{{ currentStorage }}</strong></span>
-                <span v-if="qiniuNeedsRestart" class="restartNote">{{ qiniuRestartNote }}</span>
               </div>
+            </div>
+            <div class="row actions storageActions">
+              <button type="button" class="btn" :disabled="capabilityBusy || !store.workflow.target" @click="testWorkflow">检查协作能力</button>
+              <div v-if="capabilityMessage" class="cloudMsg" role="status">{{ capabilityMessage }}</div>
             </div>
             <div class="storageTabs" role="tablist" aria-label="共享存储类型" @keydown="onStorageTabKey">
               <button
@@ -538,7 +566,7 @@ async function openCutoutLogs() {
               </label>
 
               <template v-if="selectedCloudProvider">
-                <p v-if="qiniuHasBinding" class="hint">此数据目录已绑定七牛。重启后如需使用 {{ storageNames[selectedCloudProvider] }}，请使用独立的数据目录。</p>
+                <p v-if="qiniuSaved?.enabled" class="hint">七牛正在使用。可先保存此配置，暂停七牛后再启用。</p>
                 <p v-else-if="!selectedCloudIsRunning" class="hint">可先保存连接配置，点击「保存并启用」后切换当前存储。</p>
                 <template v-if="cloud">
                   <p v-if="selectedCloudProvider === 'minio'" class="hint">客服机与制作机共用一个 MinIO Bucket，同步素材和订单清单。</p>
@@ -605,20 +633,14 @@ async function openCutoutLogs() {
                         <input v-model="cloud.smb.password" class="input" type="password" autocomplete="new-password" />
                       </label>
                     </template>
-                    <label class="row">
-                      <span class="label">轮询间隔（秒）</span>
-                      <input v-model.number="cloud.pollSeconds" class="input narrow" type="number" min="10" step="1" />
-                    </label>
                   </div>
-                  <p v-if="canSaveCloud && activeCloudProvider && !selectedCloudIsRunning" class="hint">切换到 {{ storageNames[selectedCloudProvider] }} 后应用此轮询间隔。</p>
                   <div class="row actions storageActions">
                     <button class="btn" :disabled="cloudBusy" @click="testCloud">测试连接</button>
                     <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('profile')">保存配置</button>
-                    <button v-if="!selectedCloudIsRunning" class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('activate')">保存并启用</button>
+                    <button v-if="!selectedCloudIsRunning" class="btn" :disabled="cloudBusy || !canSaveCloud || qiniuSaved?.enabled" @click="saveCloud('activate')">保存并启用</button>
                     <template v-else>
-                      <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('pause')">暂停同步</button>
-                      <button class="btn" :disabled="cloudBusy" @click="syncNow">立即同步</button>
-                      <button v-if="selectedCloudProvider !== 'minio'" class="btn" :disabled="cloudBusy" @click="backfillCloud">补传历史素材</button>
+                      <button class="btn" :disabled="cloudBusy || !canSaveCloud" @click="saveCloud('pause')">暂停共享存储</button>
+                      <button class="btn" :disabled="cloudBusy" @click="syncNow">导入旧数据</button>
                     </template>
                   </div>
                 </template>
@@ -626,7 +648,7 @@ async function openCutoutLogs() {
                 <div v-else-if="cloudMsg?.provider === selectedCloudProvider" class="cloudMsg" role="status">{{ cloudMsg.text }}</div>
               </template>
               <template v-else-if="storageProvider === 'qiniu'">
-                <p class="hint">通过排单服务同步原图和成品，客服和制作权限由设备凭证决定。</p>
+                <p class="hint">设备凭证用于连接七牛排单服务。设备角色在「基础信息」中单独设置。</p>
                 <div class="formGrid">
                   <label class="row">
                     <span class="label">API 地址</span>
@@ -636,38 +658,24 @@ async function openCutoutLogs() {
                     <span class="label">设备凭证</span>
                     <input v-model="qiniuForm.token" class="input" type="password" autocomplete="new-password" :placeholder="qiniuSaved?.hasToken ? '已配置，留空沿用' : '输入设备接入凭证'" :disabled="qiniuBusy || !qiniuSaved" />
                   </label>
-                  <label class="row">
-                    <span class="label">轮询间隔（秒）</span>
-                    <input v-model.number="qiniuForm.pollSeconds" class="input narrow" type="number" min="10" max="60" step="1" :disabled="qiniuBusy || !qiniuSaved" />
-                  </label>
                 </div>
                 <div class="row actions">
                   <button class="btn" :disabled="qiniuBusy || !qiniuSaved || !qiniuForm.apiUrl.trim()" @click="testQiniu">测试连接</button>
                   <button class="btn" :disabled="qiniuBusy || !qiniuSaved || !qiniuForm.apiUrl.trim()" @click="saveQiniu(true)">
                     {{ qiniuSaved?.enabled ? '保存七牛配置' : '保存并启用七牛' }}
                   </button>
-                  <button v-if="qiniuSaved?.enabled" class="btn" :disabled="qiniuBusy" @click="saveQiniu(false)">暂停七牛同步</button>
+                  <button v-if="qiniuSaved?.enabled" class="btn" :disabled="qiniuBusy" @click="saveQiniu(false)">暂停使用七牛</button>
                 </div>
-                <div v-if="store.qiniu?.enabled" class="qiniuQueue">
-                  <p v-if="store.qiniu.role" class="hint">
-                    {{ qiniuRoleName[store.qiniu.role] }}
-                    <template v-if="store.qiniu.workspaceId"> · 空间 {{ store.qiniu.workspaceId }}</template>
-                    <template v-if="store.qiniu.deviceId"> · 设备 {{ store.qiniu.deviceId }}</template>
+                <div v-if="qiniuSaved?.hasToken" class="qiniuLegacy">
+                  <p v-if="qiniuSaved.role" class="hint">
+                    凭证权限 {{ qiniuRoleName[qiniuSaved.role] }}
+                    <template v-if="qiniuSaved.workspaceId"> · 空间 {{ qiniuSaved.workspaceId }}</template>
+                    <template v-if="qiniuSaved.deviceId"> · 设备 {{ qiniuSaved.deviceId }}</template>
                   </p>
-                  <p v-else class="hint">等待设备接入</p>
-                  <p class="queueCounts">
-                    <span>{{ store.qiniu.active ? '同步中' : '后台待命' }}</span>
-                    <span>待处理 {{ store.qiniu.pending }}</span>
-                    <span>下载中 {{ store.qiniu.downloading }}</span>
-                    <span :class="{ qiniuError: store.qiniu.failed > 0 }">失败 {{ store.qiniu.failed }}</span>
-                  </p>
-                  <p v-if="store.qiniu.lastError" class="hint qiniuError">最近错误：{{ store.qiniu.lastError }}</p>
                   <div class="row actions">
-                    <button class="btn" :disabled="qiniuBusy" @click="syncQiniu">立即同步</button>
-                    <button class="btn" :disabled="qiniuBusy || !store.qiniu.failed" @click="retryQiniu">重试失败任务</button>
+                    <button class="btn" :disabled="qiniuBusy" @click="syncQiniu">导入旧数据</button>
                     <button class="btn" :disabled="qiniuBusy || !store.info?.dataRoot" @click="openQiniuLogs">打开日志目录</button>
                   </div>
-                  <p class="hint logHint">七牛同步日志为 qiniu-sync.log。</p>
                 </div>
                 <div v-if="qiniuMsg" class="cloudMsg" role="status">{{ qiniuMsg }}</div>
               </template>
@@ -704,13 +712,16 @@ async function openCutoutLogs() {
           </div>
 
           <div v-show="activeSection === 'templates'" class="card">
-            <h3>制作模板（只读）</h3>
+            <h3>制作模板</h3>
+            <iframe v-if="activeSection === 'templates' && store.info?.templates.length" ref="previewFrame"
+              :src="templatePreviewUrl" title="模板图片生成器" hidden @load="loadTemplatePreviews" />
             <div class="tplList">
-              <div v-for="t in store.info?.templates ?? []" :key="t.code" class="tplRow">
-                <span class="code">{{ t.code }}</span>
-                <span>{{ t.name }}</span>
-                <span class="dim">{{ t.webId }}</span>
-              </div>
+              <figure v-for="t in store.info?.templates ?? []" :key="t.code" class="tplCard">
+                <div class="tplPreview">
+                  <img v-if="templatePreviews[t.webId]" :src="templatePreviews[t.webId]" :alt="t.name" />
+                </div>
+                <figcaption><span class="code">{{ t.code }}</span> {{ t.name }}</figcaption>
+              </figure>
             </div>
           </div>
         </div>
@@ -852,7 +863,7 @@ h2 {
 .storageActions {
   flex-wrap: wrap;
 }
-.storageHeading, .storageStatus, .queueCounts {
+.storageHeading, .storageStatus {
   display: flex;
   flex-wrap: wrap;
   gap: 6px 12px;
@@ -904,27 +915,10 @@ h2 {
 .providerSelect {
   max-width: 270px;
 }
-.queueCounts {
-  margin: 0 0 8px;
-}
-.restartNote {
-  padding: 2px 8px;
-  border-radius: 6px;
-  background: #fff4dc;
-  color: #81500c;
-  font-size: 11px;
-}
-.qiniuQueue {
+.qiniuLegacy {
   margin-top: 12px;
   padding-top: 10px;
   border-top: 1px solid var(--stroke);
-}
-.qiniuError {
-  color: var(--danger);
-  overflow-wrap: anywhere;
-}
-.logHint {
-  margin: 4px 0 0;
 }
 .btn {
   border: 1px solid var(--stroke);
@@ -950,19 +944,38 @@ h2 {
 }
 .tplList {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px 16px;
+  grid-template-columns: repeat(auto-fill, minmax(154px, 1fr));
+  gap: 12px;
 }
-.tplRow {
-  display: flex;
-  gap: 8px;
+.tplCard {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.tplPreview {
+  display: grid;
+  place-items: center;
+  height: 136px;
+  padding: 10px;
+  background: var(--bg-card-hover);
+  border-bottom: 1px solid var(--stroke);
+}
+.tplPreview img {
+  display: block;
+  width: 100%;
+  height: 116px;
+  object-fit: contain;
+}
+.tplCard figcaption {
   font-size: 12px;
-  padding: 4px 0;
-  border-bottom: 1px dashed var(--stroke);
+  padding: 8px 10px;
 }
 .code {
   font-weight: 700;
-  color: #9db9ff;
+  color: var(--accent);
+  margin-right: 4px;
 }
 .back {
   display: inline-flex;

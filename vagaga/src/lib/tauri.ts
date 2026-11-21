@@ -15,6 +15,14 @@ import type {
   QiniuSettings,
   QiniuSettingsInput,
   QiniuStatus,
+  WorkflowHistoryKind,
+  WorkflowOrder,
+  WorkflowPreview,
+  WorkflowRestoreAction,
+  WorkflowResult,
+  WorkflowRole,
+  WorkflowSettings,
+  WorkflowUploadKind,
 } from '../types'
 
 export function listOrders(): Promise<OrderSummary[]> {
@@ -85,8 +93,8 @@ export function mysqlTest(config: MysqlConfig): Promise<string> {
   return invoke('mysql_test', { config })
 }
 
-export function mysqlSyncNow(): Promise<CloudNotice[]> {
-  return invoke('mysql_sync_now')
+export function mysqlSyncNow(activeOrder: string | null): Promise<WorkflowResult> {
+  return invoke('mysql_sync_now', { activeOrder })
 }
 
 export function getQiniuSettings(): Promise<QiniuSettings> {
@@ -105,7 +113,7 @@ export function getQiniuStatus(): Promise<QiniuStatus> {
   return invoke('get_qiniu_status')
 }
 
-export function qiniuSyncNow(): Promise<void> {
+export function qiniuSyncNow(): Promise<number> {
   return invoke('qiniu_sync_now')
 }
 
@@ -158,4 +166,49 @@ export function onIngested(handler: (event: PaidanEvent) => void): Promise<() =>
 
 export function onFailed(handler: (event: PaidanEvent) => void): Promise<() => void> {
   return listen<PaidanEvent>('paidan:failed', e => handler(e.payload))
+}
+
+export function workflowSettings(): Promise<WorkflowSettings> {
+  return invoke('workflow_settings')
+}
+
+export function workflowSetRole(role: WorkflowRole): Promise<WorkflowSettings> {
+  return invoke('workflow_set_role', { role })
+}
+
+export function workflowOrders(): Promise<WorkflowOrder[]> {
+  return invoke('workflow_orders')
+}
+
+export function workflowUpload(orderNumbers: string[], kind: WorkflowUploadKind): Promise<WorkflowResult> {
+  return invoke('workflow_upload', { orderNumbers, kind })
+}
+
+export function workflowSync(activeOrder: string | null): Promise<WorkflowResult> {
+  return invoke('workflow_sync', { activeOrder })
+}
+
+export function workflowFinish(orderNumber: string): Promise<WorkflowResult> {
+  return invoke('workflow_finish', { orderNumber })
+}
+
+export function workflowHistory(kind: WorkflowHistoryKind): Promise<WorkflowPreview[]> {
+  return invoke('workflow_history', { kind })
+}
+
+export function workflowRestore(
+  reference: string,
+  action: WorkflowRestoreAction,
+  localVersion: string | null,
+  activeOrder: string | null,
+): Promise<WorkflowResult> {
+  return invoke('workflow_restore', { reference, action, localVersion, activeOrder })
+}
+
+export function workflowSetLayout(orderNumber: string, number: string): Promise<void> {
+  return invoke('workflow_set_layout', { orderNumber, number })
+}
+
+export function workflowTest(): Promise<{ collaboration: boolean; message: string }> {
+  return invoke('workflow_test')
 }

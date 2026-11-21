@@ -139,18 +139,36 @@ impl WebDavClient {
     }
 
     pub(crate) async fn put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
+        self.write_object(key, bytes, true).await.map(|_| ())
+    }
+
+    pub(crate) async fn create_object(&self, key: &str, bytes: Vec<u8>) -> Result<bool, String> {
+        self.write_object(key, bytes, false).await
+    }
+
+    async fn write_object(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        overwrite: bool,
+    ) -> Result<bool, String> {
         let key = checked_path(key, false)?;
         self.directory_entries("")
             .await?
             .ok_or_else(webdav_root_missing)?;
         let parent = key.rsplit_once('/').map_or("", |(parent, _)| parent);
         if !parent.is_empty() {
-            self.operator
-                .create_dir(&format!("{parent}/"))
-                .await
-                .map_err(|error| webdav_error("创建目录", &error))?;
+            if let Err(error) = self.operator.create_dir(&format!("{parent}/")).await {
+                if overwrite {
+                    return Err(webdav_error("创建目录", &error));
+                }
+                self.create_parent_directories(parent).await?;
+            }
         }
 
+        if !overwrite {
+            return self.create_under_lock(parent, key, bytes).await;
+        }
         let temporary = temporary_key(parent);
         let result = async {
             self.operator
@@ -160,13 +178,178 @@ impl WebDavClient {
             self.operator
                 .rename(&temporary, key)
                 .await
-                .map_err(|error| webdav_error("替换文件", &error))
+                .map_err(|error| webdav_error("替换文件", &error))?;
+            Ok(true)
         }
         .await;
         if result.is_err() {
             let _ = self.operator.delete(&temporary).await;
         }
         result
+    }
+
+    async fn create_under_lock(
+        &self,
+        parent: &str,
+        key: &str,
+        bytes: Vec<u8>,
+    ) -> Result<bool, String> {
+        // LOCK on a missing manifest would publish an empty file. Lock its existing
+        // collection instead. Depth infinity makes the MOVE source inherit the lock.
+        let mut collection = self.endpoint.clone();
+        push_url_path(&mut collection, parent);
+        collection
+            .path_segments_mut()
+            .expect("HTTP endpoint")
+            .push("");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(12);
+        let token = loop {
+            let response = self.http
+                .request(Method::from_bytes(b"LOCK").expect("valid method"), collection.clone())
+                .header("Depth", "infinity")
+                .header("Timeout", "Second-300")
+                .header(header::CONTENT_TYPE, "application/xml")
+                .body(r#"<D:lockinfo xmlns:D="DAV:"><D:lockscope><D:exclusive/></D:lockscope><D:locktype><D:write/></D:locktype></D:lockinfo>"#)
+                .send().await
+                .map_err(|error| webdav_error("锁定共享目录", &webdav_request_error(error)))?;
+            match response.status() {
+                StatusCode::OK => {
+                    let value = response
+                        .headers()
+                        .get("Lock-Token")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.strip_prefix('<')?.strip_suffix('>'))
+                        .filter(|value| {
+                            !value
+                                .bytes()
+                                .any(|b| b.is_ascii_whitespace() || matches!(b, b'<' | b'>'))
+                        })
+                        .filter(|value| Url::parse(value).is_ok())
+                        .ok_or("WebDAV 未返回有效的独占写锁，无法安全共享订单。")?;
+                    break format!("<{value}>");
+                }
+                StatusCode::LOCKED if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(120)).await;
+                }
+                status => return Err(webdav_error("锁定共享目录", &webdav_status_error(status))),
+            }
+        };
+
+        let result = self
+            .publish_locked(parent, key, bytes, &collection, &token)
+            .await;
+        let unlock = self
+            .http
+            .request(
+                Method::from_bytes(b"UNLOCK").expect("valid method"),
+                collection,
+            )
+            .header("Lock-Token", token)
+            .send()
+            .await;
+        let created = result?;
+        let response =
+            unlock.map_err(|error| webdav_error("释放共享目录锁", &webdav_request_error(error)))?;
+        if response.status() != StatusCode::NO_CONTENT {
+            return Err(webdav_error(
+                "释放共享目录锁",
+                &webdav_status_error(response.status()),
+            ));
+        }
+        Ok(created)
+    }
+
+    async fn publish_locked(
+        &self,
+        parent: &str,
+        key: &str,
+        bytes: Vec<u8>,
+        collection: &Url,
+        token: &str,
+    ) -> Result<bool, String> {
+        if self.get_object(key).await?.is_some() {
+            return Ok(false);
+        }
+        let mut source = self.endpoint.clone();
+        push_url_path(&mut source, &temporary_key(parent));
+        let mut destination = self.endpoint.clone();
+        push_url_path(&mut destination, key);
+        let condition = format!("({token})");
+        let result = async {
+            let put = self
+                .http
+                .put(source.clone())
+                .header("If", format!("<{collection}> {condition}"))
+                .body(bytes.clone())
+                .send()
+                .await
+                .map_err(|error| webdav_error("写入临时文件", &webdav_request_error(error)))?;
+            if put.status() != StatusCode::CREATED {
+                return Err(webdav_error(
+                    "写入临时文件",
+                    &webdav_status_error(put.status()),
+                ));
+            }
+            // Apply If to the existing source itself. A stale lock token must
+            // fail the MOVE even if the collection is now completely unlocked.
+            let response = self
+                .http
+                .request(
+                    Method::from_bytes(b"MOVE").expect("valid method"),
+                    source.clone(),
+                )
+                .header("Destination", destination.as_str())
+                .header("Overwrite", "F")
+                .header("If", &condition)
+                .send()
+                .await
+                .map_err(|error| webdav_error("创建文件", &webdav_request_error(error)))?;
+            match response.status() {
+                StatusCode::CREATED => {
+                    if self.get_object(key).await?.as_deref() != Some(bytes.as_slice()) {
+                        return Err("WebDAV 共享文件提交后的内容校验失败。".into());
+                    }
+                    Ok(true)
+                }
+                StatusCode::PRECONDITION_FAILED if self.get_object(key).await?.is_some() => {
+                    Ok(false)
+                }
+                status => Err(webdav_error("创建文件", &webdav_status_error(status))),
+            }
+        }
+        .await;
+        if !matches!(result, Ok(true)) {
+            let _ = self
+                .http
+                .delete(source)
+                .header("If", condition)
+                .send()
+                .await;
+        }
+        result
+    }
+
+    async fn create_parent_directories(&self, parent: &str) -> Result<(), String> {
+        let mut directory = String::new();
+        for segment in parent.split('/') {
+            directory.push_str(segment);
+            directory.push('/');
+            if let Err(error) = self.operator.create_dir(&directory).await {
+                // Some servers return an error when another client creates the same collection.
+                if !self.operator.stat(&directory).await.is_ok_and(|metadata| metadata.is_dir()) {
+                    return Err(webdav_error("创建目录", &error));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn delete_object(&self, key: &str) -> Result<(), String> {
+        let key = checked_path(key, false)?;
+        self.operator
+            .delete(key)
+            .await
+            .map_err(|error| webdav_error("删除文件", &error))
     }
 
     pub(crate) async fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
@@ -486,6 +669,14 @@ impl SmbClient {
     }
 
     pub(crate) async fn put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
+        self.write_object(key, bytes, true).await.map(|_| ())
+    }
+
+    pub(crate) async fn create_object(&self, key: &str, bytes: Vec<u8>) -> Result<bool, String> {
+        self.write_object(key, bytes, false).await
+    }
+
+    async fn write_object(&self, key: &str, bytes: Vec<u8>, overwrite: bool) -> Result<bool, String> {
         let key = checked_path(key, false)?;
         let parent = key.rsplit_once('/').map_or("", |(parent, _)| parent);
         let session = self.session().await?;
@@ -531,25 +722,74 @@ impl SmbClient {
             file.flush()
                 .await
                 .map_err(|error| smb_error("完成临时文件写入", &SmbError::IoError(error)))?;
-            file.set_info(FileRenameInformation {
-                replace_if_exists: true.into(),
+            match file.set_info(FileRenameInformation {
+                replace_if_exists: overwrite.into(),
                 root_directory: 0,
                 file_name: with_parent(&self.root, key).replace('/', "\\").into(),
             })
-            .await
-            .map_err(|error| smb_error("替换文件", &error))
+            .await {
+                Ok(()) => Ok(true),
+                Err(error) if !overwrite && smb_status(&error) == Some(Status::U32_OBJECT_NAME_COLLISION) => Ok(false),
+                Err(error) => Err(smb_error(if overwrite { "替换文件" } else { "创建文件" }, &error)),
+            }
         }
         .await;
         let close_result = file
             .close()
             .await
             .map_err(|error| smb_error("关闭文件", &error));
-        if result.is_err() {
+        if !matches!(result, Ok(true)) {
             // A lost rename reply may mean the move succeeded. Clean up by the
             // temporary path, since the original handle may now be the final file.
             remove_smb_temporary_file(session, &temp_path).await;
         }
         let _ = parent_handle.close().await;
+        result.and_then(|created| close_result.map(|_| created))
+    }
+
+    pub(crate) async fn delete_object(&self, key: &str) -> Result<(), String> {
+        let key = checked_path(key, false)?;
+        let parent = key.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let session = self.session().await?;
+        let Some(parent_handle) = self.directory(session, parent, false, false).await? else {
+            return Ok(());
+        };
+        let path = self.share.clone().with_path(&with_parent(&self.root, key));
+        let result = self.delete_file(session, &path).await;
+        let _ = parent_handle.close().await;
+        result
+    }
+
+    async fn delete_file(&self, session: &SmbSession, path: &UncPath) -> Result<(), String> {
+        let resource = match session
+            .create_file(
+                path,
+                &FileCreateArgs {
+                    options: CreateOptions::new()
+                        .with_non_directory_file(true)
+                        .with_open_reparse_point(true),
+                    ..FileCreateArgs::make_open_existing(
+                        FileAccessMask::new().with_delete(true).with_file_read_attributes(true),
+                    )
+                },
+            )
+            .await
+        {
+            Ok(resource) => resource,
+            Err(error) if smb_missing(&error) => return Ok(()),
+            Err(error) => return Err(smb_error("打开文件", &error)),
+        };
+        let Resource::File(file) = resource else {
+            return Err("SMB 路径未指向普通文件。".into());
+        };
+        let result = async {
+            self.check_handle(&file).await?;
+            file.set_info(FileDispositionInformation::default())
+                .await
+                .map_err(|error| smb_error("删除文件", &error))
+        }
+        .await;
+        let close_result = file.close().await.map_err(|error| smb_error("关闭文件", &error));
         result.and(close_result)
     }
 
@@ -691,10 +931,18 @@ impl SmbClient {
                 Err(error) if smb_missing(&error) && in_root => {
                     return Err("SMB 配置的目录不存在。".into());
                 }
-                Err(error) if smb_missing(&error) && create => self
-                    .open_directory(session, &path, CreateDisposition::OpenIf, false)
-                    .await
-                    .map_err(|error| smb_error("创建目录", &error))?,
+                Err(error) if smb_missing(&error) && create => {
+                    match self
+                        .open_directory(session, &path, CreateDisposition::OpenIf, false)
+                        .await
+                    {
+                        Ok(directory) => directory,
+                        Err(error) => self
+                            .open_directory(session, &path, CreateDisposition::Open, false)
+                            .await
+                            .map_err(|_| smb_error("创建目录", &error))?,
+                    }
+                }
                 Err(error) if smb_missing(&error) => return Ok(None),
                 Err(error) => return Err(smb_error("打开目录", &error)),
             };
@@ -909,6 +1157,23 @@ mod tests {
             request.await.unwrap(),
             "PROPFIND /dav/%E8%B5%84%E6%96%99/orders/ HTTP/1.1\r\n"
         );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable lockless server and VAGAGA_TEST_LOCKLESS_WEBDAV"]
+    async fn webdav_without_locks_allows_backup_and_rejects_shared_create() {
+        let config = std::env::var("VAGAGA_TEST_LOCKLESS_WEBDAV").unwrap();
+        let client = WebDavClient::new(&serde_json::from_str(&config).unwrap()).unwrap();
+        let directory = format!("lockless-test-{:032x}", rand::random::<u128>());
+        let manifest = format!("{directory}/manifest.json");
+        let backup = format!("{directory}/backup.json");
+        let denied = client.create_object(&manifest, b"shared".to_vec()).await.unwrap_err();
+        assert!(denied.contains("锁定共享目录"), "{denied}");
+        assert!(client.get_object(&manifest).await.unwrap().is_none());
+        client.put_object(&backup, b"backup".to_vec()).await.unwrap();
+        assert_eq!(client.get_object(&backup).await.unwrap().unwrap(), b"backup");
+        client.delete_object(&backup).await.unwrap();
+        client.operator.delete(&format!("{directory}/")).await.unwrap();
     }
 
     #[tokio::test]

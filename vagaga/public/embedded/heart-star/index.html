@@ -930,6 +930,23 @@ var sharedLibrary=isTauriEmbed?null:HeartStarCloud.mount({getSnapshot:getCloudSn
  setBusy:busy=>{document.querySelector('.app').inert=busy;document.querySelector('.editor-toolbar').inert=busy},report:say});
 </script>
 <script>
+if (window.parent !== window && new URLSearchParams(window.location?.search).has('catalog')) {
+  window.__picTemplateThumbnail = async function (name) {
+    const cfg = Object.hasOwn(templates, name) ? templates[name] : null;
+    if (!cfg || cfg.custom || cfg.text) throw new Error('找不到模板预览。');
+    const src = cfg.preset ? await HeartStarPreset.source(cfg, loadCustomImage) : templateSources[name];
+    const image = new Image();
+    image.src = src;
+    await image.decode();
+    const thumbnail = document.createElement('canvas');
+    const scale = Math.min(1, 480 / Math.max(image.width, image.height));
+    thumbnail.width = Math.max(1, Math.round(image.width * scale));
+    thumbnail.height = Math.max(1, Math.round(image.height * scale));
+    thumbnail.getContext('2d').drawImage(image, 0, 0, thumbnail.width, thumbnail.height);
+    return thumbnail.toDataURL('image/png');
+  };
+}
+
 // 预置模板的底图会异步合成，iframe 的 load 事件可能早于槽位就绪。
 async function waitForOrderTemplate(template) {
   const name = template || sel.value;

@@ -148,3 +148,36 @@ export interface PaidanEvent {
   scaled?: boolean
   detail?: string
 }
+export type WorkflowRole = 'customer' | 'production' | 'both'
+export type WorkflowUploadKind = 'publish' | 'backup'
+export type WorkflowHistoryKind = 'backup' | 'completed'
+export type WorkflowRestoreAction = 'replace' | 'copy' | 'keep' | 'download'
+
+export interface WorkflowSettings {
+  role: WorkflowRole
+  target: string | null
+}
+
+export interface WorkflowOrder {
+  orderNumber: string
+  localCompleted: boolean
+  sharedState: 'pending' | 'completed' | null
+  pendingOperation: 'finish' | 'publish' | 'backup' | null
+  error: string | null
+}
+
+export interface WorkflowPreview {
+  reference: string
+  orderNumber: string
+  updatedAt: string
+  localVersion: string | null
+  changes: string[]
+  conflict: boolean
+}
+
+export interface WorkflowResult {
+  updated: number
+  completed: number
+  conflicts: WorkflowPreview[]
+  errors: string[]
+}

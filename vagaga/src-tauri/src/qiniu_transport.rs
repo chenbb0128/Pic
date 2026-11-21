@@ -271,7 +271,7 @@ struct UploadPolicy {
 
 #[derive(Clone)]
 pub struct Client {
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     api_url: Url,
     bearer: HeaderValue,
 }
@@ -305,7 +305,7 @@ impl Client {
         })
     }
 
-    fn api(&self, method: Method, endpoint: &[&str]) -> Result<RequestBuilder, Error> {
+    pub(crate) fn api(&self, method: Method, endpoint: &[&str]) -> Result<RequestBuilder, Error> {
         Ok(self
             .http
             .request(method, path(&self.api_url, endpoint)?)
@@ -313,7 +313,7 @@ impl Client {
             .timeout(SDK_TIMEOUT))
     }
 
-    async fn api_json<T: DeserializeOwned>(
+    pub(crate) async fn api_json<T: DeserializeOwned>(
         &self,
         request: RequestBuilder,
         operation: &'static str,
@@ -736,7 +736,7 @@ impl Client {
     }
 }
 
-fn checked_url(raw: &str, operation: &'static str) -> Result<Url, Error> {
+pub(crate) fn checked_url(raw: &str, operation: &'static str) -> Result<Url, Error> {
     let url = Url::parse(raw).map_err(|_| Error::invalid(operation))?;
     let loopback = match url.host_str() {
         Some("localhost" | "[::1]") => true,

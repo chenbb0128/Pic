@@ -183,6 +183,9 @@ impl Injector {
                     if changed.is_err() || *shutdown.borrow() { break; }
                 }
                 _ = interval.tick() => {
+                    if crate::workflow_db::role(&self.store) == "production" {
+                        continue;
+                    }
                     if let Err(error) = scan_once(
                         &self.store,
                         &self.core_script,
@@ -484,7 +487,7 @@ async fn handshake_request(
 fn capture_metadata(payload: &Value) -> Option<String> {
     let context = &payload["context"];
     let mut fields = serde_json::Map::new();
-    for key in ["status", "amount", "specText"] {
+    for key in ["status", "amount", "specText", "merchantRemark"] {
         if let Some(value) = context[key].as_str().filter(|value| !value.is_empty()) {
             fields.insert(key.into(), Value::String(value.into()));
         }
@@ -507,6 +510,9 @@ fn capture_metadata(payload: &Value) -> Option<String> {
 }
 
 async fn handle_capture(store: &Arc<Store>, events_tx: &mpsc::Sender<PaidanEvent>, payload: &str) {
+    if crate::workflow_db::role(store) == "production" {
+        return;
+    }
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(value) => value,
         Err(error) => {
@@ -545,14 +551,14 @@ async fn handle_capture(store: &Arc<Store>, events_tx: &mpsc::Sender<PaidanEvent
     }
     let mime = parsed["mime"].as_str().unwrap_or("image/png");
     let scaled = parsed["scaled"].as_bool().unwrap_or(false);
-    let quality = store.qiniu_enabled().then(|| {
+    let quality = {
         use crate::qiniu_store::CaptureQuality;
         match (scaled, parsed["sourceQuality"].as_str()) {
             (true, _) | (_, Some("scaled")) => CaptureQuality::Scaled,
             (false, Some("original")) => CaptureQuality::Original,
             _ => CaptureQuality::Unknown,
         }
-    });
+    };
     let templates: Vec<(String, i64)> = parsed["templates"]
         .as_array()
         .map(|items| {
@@ -588,12 +594,11 @@ async fn handle_capture(store: &Arc<Store>, events_tx: &mpsc::Sender<PaidanEvent
             }
         };
 
-    match store.ingest_with_sync(
+    match store.ingest_local_capture(
         &order_number,
         &bytes,
         mime,
         &templates,
-        "千帆",
         quality,
         metadata.as_deref(),
     ) {

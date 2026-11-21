@@ -619,26 +619,21 @@ fn log(root: &Path, stage: &str, number: &str, id: &str, detail: &str) {
 
 #[tauri::command]
 pub(crate) fn get_qiniu_status(state: State<'_, AppState>) -> Result<Status, String> {
-    state.qiniu.status(&state.store)
+    let (settings, credential) = qiniu_settings::load(&state.store)?;
+    Sync::new(settings, &credential).status(&state.store)
 }
 
 #[tauri::command]
-pub(crate) fn qiniu_sync_now(state: State<'_, AppState>) -> Result<(), String> {
-    if state.qiniu.client.is_none() {
-        return Err("请启用七牛同步并重启程序".into());
-    }
-    state.qiniu.wake();
-    Ok(())
-}
-
-#[tauri::command]
-pub(crate) fn qiniu_retry_failed(state: State<'_, AppState>) -> Result<(), String> {
-    if state.qiniu.client.is_none() {
-        return Err("请启用七牛同步并重启程序".into());
-    }
-    state.store.qiniu_retry().map_err(str_error)?;
-    state.qiniu.wake();
-    Ok(())
+pub(crate) async fn qiniu_sync_now(state: State<'_, AppState>) -> Result<usize, String> {
+    let _guard = state.workflow_operations.lock().await;
+    let (mut settings, credential) = qiniu_settings::load(&state.store)?;
+    settings.enabled = true;
+    let sync = Sync::new(settings, &credential);
+    let client = sync.client.as_ref().ok_or("请先配置七牛设备凭证。")?;
+    let temporary = tempfile::tempdir().map_err(str_error)?;
+    let incoming = Store::open(temporary.path()).map_err(str_error)?;
+    sync.pull_cycle(client, &incoming, temporary.path(), |_, _, _| {}).await?;
+    Ok(crate::workflow::import_legacy(&state, &incoming, temporary.path())?.len())
 }
 
 #[cfg(test)]

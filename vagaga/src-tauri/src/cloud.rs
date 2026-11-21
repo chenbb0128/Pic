@@ -61,7 +61,7 @@ impl Default for CloudConfig {
 }
 
 impl CloudConfig {
-    fn target(&self) -> String {
+    pub(crate) fn target(&self) -> String {
         let location = match self.provider {
             Provider::Minio => serde_json::json!(["minio", self.endpoint.trim_end_matches('/'), self.bucket]),
             Provider::Webdav => serde_json::json!(["webdav", self.webdav.endpoint.trim_end_matches('/'), self.webdav.root.trim_matches('/')]),
@@ -70,7 +70,7 @@ impl CloudConfig {
         hex(&Sha256::digest(location.to_string()))
     }
 
-    fn client(&self) -> Result<FileStorage, String> {
+    pub(crate) fn client(&self) -> Result<FileStorage, String> {
         match self.provider {
             Provider::Minio => {
                 let endpoint = reqwest::Url::parse(&self.endpoint).ok();
@@ -219,6 +219,7 @@ impl S3Client {
         query: &[(&str, &str)],
         payload_hash: &str,
         body: Option<Vec<u8>>,
+        create_only: bool,
     ) -> Result<reqwest::Response, String> {
         let now_utc = chrono::Utc::now();
         let amz_date = now_utc.format("%Y%m%dT%H%M%SZ").to_string();
@@ -253,11 +254,12 @@ impl S3Client {
             None => host.to_owned(),
         };
 
+        let condition_header = if create_only { "if-none-match:*\n" } else { "" };
+        let condition_name = if create_only { "if-none-match;" } else { "" };
         let canonical_headers = format!(
-            "host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n",
-            host = endpoint_host,
+            "host:{endpoint_host}\n{condition_header}x-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n",
         );
-        let signed_headers = "host;x-amz-content-sha256;x-amz-date";
+        let signed_headers = format!("host;{condition_name}x-amz-content-sha256;x-amz-date");
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
             method.as_str(),
@@ -302,20 +304,43 @@ impl S3Client {
         if let Some(bytes) = body {
             request = request.body(bytes);
         }
+        if create_only {
+            request = request.header(reqwest::header::IF_NONE_MATCH, "*");
+        }
         request.send().await.map_err(|error| format!("云服务连接失败：{error}"))
     }
 
     pub async fn put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
         let payload_hash = hex(Sha256::digest(&bytes).as_slice());
-        let response = self.request(reqwest::Method::PUT, key, &[], &payload_hash, Some(bytes)).await?;
+        let response = self.request(reqwest::Method::PUT, key, &[], &payload_hash, Some(bytes), false).await?;
         if !response.status().is_success() {
             return Err(format!("上传失败（HTTP {}）：{}", response.status(), response.text().await.unwrap_or_default()));
         }
         Ok(())
     }
 
+    async fn create_object(&self, key: &str, bytes: Vec<u8>) -> Result<bool, String> {
+        let payload_hash = hex(&Sha256::digest(&bytes));
+        let response = self.request(reqwest::Method::PUT, key, &[], &payload_hash, Some(bytes), true).await?;
+        match response.status() {
+            status if status.is_success() => Ok(true),
+            reqwest::StatusCode::PRECONDITION_FAILED => Ok(false),
+            // A conditional-write conflict can also race with a deletion.
+            status => Err(format!("创建文件失败（HTTP {status}）：{}", response.text().await.unwrap_or_default())),
+        }
+    }
+
+    async fn delete_object(&self, key: &str) -> Result<(), String> {
+        let response = self.request(reqwest::Method::DELETE, key, &[], EMPTY_SHA256, None, false).await?;
+        match response.status() {
+            status if status.is_success() => Ok(()),
+            reqwest::StatusCode::NOT_FOUND => Ok(()),
+            status => Err(format!("删除文件失败（HTTP {status}）")),
+        }
+    }
+
     pub async fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
-        let response = self.request(reqwest::Method::GET, key, &[], EMPTY_SHA256, None).await?;
+        let response = self.request(reqwest::Method::GET, key, &[], EMPTY_SHA256, None, false).await?;
         match response.status().as_u16() {
             200 => Ok(Some(response.bytes().await.map_err(|error| format!("下载失败：{error}"))?.to_vec())),
             404 => Ok(None),
@@ -325,34 +350,56 @@ impl S3Client {
 
     /// ListObjectsV2 取一层子前缀（delimiter=/）。返回去掉 `prefix` 的子前缀名。
     pub async fn list_prefixes(&self, prefix: &str) -> Result<Vec<String>, String> {
-        let response = self
-            .request(
-                reqwest::Method::GET,
-                "",
-                &[("delimiter", "/"), ("list-type", "2"), ("max-keys", "1000"), ("prefix", prefix)],
-                EMPTY_SHA256,
-                None,
-            )
-            .await?;
-        if !response.status().is_success() {
-            return Err(format!(
-                "列举失败（HTTP {}）：{}",
-                response.status(),
-                response.text().await.unwrap_or_default()
-            ));
+        let mut prefixes = Vec::new();
+        let mut seen_tokens = std::collections::HashSet::<String>::new();
+        let mut token = None::<String>;
+        loop {
+            let mut query = vec![("delimiter", "/"), ("list-type", "2"), ("max-keys", "1000"), ("prefix", prefix)];
+            if let Some(token) = token.as_deref() {
+                query.push(("continuation-token", token));
+            }
+            let response = self.request(reqwest::Method::GET, "", &query, EMPTY_SHA256, None, false).await?;
+            if !response.status().is_success() {
+                return Err(format!("列举失败（HTTP {}）：{}", response.status(), response.text().await.unwrap_or_default()));
+            }
+            let text = response.text().await.map_err(|error| format!("列举响应读取失败：{error}"))?;
+            let page: S3PrefixPage = quick_xml::de::from_str(&text)
+                .map_err(|error| format!("MinIO 目录列表无效：{error}"))?;
+            prefixes.extend(page.common_prefixes.into_iter().filter_map(|entry| {
+                let name = entry.prefix.strip_prefix(prefix)?.trim_end_matches('/');
+                (!name.is_empty()).then(|| name.to_owned())
+            }));
+            if !page.is_truncated {
+                return Ok(prefixes);
+            }
+            token = page.next_continuation_token
+                .filter(|next| !next.is_empty() && seen_tokens.insert(next.clone()));
+            if token.is_none() {
+                return Err("MinIO 返回了无效的目录分页标记。".into());
+            }
         }
-        let text = response.text().await.map_err(|error| format!("列举响应读取失败：{error}"))?;
-        Ok(extract_xml_values(&text, "Prefix")
-            .into_iter()
-            .map(|p| p.trim_start_matches(prefix).trim_end_matches('/').to_string())
-            .filter(|p| !p.is_empty())
-            .collect())
     }
 
     pub async fn test(&self) -> Result<String, String> {
         self.list_prefixes("").await?;
         Ok(format!("连接正常（bucket={}）", self.bucket))
     }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct S3PrefixPage {
+    #[serde(default)]
+    is_truncated: bool,
+    next_continuation_token: Option<String>,
+    #[serde(default)]
+    common_prefixes: Vec<S3CommonPrefix>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct S3CommonPrefix {
+    prefix: String,
 }
 
 #[cfg(test)]
@@ -384,6 +431,20 @@ mod tests {
         ).unwrap();
         assert!(config.enabled && config.provider != Provider::Minio);
         config.test().await.unwrap();
+        let writer = config.client().unwrap();
+        let contender = config.client().unwrap();
+        let probe = format!("vagaga/v2/probes/test-{:032x}.json", rand::random::<u128>());
+        let (first, second) = tokio::join!(
+            writer.create_object(&probe, b"first".to_vec()),
+            contender.create_object(&probe, b"second".to_vec()),
+        );
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first, second);
+        let expected: &[u8] = if first { b"first" } else { b"second" };
+        assert_eq!(writer.get_object(&probe).await.unwrap().as_deref(), Some(expected));
+        writer.delete_object(&probe).await.unwrap();
+        assert!(contender.get_object(&probe).await.unwrap().is_none());
         let mut denied = config.clone();
         match denied.provider {
             Provider::Webdav => denied.webdav.password.push_str("-denied"),
@@ -439,6 +500,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn minio_create_signs_the_precondition_and_distinguishes_conflicts() {
+        let (listener, endpoint) = local_server();
+        let server = std::thread::spawn(move || {
+            for status in [200, 412, 409] {
+                let (socket, request) = receive(&listener, "PUT /vagaga/workflow/event.json");
+                assert_eq!(request.headers["if-none-match"], "*");
+                let host = &request.headers["host"];
+                let date = &request.headers["x-amz-date"];
+                let payload_hash = hex(&Sha256::digest(&request.body));
+                let signed = "host;if-none-match;x-amz-content-sha256;x-amz-date";
+                let canonical = format!(
+                    "PUT\n/vagaga/workflow/event.json\n\nhost:{host}\nif-none-match:*\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{date}\n\n{signed}\n{payload_hash}"
+                );
+                let day = &date[..8];
+                let scope = format!("{day}/us-east-1/s3/aws4_request");
+                let to_sign = format!(
+                    "AWS4-HMAC-SHA256\n{date}\n{scope}\n{}",
+                    hex(&Sha256::digest(canonical)),
+                );
+                let mut key = b"AWS4fixture-secret".to_vec();
+                for part in [day, "us-east-1", "s3", "aws4_request"] {
+                    key = hmac_sha256(&key, part.as_bytes());
+                }
+                let signature = hex(&hmac_sha256(&key, to_sign.as_bytes()));
+                assert_eq!(
+                    request.headers["authorization"],
+                    format!("AWS4-HMAC-SHA256 Credential=fixture/{scope}, SignedHeaders={signed}, Signature={signature}")
+                );
+                reply(socket, status, &[], b"");
+            }
+        });
+        let client = S3Client::new(&CloudConfig {
+            endpoint,
+            bucket: "vagaga".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture-secret".into(),
+            ..CloudConfig::default()
+        });
+        let key = "workflow/event.json";
+        assert!(client.create_object(key, b"first".to_vec()).await.unwrap());
+        assert!(!client.create_object(key, b"second".to_vec()).await.unwrap());
+        assert!(client.create_object(key, b"third".to_vec()).await.is_err());
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn minio_lists_all_workflow_prefix_pages() {
+        let (listener, endpoint) = local_server();
+        let server = std::thread::spawn(move || {
+            let query = "delimiter=%2F&list-type=2&max-keys=1000&prefix=vagaga%2Fv2%2Fbackups%2F";
+            let (socket, _) = receive(&listener, &format!("GET /vagaga/?{query}"));
+            reply(socket, 200, &[], b"<ListBucketResult><IsTruncated>true</IsTruncated><NextContinuationToken>test&amp;next</NextContinuationToken><CommonPrefixes><Prefix>vagaga/v2/backups/a/</Prefix></CommonPrefixes></ListBucketResult>");
+            let (socket, _) = receive(&listener, &format!("GET /vagaga/?continuation-token=test%26next&{query}"));
+            reply(socket, 200, &[], b"<ListBucketResult><IsTruncated>false</IsTruncated><CommonPrefixes><Prefix>vagaga/v2/backups/b/</Prefix></CommonPrefixes></ListBucketResult>");
+        });
+        let client = S3Client::new(&CloudConfig {
+            endpoint,
+            bucket: "vagaga".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture-secret".into(),
+            ..CloudConfig::default()
+        });
+        assert_eq!(client.list_prefixes("vagaga/v2/backups/").await.unwrap(), ["a", "b"]);
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
     async fn list_objects_sends_and_signs_the_bucket_path_and_query() {
         let (listener, endpoint) = local_server();
         let server = std::thread::spawn(move || {
@@ -480,34 +608,16 @@ mod tests {
     }
 }
 
-/// 极简 XML 值提取（ListObjectsV2 的 Prefix/Key 均为简单文本）。
-fn extract_xml_values(xml: &str, tag: &str) -> Vec<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let mut values = Vec::new();
-    let mut rest = xml;
-    while let Some(start) = rest.find(&open) {
-        let after = &rest[start + open.len()..];
-        if let Some(end) = after.find(&close) {
-            values.push(after[..end].to_string());
-            rest = &after[end + close.len()..];
-        } else {
-            break;
-        }
-    }
-    values
-}
-
 /* ---------- 同步编排 ---------- */
 
-enum FileStorage {
+pub(crate) enum FileStorage {
     Minio(S3Client),
     Webdav(WebDavClient),
     Smb(SmbClient),
 }
 
 impl FileStorage {
-    async fn put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
+    pub(crate) async fn put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
         match self {
             Self::Minio(client) => client.put_object(key, bytes).await,
             Self::Webdav(client) => client.put_object(key, bytes).await,
@@ -515,7 +625,23 @@ impl FileStorage {
         }
     }
 
-    async fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
+    pub(crate) async fn create_object(&self, key: &str, bytes: Vec<u8>) -> Result<bool, String> {
+        match self {
+            Self::Minio(client) => client.create_object(key, bytes).await,
+            Self::Webdav(client) => client.create_object(key, bytes).await,
+            Self::Smb(client) => client.create_object(key, bytes).await,
+        }
+    }
+
+    pub(crate) async fn delete_object(&self, key: &str) -> Result<(), String> {
+        match self {
+            Self::Minio(client) => client.delete_object(key).await,
+            Self::Webdav(client) => client.delete_object(key).await,
+            Self::Smb(client) => client.delete_object(key).await,
+        }
+    }
+
+    pub(crate) async fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>, String> {
         match self {
             Self::Minio(client) => client.get_object(key).await,
             Self::Webdav(client) => client.get_object(key).await,
@@ -523,7 +649,8 @@ impl FileStorage {
         }
     }
 
-    async fn list_prefixes(&self, prefix: &str) -> Result<Vec<String>, String> {
+    /// Lists immediate child directory names relative to `prefix`.
+    pub(crate) async fn list_prefixes(&self, prefix: &str) -> Result<Vec<String>, String> {
         match self {
             Self::Minio(client) => client.list_prefixes(prefix).await,
             Self::Webdav(client) => client.list_prefixes(prefix).await,
@@ -836,6 +963,12 @@ async fn backfill_push(store: &Store, client: &FileStorage) -> Result<usize, Str
         return Err(format!("已补传 {pushed} 个订单，{} 个订单失败。订单 {order}：{error}", failures.len()));
     }
     Ok(pushed)
+}
+
+/// Read existing order manifests from the legacy NAS layout.
+pub(crate) async fn import_legacy(store: &Store, config: &CloudConfig) -> Result<Vec<CloudNotice>, String> {
+    let client = config.client()?;
+    pull_all(store, &client, &config.target()).await
 }
 
 /// 拉取：列云端订单前缀 → manifest 指纹比对 → 下载缺失图片 → 幂等导入。

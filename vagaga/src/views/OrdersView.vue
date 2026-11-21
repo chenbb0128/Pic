@@ -14,15 +14,16 @@ import {
   saveOrderImage,
   saveProduction,
   setImageTemplates,
+  workflowSetLayout,
 } from '../lib/tauri'
 import type { OrderImage, OrderSummary, Production, SyncStatus } from '../types'
 
+const props = defineProps<{ visible?: boolean }>()
+const emit = defineEmits<{ finish: [orderNumber: string]; history: [] }>()
 const store = useOrdersStore()
-const qiniuEnabled = computed(() => store.qiniu?.enabled === true)
-const qiniuDirectory = computed(() => qiniuEnabled.value || store.qiniu?.legacyEnabled === false)
-const canDelete = computed(() => store.qiniu?.enabled === false ||
-  store.qiniu?.role === 'customer' || store.qiniu?.role === 'both')
-const canEditTemplates = computed(() => store.qiniu?.enabled === false || !!store.qiniu?.role)
+const canDelete = computed(() => store.workflow.role !== 'production')
+const canEditTemplates = computed(() => store.workflow.role !== 'production')
+const canFinish = computed(() => store.workflow.role !== 'customer')
 
 const syncLabels: Record<SyncStatus, string> = {
   pending: '已保存本地 · 等待上传',
@@ -37,29 +38,52 @@ function syncLabel(asset: OrderImage | Production) {
   if ('source' in asset && asset.source === '七牛同步' && asset.syncStatus === 'synced' && asset.filePath) {
     return '原图下载完成'
   }
-  return asset.syncStatus ? syncLabels[asset.syncStatus] : qiniuEnabled.value ? syncLabels.localOnly : ''
+  return asset.syncStatus ? syncLabels[asset.syncStatus] : ''
 }
 
 function qualityLabel(img: OrderImage) {
   if (img.sourceQuality === 'scaled') return '来源为缩图'
   if (img.sourceQuality === 'original') return '原图'
-  if (img.sourceQuality === 'unknown' && qiniuDirectory.value) return '原图来源未确认'
-  return qiniuDirectory.value ? '历史本地素材' : ''
+  if (img.sourceQuality === 'unknown') return '原图来源未确认'
+  return ''
 }
 
 function makeBlockReason(img: OrderImage) {
-  if (!store.qiniu) return '正在读取当前同步模式'
   if (img.syncStatus === 'downloading') return '原图正在下载'
   if (!img.filePath) return '本机原图尚不可用'
-  if (qiniuDirectory.value && (img.sourceQuality === 'scaled' || img.sourceQuality === 'unknown')) {
-    return '制作需要来源已确认的原图'
-  }
+  if (img.sourceQuality === 'scaled') return '制作需要原图，请先获取原图'
+  if (img.sourceQuality === 'unknown') return '制作需要来源已确认的原图'
   return ''
 }
 
 /* ---------- 左栏数据：订单 + 素材树 ---------- */
 const entries = ref<{ summary: OrderSummary; images: OrderImage[] }[]>([])
 const orderSearch = ref('')
+const orderFilter = ref<'pending' | 'completed'>('pending')
+const isOrderComplete = (number: string) => Boolean(
+  store.workflowOrders[number]?.localCompleted || store.workflowOrders[number]?.sharedState === 'completed',
+)
+
+function finishLabel(number: string) {
+  if (!canFinish.value) return ''
+  const state = store.workflowOrders[number]
+  if (state?.pendingOperation === 'finish' || (state?.localCompleted && state.sharedState === 'pending')) {
+    return '重试交付'
+  }
+  return isOrderComplete(number) ? '' : '制作完毕'
+}
+
+function workflowLabel(number: string) {
+  const state = store.workflowOrders[number]
+  if (state?.pendingOperation === 'finish') return state.error ? '制作已完成 · 交付失败，待重试' : '制作已完成 · 等待交付'
+  if (state?.sharedState === 'completed') return '共享已完成'
+  if (state?.localCompleted && state.sharedState === 'pending') return '制作已完成 · 待交付'
+  if (state?.localCompleted) return '制作已完成'
+  if (state?.pendingOperation === 'publish') return state.error ? '发布失败 · 等待重试' : '等待发布'
+  if (state?.pendingOperation === 'backup') return state.error ? '备份失败 · 等待重试' : '等待备份'
+  if (state?.sharedState === 'pending') return '已发布 · 待制作'
+  return ''
+}
 const searchTerm = computed(() => orderSearch.value.trim().toLowerCase())
 const matchingOrders = computed(() => store.orders.filter(matchesOrder))
 const visibleEntries = computed(() => {
@@ -68,6 +92,7 @@ const visibleEntries = computed(() => {
 })
 
 function matchesOrder(order: OrderSummary) {
+  if ((orderFilter.value === 'completed') !== isOrderComplete(order.orderNumber)) return false
   const term = searchTerm.value
   return !term || order.orderNumber.toLowerCase().includes(term)
     || (parseMeta(order.metadata)?.layoutNumber?.toLowerCase().includes(term) ?? false)
@@ -111,6 +136,7 @@ async function refreshProductions(orderNumber: string) {
 }
 
 function chooseOrder(id: string) {
+  void persistLayout().catch(reportLayoutError)
   expandedImageId.value = null
   expandedOrderId.value = expandedOrderId.value === id ? null : id
 }
@@ -160,7 +186,63 @@ const busyImageId = ref('')
 const lastInjectedOrder = ref<string | null>(null)
 let lastInjectedImageId: string | null = null
 const numberingDrafts = new Map<string, { prefix: string; value: string }>()
+let numberingDocument: Document | null = null
+let layoutTimer: ReturnType<typeof setTimeout> | undefined
+let layoutWrites: Promise<void> = Promise.resolve()
+const pendingLayouts = new Map<string, string>()
 const lastExport = ref<Production | null>(null)
+
+function reportLayoutError(error: unknown) {
+  toast('error', `保存排版编号失败：${error}`)
+}
+
+function rememberNumbering() {
+  const orderNumber = lastInjectedOrder.value
+  const draft = frame.value?.contentWindow?.__picReadOrderNumbering?.()
+  if (!orderNumber || draft?.orderNumber !== orderNumber) return
+  numberingDrafts.set(orderNumber, { prefix: draft.prefix, value: draft.value })
+  return draft
+}
+
+function persistLayout(): Promise<void> {
+  if (layoutTimer !== undefined) clearTimeout(layoutTimer)
+  layoutTimer = undefined
+  layoutWrites = layoutWrites.catch(() => {}).then(async () => {
+    for (const [orderNumber, number] of pendingLayouts) {
+      await workflowSetLayout(orderNumber, number)
+      if (pendingLayouts.get(orderNumber) === number) pendingLayouts.delete(orderNumber)
+    }
+  })
+  return layoutWrites
+}
+
+function onNumberingEdit(event: Event) {
+  const id = (event.target as HTMLElement | null)?.id
+  if (id !== 'footerText' && id !== 'footerPrefix') return
+  const draft = rememberNumbering()
+  if (!draft) return
+  const value = draft.value.trim()
+  if (!value && id !== 'footerText') return
+  const number = value ? `${draft.prefix}-${value}` : ''
+  if (value && !/^(ch|yy|x)-[A-Za-z0-9]{1,64}$/i.test(number)) return
+  pendingLayouts.set(draft.orderNumber, number)
+  if (layoutTimer !== undefined) clearTimeout(layoutTimer)
+  layoutTimer = setTimeout(() => { void persistLayout().catch(reportLayoutError) }, 300)
+}
+
+function removeNumberingListeners() {
+  numberingDocument?.removeEventListener('input', onNumberingEdit)
+  numberingDocument?.removeEventListener('change', onNumberingEdit)
+}
+
+function requestFinish(orderNumber: string) {
+  emit('finish', orderNumber)
+}
+
+watch(() => props.visible, visible => {
+  if (visible === false) void persistLayout().catch(reportLayoutError)
+})
+defineExpose({ lastInjectedOrder, persistLayout })
 const exportStatus = computed(() => {
   const saved = lastExport.value
   if (!saved) return ''
@@ -221,25 +303,16 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
     if (!response.ok) throw new Error(`读取素材失败（HTTP ${response.status}）`)
     const blob = await response.blob()
     if (!blob.size) throw new Error('本地素材文件为空。')
-    if (qiniuDirectory.value) {
-      try {
-        const decoded = await createImageBitmap(blob)
-        decoded.close()
-      } catch {
-        throw new Error('本地素材无法作为图片打开。')
-      }
+    try {
+      const decoded = await createImageBitmap(blob)
+      decoded.close()
+    } catch {
+      throw new Error('本地素材无法作为图片打开。')
     }
     const b64 = await blobToBase64(blob)
 
-    const editingOrder = lastInjectedOrder.value
-    if (editingOrder) {
-      const draft = frame.value?.contentWindow?.__picReadOrderNumbering?.()
-      if (draft?.orderNumber === editingOrder) {
-        numberingDrafts.set(editingOrder, { prefix: draft.prefix, value: draft.value })
-      } else {
-        numberingDrafts.delete(editingOrder)
-      }
-    }
+    rememberNumbering()
+    await persistLayout()
     openEditor()
     status.value = `正在注入「${img.originalName}」…`
 
@@ -332,6 +405,7 @@ async function onMessage(event: MessageEvent) {
     const imageId = data.imageId === undefined ? lastInjectedImageId : data.imageId
     try {
       const saved = await saveProduction(orderNumber, data.b64 ?? '', data.fileName || '成品.png', imageId)
+      if (orderNumber) numberingDrafts.delete(orderNumber)
       lastExport.value = saved
       status.value = ''
       if (orderNumber) {
@@ -350,6 +424,10 @@ async function onMessage(event: MessageEvent) {
 }
 
 function onFrameLoad() {
+  removeNumberingListeners()
+  numberingDocument = frame.value?.contentDocument ?? null
+  numberingDocument?.addEventListener('input', onNumberingEdit)
+  numberingDocument?.addEventListener('change', onNumberingEdit)
   editorReady.value = true
   status.value = '编辑器已就绪：从左侧选择规格「制作」，或在编辑器内粘贴图片。'
 }
@@ -402,6 +480,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  void persistLayout().catch(reportLayoutError)
+  removeNumberingListeners()
   sourcesRequest++
   productionRequests.clear()
   window.removeEventListener('message', onMessage)
@@ -499,6 +579,11 @@ function orderProductions(orderNumber: string): Production[] {
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
         <input v-model="orderSearch" type="search" placeholder="搜索订单号或排版编号" aria-label="搜索订单号或排版编号" autocomplete="off" />
       </div>
+      <nav class="orderFilters" aria-label="按制作状态筛选">
+        <button type="button" :aria-pressed="orderFilter === 'pending'" @click="orderFilter = 'pending'">待制作</button>
+        <button type="button" :aria-pressed="orderFilter === 'completed'" @click="orderFilter = 'completed'">已完成</button>
+        <button type="button" class="historyLink" @click="emit('history')">共享历史</button>
+      </nav>
       <div class="items">
         <div v-for="entry in visibleEntries" :key="entry.summary.id" class="orderBlock">
           <div
@@ -515,7 +600,14 @@ function orderProductions(orderNumber: string): Production[] {
               <div v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</div>
               <div class="stat">{{ entry.images.length }} 图 · {{ entry.summary.taskCount }} 任务</div>
               <div class="stat dim">{{ fmtTime(entry.summary.updatedAt) }}</div>
+              <div v-if="workflowLabel(entry.summary.orderNumber)" class="orderWorkflowLabel" :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">{{ workflowLabel(entry.summary.orderNumber) }}</div>
             </div>
+            <button
+              v-if="finishLabel(entry.summary.orderNumber)"
+              class="miniBtn finishBtn"
+              type="button"
+              @click.stop="requestFinish(entry.summary.orderNumber)"
+            >{{ finishLabel(entry.summary.orderNumber) }}</button>
             <button
               v-if="canDelete"
               class="itemDel"
@@ -611,7 +703,7 @@ function orderProductions(orderNumber: string): Production[] {
               </div>
             </div>
 
-            <div v-if="!entry.images.length" class="noImages">{{ qiniuEnabled ? '等待订单素材。' : '该订单还没有素材。' }}</div>
+            <div v-if="!entry.images.length" class="noImages">该订单还没有素材。</div>
 
             <!-- 成品（制作端回传） -->
             <div v-if="orderProductions(entry.summary.orderNumber).length" class="prodRow">
@@ -635,7 +727,10 @@ function orderProductions(orderNumber: string): Production[] {
         </div>
         <div v-if="!visibleEntries.length && searchTerm" class="empty">没有找到匹配的订单。</div>
         <div v-else-if="!visibleEntries.length" class="empty">
-          暂无订单。<br />{{ qiniuEnabled && store.qiniu?.role === 'production' ? '同步后会显示已接收的订单。' : '在千帆客服里右键买家图片 → 进入排单。' }}
+          <template v-if="orderFilter === 'completed'">本机暂无已完成订单。</template>
+          <template v-else>
+            暂无待制作订单。<br />{{ store.workflow.role === 'production' ? '同步后会显示已接收的订单。' : '在千帆客服里右键买家图片 → 进入排单。' }}
+          </template>
         </div>
       </div>
     </aside>
@@ -645,7 +740,7 @@ function orderProductions(orderNumber: string): Production[] {
       <div class="editorBar">
         <span class="makingFor" v-if="lastInjectedOrder">制作中：订单 {{ lastInjectedOrder }}</span>
         <span class="dim" v-else>从左侧选择规格「制作」开始排版</span>
-        <span class="dim">完成后点击「下载 PNG」保存成品，回传状态见订单。</span>
+        <span class="dim">点击「下载 PNG」保存成品，做完后在订单上点击「制作完毕」。</span>
       </div>
       <div class="editorBox">
         <div v-if="!editorSrc" class="loading">
@@ -1117,6 +1212,28 @@ button.prodThumb {
 button.prodThumb:hover {
   border-color: rgba(91, 140, 255, 0.5);
 }
+.orderFilters {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 7px;
+}
+.orderFilters button {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.orderFilters button:hover { background: var(--bg-card-hover); }
+.orderFilters button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
+.historyLink { margin-left: auto; }
+.orderWorkflowLabel { color: var(--accent); font-size: 11px; }
+.finishBtn { flex: 0 0 auto; white-space: nowrap; }
 .empty {
   padding: 18px;
   color: var(--text-dim);

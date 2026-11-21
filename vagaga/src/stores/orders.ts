@@ -1,6 +1,6 @@
 import { reactive } from 'vue'
 import * as api from '../lib/tauri'
-import type { AppInfo, OrderDetail, OrderSummary, PaidanEvent, QiniuStatus } from '../types'
+import type { AppInfo, OrderDetail, OrderSummary, PaidanEvent, QiniuStatus, WorkflowOrder, WorkflowSettings } from '../types'
 
 interface Toast {
   id: number
@@ -16,7 +16,8 @@ interface State {
   toasts: Toast[]
   loading: boolean
   qiniu: QiniuStatus | null
-  qiniuSettingsChanged: boolean
+  workflow: WorkflowSettings
+  workflowOrders: Record<string, WorkflowOrder>
 }
 
 const state = reactive<State>({
@@ -27,7 +28,8 @@ const state = reactive<State>({
   toasts: [],
   loading: false,
   qiniu: null,
-  qiniuSettingsChanged: false,
+  workflow: { role: 'both', target: null },
+  workflowOrders: {},
 })
 
 let toastSeq = 0
@@ -47,6 +49,19 @@ export async function loadInfo() {
 
 export async function refreshQiniuStatus() {
   state.qiniu = await api.getQiniuStatus()
+}
+
+export async function refreshWorkflowSettings() {
+  state.workflow = await api.workflowSettings()
+}
+
+let workflowRequest = 0
+export async function refreshWorkflowOrders() {
+  const request = ++workflowRequest
+  const orders = await api.workflowOrders()
+  if (request === workflowRequest) {
+    state.workflowOrders = Object.fromEntries(orders.map(order => [order.orderNumber, order]))
+  }
 }
 
 export async function loadOrders(selectId?: string) {
@@ -130,6 +145,7 @@ async function registerEvents(): Promise<() => void> {
   const pollTimer = setInterval(() => {
     void loadOrders().catch(() => {})
     void refreshQiniuStatus().catch(() => {})
+    void refreshWorkflowOrders().catch(() => {})
   }, 5000)
   let stopped = false
   return () => {

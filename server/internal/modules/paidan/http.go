@@ -90,6 +90,9 @@ func newHandler(devices authDevices, repo repository, objects objectStore, maxBy
 			serve(w, r, device)
 		})
 	}
+	if mysql, ok := repo.(mysqlRepository); ok {
+		registerWorkflow(route, h, mysql.db)
+	}
 	route("/device", map[string]endpoint{"GET": h.device})
 	route("/upload-sessions", map[string]endpoint{"POST": h.createSession})
 	route("/upload-sessions/{id}/complete", map[string]endpoint{"POST": h.completeSession})

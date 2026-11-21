@@ -2,8 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
-const props = defineProps<{ view: 'orders' | 'settings' }>()
-const emit = defineEmits<{ change: ['orders' | 'settings'] }>()
+const props = defineProps<{ view: 'orders' | 'settings'; beforeClose: () => Promise<boolean> }>()
+const emit = defineEmits<{ change: ['orders' | 'settings']; upload: []; sync: [] }>()
 
 const win = getCurrentWindow()
 const maximized = ref(false)
@@ -27,8 +27,8 @@ function minimize() {
 function toggleMaximize() {
   void win.toggleMaximize()
 }
-function close() {
-  void win.close()
+async function close() {
+  if (await props.beforeClose()) await win.close()
 }
 </script>
 
@@ -44,6 +44,10 @@ function close() {
         @click="emit('change', tab.key)"
       >{{ tab.label }}</button>
     </nav>
+    <div class="workflowActions" aria-label="订单同步操作">
+      <button type="button" class="workflowBtn" @click="emit('upload')">数据上传</button>
+      <button type="button" class="workflowBtn" @click="emit('sync')">数据同步</button>
+    </div>
     <div class="controls">
       <button class="ctl" title="最小化" @click="minimize">─</button>
       <button class="ctl" :title="maximized ? '还原' : '最大化'" @click="toggleMaximize">{{ maximized ? '❐' : '□' }}</button>
@@ -91,6 +95,22 @@ function close() {
   color: var(--accent);
   font-weight: 600;
 }
+.workflowActions {
+  display: flex;
+  gap: 6px;
+}
+.workflowBtn {
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  padding: 4px 9px;
+  background: var(--bg-card);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.workflowBtn:hover { background: var(--bg-card-hover); }
 .controls {
   margin-left: auto;
   display: flex;

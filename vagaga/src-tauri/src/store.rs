@@ -308,6 +308,7 @@ impl Store {
                 PRIMARY KEY (target, order_number, image_id)
             );",
         )?;
+        crate::workflow_db::init(&conn)?;
         // 旧库迁移：images 表补 thumb_path 列（缩略图路径）
         let has_thumb_column: i64 = conn
             .query_row(
@@ -462,6 +463,32 @@ impl Store {
         quality: Option<CaptureQuality>,
         metadata: Option<&str>,
     ) -> Result<IngestedImage, Box<dyn std::error::Error + Send + Sync>> {
+        self.ingest(order_number, bytes, mime, templates, source, quality, metadata, true)
+    }
+
+    pub(crate) fn ingest_local_capture(
+        &self,
+        order_number: &str,
+        bytes: &[u8],
+        mime: &str,
+        templates: &[(String, i64)],
+        quality: CaptureQuality,
+        metadata: Option<&str>,
+    ) -> Result<IngestedImage, Box<dyn std::error::Error + Send + Sync>> {
+        self.ingest(order_number, bytes, mime, templates, "千帆", Some(quality), metadata, false)
+    }
+
+    fn ingest(
+        &self,
+        order_number: &str,
+        bytes: &[u8],
+        mime: &str,
+        templates: &[(String, i64)],
+        source: &str,
+        quality: Option<CaptureQuality>,
+        metadata: Option<&str>,
+        legacy_sync: bool,
+    ) -> Result<IngestedImage, Box<dyn std::error::Error + Send + Sync>> {
         if bytes.is_empty() {
             return Err("图片字节为空".into());
         }
@@ -543,6 +570,12 @@ impl Store {
             )?;
             if let Some(quality) = quality {
                 qiniu_store::register_capture(&tx, &image_id, order_number, quality)?;
+                if !legacy_sync {
+                    tx.execute(
+                        "UPDATE qiniu_assets SET state='localOnly' WHERE id=?1",
+                        [&image_id],
+                    )?;
+                }
             }
             tx.commit()?;
             Ok(IngestedImage {
