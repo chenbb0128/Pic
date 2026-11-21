@@ -119,6 +119,14 @@ describe('selected portrait lighting controls', () => {
     expect(s.states).toEqual([{ dx: 10 }, { dx: -2 }, { dx: 0 }])
   })
 
+  it('can target imported positions explicitly even when the canvas selection differs', async () => {
+    const s = setup(); s.board.ids = [0, 1]
+    await s.feature.setStrength(200, [2])
+    expect(s.applied).toEqual([{ ids: [2], strength: 200 }])
+    expect(s.states[2]).toHaveProperty('photoLight', 200)
+    expect(s.states[0]).not.toHaveProperty('photoLight')
+  })
+
   it('displays mixed strengths and disables controls without selected photos', () => {
     const s = setup()
     s.states[0].photoLight = 70; s.feature.update()

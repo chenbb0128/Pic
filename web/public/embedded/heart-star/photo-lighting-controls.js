@@ -22,10 +22,10 @@
       }
       range.style.setProperty('--range-progress', `${Number(range.value) / 2}%`);
     }
-    async function run(value) {
+    async function run(value, requestedIds) {
       const strength = Math.max(0, Math.min(200, Math.round(Number(value) || 0))), board = getBoard(), token = board.token;
       if (!board.ready) return;
-      const ids = targets(board); if (!ids.length) return;
+      const ids = (requestedIds || targets(board)).filter(id => board.states[id] && board.photoAt(id)); if (!ids.length) return;
       const ticket = ++request, entries = ids.map(id => ({ id, image: board.photoAt(id), strength: level(board.states[id]) }));
       active = { token, ids }; working = true;
       range.value = String(strength); output.value = strength ? `${strength}%` : '未补光';
