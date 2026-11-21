@@ -158,4 +158,17 @@ describe('selected portrait lighting controls', () => {
     expect(s.applied).toEqual([{ ids: [0, 1], strength: 160 }])
     expect(s.feature.busy()).toBe(false)
   })
+
+  it('cancels an active lighting run without applying partial results', async () => {
+    const s = setup()
+    let release!: () => void
+    s.setProcessor(() => new Promise(resolve => { release = resolve }))
+    const pending = s.feature.setStrength(200)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    s.feature.cancel()
+    release()
+    await pending
+    expect(s.applied).toEqual([])
+    expect(s.feature.busy()).toBe(false)
+  })
 })

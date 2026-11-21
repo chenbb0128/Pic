@@ -41,6 +41,8 @@ function setup(ids: number[]) {
 describe('heart-star selected photo upload', () => {
   it('uses the right preview as the drag target and hides manual lighting controls', () => {
     expect(toolHtml).not.toContain('id="photoLightingField"')
+    expect(toolHtml).toContain('id="cancelPhotoLighting"')
+    expect(toolHtml).toContain('photoLightingEditor?.cancel?.()')
     expect(toolHtml).toContain("previewPanel.addEventListener('drop',onPreviewDrop)")
     expect(toolHtml).toContain('导入后会自动补光')
   })

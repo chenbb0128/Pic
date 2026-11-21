@@ -55,11 +55,18 @@
         if (ticket === request) { working = false; active = null; update(); changed(); }
       }
     }
+    function cancel() {
+      request++;
+      working = false;
+      active = null;
+      update();
+      changed();
+    }
     button.addEventListener('click', () => run(100));
     reset.addEventListener('click', () => run(0));
     range.addEventListener('input', () => run(range.value));
     update();
-    return { update, busy: () => working, setStrength: run };
+    return { update, busy: () => working, setStrength: run, cancel };
   }
   globalThis.HeartStarPhotoLightingControls = { mount };
 })();
