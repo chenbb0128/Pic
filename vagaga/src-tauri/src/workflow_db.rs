@@ -22,7 +22,7 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS workflow_tasks (
              order_number TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
              expected INTEGER NOT NULL, generation INTEGER NOT NULL,
-             manifest TEXT NOT NULL, error TEXT, expected_operation_id TEXT,
+             manifest TEXT NOT NULL, error TEXT, expected_operation_id TEXT, source_files TEXT,
              PRIMARY KEY(order_number, kind)
          );
          CREATE TABLE IF NOT EXISTS workflow_remote_ids (
@@ -46,6 +46,21 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE workflow_tasks ADD COLUMN expected_operation_id TEXT",
         [],
     );
+    let has_source_files = {
+        let mut columns = conn.prepare("PRAGMA table_info(workflow_tasks)")?;
+        let names = columns.query_map([], |row| row.get::<_, String>(1))?;
+        let mut found = false;
+        for name in names {
+            found |= name? == "source_files";
+        }
+        found
+    };
+    if !has_source_files {
+        conn.execute(
+            "ALTER TABLE workflow_tasks ADD COLUMN source_files TEXT",
+            [],
+        )?;
+    }
     conn.execute("UPDATE workflow_orders SET revision=0", [])?;
     conn.execute("UPDATE workflow_tasks SET expected=0", [])?;
     let order = |row: &str| format!("SELECT order_number FROM orders WHERE id={row}.order_id");
@@ -284,15 +299,16 @@ pub(crate) struct Task {
     pub(crate) target: String,
     pub(crate) expected_operation_id: Option<String>,
     pub(crate) generation: i64,
-    pub(crate) manifest: String,
+    pub(crate) payload: String,
+    pub(crate) source_files: Option<String>,
 }
 
 pub(crate) fn task(store: &Store, number: &str, kind: &str) -> rusqlite::Result<Option<Task>> {
     store.conn.lock().unwrap().query_row(
-        "SELECT target, expected_operation_id, generation, manifest FROM workflow_tasks WHERE order_number=?1 AND kind=?2",
+        "SELECT target, expected_operation_id, generation, manifest, source_files FROM workflow_tasks WHERE order_number=?1 AND kind=?2",
         params![number, kind],
         |r| Ok(Task { number: number.into(), kind: kind.into(), target: r.get(0)?,
-            expected_operation_id: r.get(1)?, generation: r.get(2)?, manifest: r.get(3)? }),
+            expected_operation_id: r.get(1)?, generation: r.get(2)?, payload: r.get(3)?, source_files: r.get(4)? }),
     ).optional()
 }
 
@@ -301,15 +317,16 @@ pub(crate) fn insert_task(store: &Store, task: &Task, local_version: &str) -> Re
     let tx = conn.transaction().map_err(error)?;
     verify_version(&tx, &task.number, Some(local_version))?;
     tx.execute(
-        "INSERT INTO workflow_tasks(order_number,kind,target,expected,generation,manifest,expected_operation_id)
-         VALUES (?1,?2,?3,0,?4,?5,?6)",
+        "INSERT INTO workflow_tasks(order_number,kind,target,expected,generation,manifest,expected_operation_id,source_files)
+         VALUES (?1,?2,?3,0,?4,?5,?6,?7)",
         params![
             task.number,
             task.kind,
             task.target,
             task.generation,
-            task.manifest,
+            task.payload,
             task.expected_operation_id,
+            task.source_files,
         ],
     )
     .map_err(error)?;
@@ -360,7 +377,7 @@ pub(crate) fn finish_task(
 pub(crate) fn discard_task(store: &Store, task: &Task) -> rusqlite::Result<()> {
     store.conn.lock().unwrap().execute(
         "DELETE FROM workflow_tasks WHERE order_number=?1 AND kind=?2 AND manifest=?3",
-        params![task.number, task.kind, task.manifest],
+        params![task.number, task.kind, task.payload],
     )?;
     Ok(())
 }
@@ -482,14 +499,14 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
     let mut conn = store.conn.lock().unwrap();
     let tx = conn.transaction().map_err(error)?;
     let current = verify_version(&tx, request.number, request.expected)?;
+    if current.is_some() && has_tasks(&tx, request.number).map_err(error)? {
+        return Err("这笔订单有尚未确认的上传，请先处理待上传操作。".into());
+    }
     let number = request.number.to_owned();
     let copy = |number: &str| format!("{number}~副本-{}", random_hex_pub(6));
     match request.action {
         ImportAction::Replace => {
             if let Some(current) = &current {
-                if has_tasks(&tx, &number).map_err(error)? {
-                    return Err("这笔订单有尚未确认的上传，请先处理待上传操作。".into());
-                }
                 let preserved = copy(&number);
                 tx.execute(
                     "UPDATE orders SET order_number=?2 WHERE id=?1",
@@ -694,15 +711,26 @@ mod tests {
                 target: "nas".into(),
                 expected_operation_id: None,
                 generation: local.generation,
-                manifest: "{}".into(),
+                payload: "{}".into(),
+                source_files: None,
             },
             &local.version(),
         )
         .unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("ALTER TABLE workflow_tasks DROP COLUMN source_files", [])
+            .unwrap();
         drop(store);
         let store = Store::open(directory.path()).unwrap();
         assert!(order_state(&store, "A01").unwrap().unwrap().local_completed);
-        assert!(task(&store, "A01", "finish").unwrap().is_some());
+        assert!(task(&store, "A01", "finish")
+            .unwrap()
+            .unwrap()
+            .source_files
+            .is_none());
         let result = import(
             &store,
             Import {

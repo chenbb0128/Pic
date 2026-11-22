@@ -63,11 +63,12 @@ func manifestETag(data []byte) string {
 
 func registerWorkflow(route func(string, map[string]endpoint), h handler, db *sql.DB) {
 	api := workflowAPI{handler: h, db: db}
-	route("/workflow-v2/blobs/{id}", map[string]endpoint{"POST": api.stage, "GET": api.blobURL})
-	route("/workflow-v2/blobs/{id}/verify", map[string]endpoint{"POST": api.verify})
+	// Keep existing objects readable during upgrades. Only the new image routes
+	// can write to the bucket.
+	route("/workflow-v2/blobs/{id}", map[string]endpoint{"GET": api.blobURL})
 	for _, collection := range []string{"orders", "backups"} {
 		route("/workflow-v2/"+collection, map[string]endpoint{"GET": api.list(collection)})
-		route("/workflow-v2/"+collection+"/{id}", map[string]endpoint{"GET": api.latest(collection), "PUT": api.commit(collection)})
+		route("/workflow-v2/"+collection+"/{id}", map[string]endpoint{"GET": api.latest(collection)})
 	}
 }
 

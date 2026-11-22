@@ -66,6 +66,7 @@ type fakeObjectStore struct {
 	object  objectInfo
 	statErr error
 	key     string
+	statKey string
 }
 
 func (s *fakeObjectStore) upload(key string, _ uploadInput) (string, string) {
@@ -73,7 +74,8 @@ func (s *fakeObjectStore) upload(key string, _ uploadInput) (string, string) {
 	return "https://upload.example.com", "test-upload-token"
 }
 
-func (s *fakeObjectStore) stat(_ context.Context, _ string) (objectInfo, error) {
+func (s *fakeObjectStore) stat(_ context.Context, key string) (objectInfo, error) {
+	s.statKey = key
 	return s.object, s.statErr
 }
 
@@ -125,6 +127,51 @@ func TestDeviceAuthenticationAndRoles(t *testing.T) {
 	}
 	apiRequest(t, handler, "POST", "/upload-sessions", testToken, validUploadJSON("7"), 403)
 	apiRequest(t, handler, "DELETE", "/orders/7", testToken, `{"expectedVersion":1,"requestId":"`+requestID+`"}`, 403)
+}
+
+func TestSharedMaterialsUseWorkspaceScopedImageKeys(t *testing.T) {
+	objects := &fakeObjectStore{object: objectInfo{Size: 7}}
+	handler := testHandler(t, roleProduction, &fakeRepository{}, objects)
+	original := "/shared-materials/original/" + originalID + ".png"
+	production := "/shared-materials/production/" + originalID + ".png"
+	apiRequest(t, handler, "POST", original, testToken, `{"bytes":7}`, 403)
+	apiRequest(t, handler, "POST", production+".json", testToken, `{"bytes":7}`, 400)
+	upload := apiRequest(t, handler, "POST", production, testToken, `{"bytes":7}`, 200)
+	if upload["key"] != "vagaga/materials/space-a/production/"+originalID+".png" {
+		t.Fatalf("unexpected object path: %v", upload["key"])
+	}
+	download := apiRequest(t, handler, "GET", original, testToken, "", 200)
+	if download["bytes"] != float64(7) || download["url"] != "https://download.example.com" {
+		t.Fatalf("unexpected download response: %+v", download)
+	}
+}
+
+func TestLegacySharedOrderRoutesAreReadOnly(t *testing.T) {
+	handler := testHandler(t, roleBoth, mysqlRepository{}, nil)
+	apiRequest(t, handler, "POST", "/workflow-v2/blobs/"+testSHA, testToken, `{}`, 405)
+	apiRequest(t, handler, "PUT", "/workflow-v2/orders/"+testSHA, testToken, `{}`, 405)
+}
+
+func TestSharedMaterialsUseOrderNumberInObjectKeys(t *testing.T) {
+	objects := &fakeObjectStore{object: objectInfo{Size: 7}}
+	handler := testHandler(t, roleBoth, &fakeRepository{}, objects)
+	for _, order := range []string{"001234", "~QS9C"} {
+		for _, kind := range []string{"original", "production"} {
+			name := originalID + ".png"
+			endpoint := "/shared-materials/" + order + "/" + kind + "/" + name
+			key := "vagaga/materials/space-a/" + order + "/" + kind + "/" + name
+			upload := apiRequest(t, handler, "POST", endpoint, testToken, `{"bytes":7}`, 200)
+			if upload["key"] != key {
+				t.Fatalf("unexpected upload key: %v", upload["key"])
+			}
+			apiRequest(t, handler, "GET", endpoint, testToken, "", 200)
+			if objects.statKey != key {
+				t.Fatalf("unexpected download key: %s", objects.statKey)
+			}
+		}
+	}
+	apiRequest(t, handler, "GET", "/shared-materials/a%2Fb/original/"+originalID+".png", testToken, "", 400)
+	apiRequest(t, handler, "GET", "/shared-materials/%2e%2e/original/"+originalID+".png", testToken, "", 400)
 }
 
 func TestDeviceReportsDatabaseUnavailableAfterAuthentication(t *testing.T) {

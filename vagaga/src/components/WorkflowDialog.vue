@@ -43,11 +43,18 @@ function reportErrors(errors: string[]) {
   if (errors.length) toast('error', errors.join('；'))
 }
 
+function showConflicts(rows: WorkflowPreview[]) {
+  conflicts.value = rows
+  showPreview(rows.length === 1 ? rows[0] : null)
+  if (rows.length && !dialog.value?.open) dialog.value?.showModal()
+}
+
 async function upload(orderNumbers: string[]) {
   if (!orderNumbers.length) return []
   const result = await run('upload', async () => {
     const result = await workflowUpload(orderNumbers)
-    await refresh()
+    showConflicts(result.conflicts)
+    await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
     if (result.updated) toast('ok', `已上传 ${result.updated} 个订单。`)
     reportErrors(result.errors)
     return result
@@ -58,6 +65,7 @@ async function upload(orderNumbers: string[]) {
 async function sync() {
   await run('sync', async () => {
     const result = await workflowSync(props.activeOrder)
+    showConflicts(result.conflicts)
     await refresh()
     reportErrors(result.errors)
     if (!result.errors.length || result.updated || result.completed) {
@@ -65,9 +73,6 @@ async function sync() {
         ? `已同步 ${result.updated} 个订单，更新 ${result.completed} 条完成状态。`
         : result.conflicts.length ? '有订单需要确认。' : '没有新数据。')
     }
-    conflicts.value = result.conflicts
-    showPreview(conflicts.value.length === 1 ? conflicts.value[0] : null)
-    if (conflicts.value.length && !dialog.value?.open) dialog.value?.showModal()
   })
 }
 
@@ -97,10 +102,13 @@ async function replace() {
 async function finish(orderNumber: string) {
   await run('finish', async () => {
     const result = await workflowFinish(orderNumber)
-    await refresh()
+    showConflicts(result.conflicts)
+    await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
     const order = store.workflowOrders[orderNumber]
     if (result.errors.length) {
       reportErrors(result.errors)
+    } else if (result.conflicts.length) {
+      return
     } else if (order?.pendingOperation === 'finish' || (order?.localCompleted && order.sharedState === 'pending')) {
       toast('ok', '已标记完成，等待交付。')
     } else if (order?.sharedState === 'completed') {
@@ -117,11 +125,11 @@ defineExpose({ upload, sync, finish, operation })
 <template>
   <dialog ref="dialog" class="workflowDialog" aria-labelledby="workflow-title" @cancel.prevent="close">
     <header class="dialogHead">
-      <h2 id="workflow-title">同步冲突</h2>
+      <h2 id="workflow-title">订单内容有冲突</h2>
       <button type="button" class="closeBtn" aria-label="关闭" :disabled="!!operation" @click="close">×</button>
     </header>
     <div class="dialogBody" :aria-busy="!!operation">
-      <p class="hint">以下订单有本机修改或正在编辑，已保留本机内容。</p>
+      <p class="hint">请查看本机与共享订单的差异，再选择如何处理。</p>
       <div v-if="!preview" class="rowList" aria-label="等待确认的订单">
         <button v-for="row in conflicts" :key="row.reference" class="previewRow" type="button" :disabled="!!operation" @click="showPreview(row)">
           <span>{{ row.orderNumber }}</span><span>查看差异 →</span>

@@ -1,16 +1,20 @@
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+use std::time::SystemTime;
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tauri::State;
 
+use crate::mysql::{MyClient, OrderIndex, SharedOrder};
 use crate::store::{random_hex_pub, Store};
 use crate::workflow_db::{self as db, ImportAction, ImportedAsset, OrderState, Task};
 use crate::workflow_storage::Backend;
 use crate::AppState;
 
-const MAX_ASSET_BYTES: u64 = 104_857_600;
+pub(crate) const MAX_ASSET_BYTES: u64 = 104_857_600;
 
 #[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -48,7 +52,7 @@ struct Asset {
     id: String,
     kind: AssetKind,
     name: String,
-    sha256: String,
+    object_name: String,
     bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     image_id: Option<String>,
@@ -66,15 +70,20 @@ impl Asset {
     fn production(&self) -> bool {
         matches!(self.kind, AssetKind::Production)
     }
+
+    fn folder(&self) -> &'static str {
+        if self.production() {
+            "production"
+        } else {
+            "original"
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Manifest {
-    schema_version: u32,
+struct OrderData {
     order_number: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    revision: Option<u64>,
     operation_id: String,
     state: SharedState,
     metadata: Option<serde_json::Map<String, serde_json::Value>>,
@@ -82,45 +91,71 @@ struct Manifest {
     updated_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     completed_at: Option<String>,
-    local_completed: bool,
 }
 
-impl Manifest {
-    fn mysql_order(&self) -> crate::mysql::SharedOrder {
-        crate::mysql::SharedOrder {
+impl OrderData {
+    fn record(&self, payload: String) -> SharedOrder {
+        SharedOrder {
             number: self.order_number.clone(),
-            revision: self.revision.unwrap_or(0),
             operation_id: self.operation_id.clone(),
-            metadata: self.metadata.clone().map(serde_json::Value::Object),
+            payload,
             completed: self.state == SharedState::Completed,
         }
     }
 
-    fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let manifest: Self = serde_json::from_slice(bytes).map_err(display)?;
-        if manifest.schema_version != 1
-            || manifest.order_number.trim().is_empty()
-            || manifest.order_number.len() > 256
-            || !hex_id(&manifest.operation_id, 32)
+    fn from_record(record: SharedOrder) -> Result<Self, String> {
+        let order = Self::parse(record.payload.as_bytes())?;
+        if order.order_number != record.number
+            || order.operation_id != record.operation_id
+            || (order.state == SharedState::Completed) != record.completed
         {
-            return Err("共享订单清单无效或版本不兼容。".into());
+            return Err("共享数据库中的订单记录不一致。".into());
         }
+        Ok(order)
+    }
+
+    fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let order: Self = serde_json::from_slice(bytes).map_err(display)?;
+        if order.order_number.trim().is_empty()
+            || order.order_number.len() > 256
+            || !hex_id(&order.operation_id, 32)
+        {
+            return Err("共享数据库中的订单信息无效。".into());
+        }
+        let order_directory = order_key_segment(&order.order_number);
         let mut ids = std::collections::HashSet::new();
-        if manifest.assets.iter().any(|asset| {
-            !hex_id(&asset.sha256, 64)
-                || asset.bytes == 0
+        if order.assets.iter().any(|asset| {
+            let filename = match asset.object_name.split_once('/') {
+                Some((directory, filename)) if directory == order_directory => filename,
+                Some(_) => return true,
+                None => asset.object_name.as_str(),
+            };
+            !filename.split_once('.').is_some_and(|(id, ext)| {
+                hex_id(id, 32) && crate::workflow_qiniu::image_mime(ext).is_some()
+            }) || asset.bytes == 0
                 || asset.bytes > MAX_ASSET_BYTES
                 || !hex_id(&asset.id, 32)
                 || !ids.insert(asset.id.as_str())
         }) {
             return Err("共享订单包含无效或重复的素材记录。".into());
         }
-        Ok(manifest)
+        Ok(order)
     }
 }
 
-fn hash(value: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Sha256::digest(value.as_ref()))
+fn order_key_segment(number: &str) -> String {
+    // Standard order numbers stay readable. Escape every other form as one
+    // reversible segment so it cannot add folders or collide with a literal ID.
+    if !number.is_empty()
+        && !matches!(number, "." | "..")
+        && number
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        number.to_owned()
+    } else {
+        format!("~{}", URL_SAFE_NO_PAD.encode(number))
+    }
 }
 
 fn hex_id(value: &str, size: usize) -> bool {
@@ -134,8 +169,8 @@ fn display(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-fn outbox_file(root: &Path, operation: &str, digest: &str) -> PathBuf {
-    root.join("workflow-outbox").join(operation).join(digest)
+fn outbox_file(root: &Path, operation: &str, asset_id: &str) -> PathBuf {
+    root.join("workflow-outbox").join(operation).join(asset_id)
 }
 
 fn file_name(path: &Path, fallback: &str) -> String {
@@ -145,29 +180,109 @@ fn file_name(path: &Path, fallback: &str) -> String {
         .to_owned()
 }
 
-fn stage_asset(root: &Path, operation: &str, asset: &mut Asset, from: &Path) -> Result<(), String> {
-    let size = std::fs::metadata(from)
-        .map_err(|err| format!("读取 {} 失败：{err}", asset.name))?
-        .len();
-    if size == 0 || size > MAX_ASSET_BYTES {
+#[derive(Deserialize, Serialize)]
+struct SourceFile {
+    path: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
+}
+
+type SourceFiles = BTreeMap<String, SourceFile>;
+
+impl SourceFile {
+    fn open(&self, root: &Path) -> Result<File, String> {
+        if self
+            .path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err("本机归档记录包含无效路径。".into());
+        }
+        let file = File::open(archive_path(root, &root.join(&self.path))?).map_err(display)?;
+        self.check(&file)?;
+        Ok(file)
+    }
+
+    fn check(&self, file: &File) -> Result<(), String> {
+        let metadata = file.metadata().map_err(display)?;
+        if metadata.len() != self.bytes || metadata.modified().map_err(display)? != self.modified {
+            return Err("本机归档文件已变化。".into());
+        }
+        Ok(())
+    }
+
+    fn read(&self, root: &Path, size: u64) -> Result<Vec<u8>, String> {
+        if self.bytes != size {
+            return Err("本机归档记录与待上传图片不一致。".into());
+        }
+        let mut file = self.open(root)?;
+        let bytes = read_image_bytes(&mut file, size)?;
+        self.check(&file)?;
+        Ok(bytes)
+    }
+}
+
+fn archive_path(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let path = path.canonicalize().map_err(display)?;
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| "图片路径超出本机数据目录。")?;
+    if !matches!(relative.components().next(), Some(Component::Normal(folder))
+        if folder == "images" || folder == "productions")
+    {
+        return Err("图片不在本机归档目录中。".into());
+    }
+    Ok(path)
+}
+
+fn read_image_bytes(file: &mut File, size: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(size as usize);
+    file.take(size + 1)
+        .read_to_end(&mut bytes)
+        .map_err(display)?;
+    if bytes.len() as u64 != size {
+        return Err("待上传图片文件大小已变化。".into());
+    }
+    Ok(bytes)
+}
+
+fn record_asset(
+    root: &Path,
+    asset: &mut Asset,
+    from: &Path,
+    order_directory: Option<&str>,
+) -> Result<SourceFile, String> {
+    let path = archive_path(root, from)?;
+    let mut file = File::open(&path).map_err(display)?;
+    let metadata = file.metadata().map_err(display)?;
+    let size = metadata.len();
+    if !metadata.is_file() || size == 0 || size > MAX_ASSET_BYTES {
         return Err(format!("文件大小超限或为空：{}", asset.name));
     }
-    let bytes = std::fs::read(from).map_err(display)?;
-    if bytes.len() as u64 != size {
-        return Err(format!("文件在读取期间发生变化：{}", asset.name));
-    }
+    let source = SourceFile {
+        path: path.strip_prefix(root).map_err(display)?.into(),
+        bytes: size,
+        modified: metadata.modified().map_err(display)?,
+    };
+    let mut header = Vec::new();
+    (&mut file)
+        .take(64)
+        .read_to_end(&mut header)
+        .map_err(display)?;
+    source.check(&file)?;
+    let format = image::guess_format(&header).map_err(display)?;
+    let extension = format
+        .extensions_str()
+        .iter()
+        .find(|extension| crate::workflow_qiniu::image_mime(extension).is_some())
+        .ok_or_else(|| format!("无法共享此图片格式：{}", asset.name))?;
     asset.bytes = size;
-    asset.sha256 = hash(&bytes);
-    let destination = outbox_file(root, operation, &asset.sha256);
-    let parent = destination.parent().expect("outbox asset directory");
-    std::fs::create_dir_all(parent).map_err(display)?;
-    if !destination.exists() {
-        let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(display)?;
-        temporary.write_all(&bytes).map_err(display)?;
-        temporary.as_file().sync_all().map_err(display)?;
-        temporary.persist_noclobber(destination).map_err(display)?;
-    }
-    Ok(())
+    let name = format!("{}.{extension}", random_hex_pub(16));
+    asset.object_name = match order_directory {
+        Some(directory) => format!("{directory}/{name}"),
+        None => name,
+    };
+    Ok(source)
 }
 
 fn snapshot(
@@ -175,9 +290,11 @@ fn snapshot(
     root: &Path,
     number: &str,
     kind: &str,
-    include_remote_revision: bool,
+    previous: Option<&OrderData>,
+    use_order_directory: bool,
     operation: &str,
-) -> Result<Manifest, String> {
+) -> Result<(OrderData, SourceFiles), String> {
+    let root = root.canonicalize().map_err(display)?;
     let detail = store
         .get_order_by_number(number)
         .map_err(display)?
@@ -186,6 +303,8 @@ fn snapshot(
         .map_err(display)?
         .ok_or("订单不存在。")?;
     let mut assets = Vec::new();
+    let mut sources = SourceFiles::new();
+    let order_directory = use_order_directory.then(|| order_key_segment(number));
     for image in detail.images {
         let quality = store
             .qiniu_asset_state(&image.id)
@@ -202,7 +321,7 @@ fn snapshot(
             id: db::remote_id(store, &image.id).map_err(display)?,
             kind: AssetKind::Original,
             name: image.original_name,
-            sha256: String::new(),
+            object_name: String::new(),
             bytes: 0,
             image_id: None,
             width: u32::try_from(image.width).ok(),
@@ -217,7 +336,24 @@ fn snapshot(
                 })
                 .collect(),
         };
-        stage_asset(root, operation, &mut asset, Path::new(&image.file_path))?;
+        if let Some(stored) = previous.and_then(|order| {
+            order
+                .assets
+                .iter()
+                .find(|candidate| candidate.id == asset.id && !candidate.production())
+        }) {
+            asset.object_name.clone_from(&stored.object_name);
+            asset.bytes = stored.bytes;
+        } else {
+            let source = record_asset(
+                &root,
+                &mut asset,
+                Path::new(&image.file_path),
+                order_directory.as_deref(),
+            )
+            .map_err(|error| format!("读取 {} 失败：{error}", asset.name))?;
+            sources.insert(asset.id.clone(), source);
+        }
         assets.push(asset);
     }
     if kind != "publish" {
@@ -235,7 +371,7 @@ fn snapshot(
                 id,
                 kind: AssetKind::Production,
                 name,
-                sha256: String::new(),
+                object_name: String::new(),
                 bytes: 0,
                 image_id: product
                     .image_id
@@ -255,7 +391,9 @@ fn snapshot(
             }) {
                 asset.image_id = None;
             }
-            stage_asset(root, operation, &mut asset, path)?;
+            let source = record_asset(&root, &mut asset, path, order_directory.as_deref())
+                .map_err(|error| format!("读取 {} 失败：{error}", asset.name))?;
+            sources.insert(asset.id.clone(), source);
             assets.push(asset);
         }
     }
@@ -266,13 +404,8 @@ fn snapshot(
     let is_completed = state.local_completed || state.shared_state.as_deref() == Some("completed");
     let completed = kind == "finish" || (kind == "legacy" && is_completed);
     let now = crate::store::now();
-    Ok(Manifest {
-        schema_version: 1,
+    let order = OrderData {
         order_number: number.into(),
-        // This is a remote protocol timestamp for MySQL/七牛 compatibility,
-        // not a value persisted in the local workflow database.
-        revision: include_remote_revision
-            .then(|| chrono::Utc::now().timestamp_millis().max(1) as u64),
         operation_id: operation.into(),
         state: if completed {
             SharedState::Completed
@@ -283,8 +416,8 @@ fn snapshot(
         assets,
         updated_at: now.clone(),
         completed_at: completed.then_some(now),
-        local_completed: kind == "finish" || is_completed,
-    })
+    };
+    Ok((order, sources))
 }
 
 #[derive(Serialize)]
@@ -313,14 +446,14 @@ pub(crate) struct Settings {
     target: Option<String>,
 }
 
-fn preview(store: &Store, manifest: &Manifest, reference: String) -> Result<Preview, String> {
-    let local = db::order_state(store, &manifest.order_number).map_err(display)?;
+fn preview(store: &Store, order: &OrderData, reference: String) -> Result<Preview, String> {
+    let local = db::order_state(store, &order.order_number).map_err(display)?;
     let current_metadata = store
-        .order_metadata_by_number(&manifest.order_number)
+        .order_metadata_by_number(&order.order_number)
         .map_err(display)?;
     let current = db::metadata(current_metadata.as_deref());
     let empty = serde_json::Map::new();
-    let incoming = manifest.metadata.as_ref().unwrap_or(&empty);
+    let incoming = order.metadata.as_ref().unwrap_or(&empty);
     let mut changes = Vec::new();
     for (key, label) in [
         ("layoutNumber", "排版编号"),
@@ -339,22 +472,36 @@ fn preview(store: &Store, manifest: &Manifest, reference: String) -> Result<Prev
             changes.push(format!("{label}：{} → {}", text(&current), text(incoming)));
         }
     }
-    let originals = manifest
+    let originals = order
         .assets
         .iter()
         .filter(|asset| !asset.production())
         .count();
-    let products = manifest.assets.len() - originals;
+    let products = order.assets.len() - originals;
     changes.push(format!(
         "远端含 {originals} 张素材、{products} 个成品，使用共享内容会更新本机素材。"
     ));
     Ok(Preview {
         reference,
-        order_number: manifest.order_number.clone(),
-        updated_at: manifest.updated_at.clone(),
+        order_number: order.order_number.clone(),
+        updated_at: order.updated_at.clone(),
         local_version: local.as_ref().map(OrderState::version),
         changes,
     })
+}
+
+fn shared_conflict(
+    store: &Store,
+    target: &str,
+    current: Option<&OrderData>,
+) -> Result<Preview, String> {
+    let current = current.ok_or("共享订单已不存在，本机订单和素材已保留。")?;
+    if current.state == SharedState::Completed {
+        return Err("共享订单已标记完成，本机订单和素材已保留。".into());
+    }
+    let reference = serde_json::to_string(&(target, &current.order_number, &current.operation_id))
+        .map_err(display)?;
+    preview(store, current, reference)
 }
 
 fn selected(state: &AppState) -> Result<Backend, String> {
@@ -396,98 +543,180 @@ pub(crate) fn workflow_set_layout(
     db::set_layout(&state.store, &order_number, &number)
 }
 
+async fn shared_database(root: &Path) -> Result<OrderIndex, String> {
+    let config = crate::mysql::load_config(root);
+    if !config.enabled {
+        return Err("请先在设置中启用共享数据库（MySQL）。".into());
+    }
+    if !config.valid() {
+        return Err("请填写完整的共享数据库配置。".into());
+    }
+    MyClient::new(&config).order_index().await
+}
+
 async fn run_task(
     state: &AppState,
     backend: &Backend,
+    index: &mut OrderIndex,
     task: &Task,
-    checked_capability: bool,
-) -> Result<(), String> {
-    let result = run_task_attempt(state, backend, task, checked_capability).await;
+) -> Result<Option<Preview>, String> {
+    let order = OrderData::parse(task.payload.as_bytes())?;
+    let mut result = run_task_attempt(state, backend, index, task, &order).await;
     if let Err(error) = &result {
-        if let Some(reconnected) = backend.reconnect_smb_after(error)? {
-            return run_task_attempt(state, &reconnected, task, checked_capability).await;
+        if let Ok(Some(reconnected)) = backend.reconnect_smb_after(error) {
+            result = run_task_attempt(state, &reconnected, index, task, &order).await;
         }
     }
-    result
-}
-
-async fn run_task_attempt(
-    state: &AppState,
-    backend: &Backend,
-    task: &Task,
-    checked_capability: bool,
-) -> Result<(), String> {
-    let manifest = Manifest::parse(task.manifest.as_bytes())?;
-    let key = backend.key_for_order(&task.number)?;
-    let result: Result<bool, String> = async {
-        if let Some(bytes) = backend.latest(&key).await? {
-            let latest = Manifest::parse(&bytes)?;
-            if latest.state == SharedState::Completed {
-                return Ok(false);
-            }
-            if latest.operation_id != manifest.operation_id
-                && task.expected_operation_id.as_deref() != Some(latest.operation_id.as_str())
-            {
-                return Ok(false);
-            }
-        }
-        if task.expected_operation_id.is_none() && !checked_capability {
-            check_capability(backend).await?;
-        }
-        for asset in &manifest.assets {
-            let bytes = tokio::fs::read(outbox_file(
-                &state.data_root,
-                &manifest.operation_id,
-                &asset.sha256,
-            ))
-            .await
-            .map_err(display)?;
-            if bytes.len() as u64 != asset.bytes || hash(&bytes) != asset.sha256 {
-                return Err("待上传文件与清单不一致。".into());
-            }
-            backend.put_blob(&asset.sha256, bytes).await?;
-        }
-        backend
-            .commit(
-                &key,
-                task.expected_operation_id.as_deref(),
-                &manifest.operation_id,
-                task.manifest.as_bytes().to_vec(),
-            )
-            .await
-    }
-    .await;
-    let applied = match result {
-        Ok(applied) => applied,
+    let result = match result {
+        Ok(result) => result,
         Err(error) => {
             db::fail_task(&state.store, task, &error).map_err(display)?;
             return Err(error);
         }
     };
-    if applied {
-        db::finish_task(
+    match &result {
+        TaskResult::Applied => db::finish_task(
             &state.store,
             task,
-            manifest.state.as_str(),
-            &manifest.operation_id,
+            order.state.as_str(),
+            &order.operation_id,
         )
-        .map_err(display)?;
-    } else {
-        db::discard_task(&state.store, task).map_err(display)?;
+        .map_err(display)?,
+        _ => db::discard_task(&state.store, task).map_err(display)?,
     }
-    clear_outbox(&state.data_root, &manifest.operation_id).await;
-    if applied {
-        Ok(())
-    } else {
-        Err("共享订单内容已变化。请先同步，成品和本机修改会保留。".into())
+    if task.source_files.is_none() {
+        clear_outbox(&state.data_root, &order.operation_id).await;
+    }
+    match result {
+        TaskResult::Applied => Ok(None),
+        TaskResult::Changed(current) => {
+            shared_conflict(&state.store, &task.target, current.as_ref()).map(Some)
+        }
+        TaskResult::SourceChanged(name, error) => Err(format!(
+            "无法读取本机归档「{name}」：{error} 请检查素材后重新操作。"
+        )),
     }
 }
 
-async fn check_capability(backend: &Backend) -> Result<(), String> {
-    backend
-        .test()
-        .await
-        .map_err(|error| format!("共享存储未通过多人写入测试：{error}"))
+enum TaskResult {
+    Applied,
+    Changed(Option<OrderData>),
+    SourceChanged(String, String),
+}
+
+fn check_remote(
+    task: &Task,
+    order: &OrderData,
+    current: Option<OrderData>,
+) -> Result<Option<OrderData>, TaskResult> {
+    if current
+        .as_ref()
+        .is_some_and(|row| row.operation_id == order.operation_id)
+    {
+        Err(TaskResult::Applied)
+    } else if !current_matches(current.as_ref(), task.expected_operation_id.as_deref()) {
+        Err(TaskResult::Changed(current))
+    } else {
+        Ok(current)
+    }
+}
+
+async fn remote_order(
+    index: &mut OrderIndex,
+    target: &str,
+    number: &str,
+) -> Result<Option<OrderData>, String> {
+    index
+        .get(target, number)
+        .await?
+        .map(OrderData::from_record)
+        .transpose()
+}
+
+async fn run_task_attempt(
+    state: &AppState,
+    backend: &Backend,
+    index: &mut OrderIndex,
+    task: &Task,
+    order: &OrderData,
+) -> Result<TaskResult, String> {
+    let current = remote_order(index, &task.target, &task.number).await?;
+    let current = match check_remote(task, order, current) {
+        Ok(current) => current,
+        Err(result) => return Ok(result),
+    };
+    let mut sources: Option<SourceFiles> = task
+        .source_files
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(display)?;
+    for asset in &order.assets {
+        if current.as_ref().is_some_and(|row| {
+            row.assets
+                .iter()
+                .any(|saved| saved.id == asset.id && saved.object_name == asset.object_name)
+        }) {
+            continue;
+        }
+        let bytes = if let Some(sources) = &mut sources {
+            let root = state.data_root.clone();
+            let source = sources.remove(&asset.id);
+            let size = asset.bytes;
+            let read = tokio::task::spawn_blocking(move || {
+                let source = source.ok_or("缺少本机归档记录。")?;
+                source.read(&root.canonicalize().map_err(display)?, size)
+            })
+            .await
+            .map_err(display)?;
+            match read {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let current = remote_order(index, &task.target, &task.number).await?;
+                    return Ok(match check_remote(task, order, current) {
+                        Ok(_) => TaskResult::SourceChanged(asset.name.clone(), error),
+                        Err(result) => result,
+                    });
+                }
+            }
+        } else {
+            let path = outbox_file(&state.data_root, &order.operation_id, &asset.id);
+            let size = asset.bytes;
+            tokio::task::spawn_blocking(move || {
+                let mut file = File::open(path).map_err(display)?;
+                read_image_bytes(&mut file, size)
+            })
+            .await
+            .map_err(display)??
+        };
+        backend
+            .put_image(asset.folder(), &asset.object_name, bytes)
+            .await?;
+    }
+    if index
+        .write(
+            &task.target,
+            task.expected_operation_id.as_deref(),
+            &order.record(task.payload.clone()),
+        )
+        .await?
+    {
+        return Ok(TaskResult::Applied);
+    }
+    let current = remote_order(index, &task.target, &task.number).await?;
+    match check_remote(task, order, current) {
+        Ok(_) => Err("暂时无法确认共享写入结果，请重试。".into()),
+        Err(result) => Ok(result),
+    }
+}
+
+fn current_matches(current: Option<&OrderData>, expected: Option<&str>) -> bool {
+    match current {
+        Some(order) => {
+            order.state == SharedState::Pending && expected == Some(order.operation_id.as_str())
+        }
+        None => expected.is_none(),
+    }
 }
 
 async fn clear_outbox(root: &Path, operation: &str) {
@@ -500,83 +729,68 @@ async fn clear_outbox(root: &Path, operation: &str) {
     }
 }
 
-async fn upload_one(state: &AppState, number: &str, kind: &str) -> Result<Option<String>, String> {
+async fn upload_one(
+    state: &AppState,
+    index: &mut OrderIndex,
+    number: &str,
+    kind: &str,
+) -> Result<Option<Preview>, String> {
     let local = db::order_state(&state.store, number)
         .map_err(display)?
         .ok_or("订单不存在。")?;
     if let Some(task) = db::task(&state.store, number, kind).map_err(display)? {
-        verify_provider_role(&state.store, &task.target, kind)?;
-        run_bound_task(state, &task).await?;
-        return Ok(publish_mysql(state, &task).await.err());
+        if OrderData::parse(task.payload.as_bytes()).is_ok() {
+            verify_provider_role(&state.store, &task.target, kind)?;
+            let backend = Backend::bound(&state.store, &state.data_root, &task.target)?;
+            return run_task(state, &backend, index, &task).await;
+        }
+        // Rebuild an old queued upload from its local originals.
+        db::discard_task(&state.store, &task).map_err(display)?;
     }
     if kind == "publish"
-        && (local.local_completed || local.shared_state.as_deref() == Some("completed"))
+        && (local.local_completed
+            || local.shared_state.as_deref() == Some("completed")
+            || db::task(&state.store, number, "finish")
+                .map_err(display)?
+                .is_some())
     {
         return Err("这笔订单已标记完成。".into());
     }
-    let fresh_backend = if local.target.is_none() {
-        Some(selected(state)?)
-    } else {
-        None
+    let backend = match local.target.as_deref() {
+        Some(target) => Backend::bound(&state.store, &state.data_root, target)?,
+        None => selected(state)?,
     };
-    let target = fresh_backend
-        .as_ref()
-        .map(Backend::target)
-        .or_else(|| local.target.clone())
-        .ok_or("请先配置共享存储。")?;
+    let target = backend.target();
     verify_provider_role(&state.store, &target, kind)?;
-    let checked_capability = kind == "publish" && fresh_backend.is_some();
-    if let Some(backend) = fresh_backend.as_ref().filter(|_| checked_capability) {
-        check_capability(backend).await?;
+    let previous = remote_order(index, &target, number).await?;
+    if kind == "finish" && previous.is_none() {
+        return Err("共享数据库里没有这笔订单，请在排单端重新上传后再交付。".into());
+    }
+    let expected = local.remote_operation_id.as_deref();
+    if !current_matches(previous.as_ref(), expected) {
+        return shared_conflict(&state.store, &target, previous.as_ref()).map(Some);
     }
     let operation = random_hex_pub(16);
-    let stage = || -> Result<Task, String> {
-        let manifest = snapshot(
-            &state.store,
-            &state.data_root,
-            number,
-            kind,
-            target.starts_with("qiniu:"),
-            &operation,
-        )?;
-        let task = Task {
-            number: number.into(),
-            target,
-            kind: kind.into(),
-            expected_operation_id: local.remote_operation_id.clone(),
-            generation: local.generation,
-            manifest: serde_json::to_string(&manifest).map_err(display)?,
-        };
-        db::insert_task(&state.store, &task, &local.version())?;
-        Ok(task)
+    let (order, sources) = snapshot(
+        &state.store,
+        &state.data_root,
+        number,
+        kind,
+        previous.as_ref(),
+        backend.uses_order_directory(),
+        &operation,
+    )?;
+    let task = Task {
+        number: number.into(),
+        target,
+        kind: kind.into(),
+        expected_operation_id: expected.map(str::to_owned),
+        generation: local.generation,
+        payload: serde_json::to_string(&order).map_err(display)?,
+        source_files: Some(serde_json::to_string(&sources).map_err(display)?),
     };
-    let task = match stage() {
-        Ok(task) => task,
-        Err(error) => {
-            clear_outbox(&state.data_root, &operation).await;
-            return Err(error);
-        }
-    };
-    match fresh_backend {
-        Some(backend) => run_task(state, &backend, &task, checked_capability).await,
-        None => run_bound_task(state, &task).await,
-    }?;
-    Ok(publish_mysql(state, &task).await.err())
-}
-
-async fn publish_mysql(state: &AppState, task: &Task) -> Result<(), String> {
-    let config = crate::mysql::load_config(&state.data_root);
-    if !config.enabled {
-        return Ok(());
-    }
-    let manifest = Manifest::parse(task.manifest.as_bytes())?;
-    let client = crate::mysql::MyClient::new(&config);
-    client
-        .order_index()
-        .await?
-        .write(&task.target, &manifest.mysql_order())
-        .await?;
-    Ok(())
+    db::insert_task(&state.store, &task, &local.version())?;
+    run_task(state, &backend, index, &task).await
 }
 
 fn verify_provider_role(store: &Store, target: &str, kind: &str) -> Result<(), String> {
@@ -593,17 +807,6 @@ fn verify_provider_role(store: &Store, target: &str, kind: &str) -> Result<(), S
     }
 }
 
-async fn run_bound_task(state: &AppState, task: &Task) -> Result<(), String> {
-    let backend = match Backend::bound(&state.store, &state.data_root, &task.target) {
-        Ok(backend) => backend,
-        Err(error) => {
-            db::fail_task(&state.store, task, &error).map_err(display)?;
-            return Err(error);
-        }
-    };
-    run_task(state, &backend, task, false).await
-}
-
 #[tauri::command]
 pub(crate) async fn workflow_upload(
     state: State<'_, AppState>,
@@ -614,21 +817,21 @@ pub(crate) async fn workflow_upload(
     }
     let _operation = state.workflow_operations.lock().await;
     let mut result = Outcome::default();
+    if order_numbers.is_empty() {
+        return Ok(result);
+    }
+    let mut index = shared_database(&state.data_root).await?;
     let mut seen = std::collections::HashSet::new();
     for number in order_numbers {
         if !seen.insert(number.clone()) {
             continue;
         }
-        match upload_one(&state, &number, "publish").await {
-            Ok(warning) => {
+        match upload_one(&state, &mut index, &number, "publish").await {
+            Ok(None) => {
                 result.updated += 1;
-                result.uploaded_order_numbers.push(number.clone());
-                if let Some(warning) = warning {
-                    result.errors.push(format!(
-                        "{number} 已发布，{warning}。可在共享数据库设置中重新同步。"
-                    ));
-                }
+                result.uploaded_order_numbers.push(number);
             }
+            Ok(Some(conflict)) => result.conflicts.push(conflict),
             Err(error) => result.errors.push(format!("{number}：{error}")),
         }
     }
@@ -652,19 +855,20 @@ pub(crate) async fn workflow_finish(
     if local.shared_state.as_deref() == Some("completed") && pending.is_none() {
         return Ok(result);
     }
-    if local.target.is_none()
-        && db::task(&state.store, &order_number, "publish")
-            .map_err(display)?
-            .is_some()
+    if db::task(&state.store, &order_number, "publish")
+        .map_err(display)?
+        .is_some()
     {
         return Err("这笔订单还有一次待确认的发布。请重试发布，确认共享状态后再标记完成。".into());
     }
     if local.target.is_some() {
-        match upload_one(&state, &order_number, "finish").await {
-            Ok(Some(warning)) => result.errors.push(format!(
-                "共享交付已完成，{warning}。可在共享数据库设置中重新同步。"
-            )),
+        let mut index = shared_database(&state.data_root).await?;
+        match upload_one(&state, &mut index, &order_number, "finish").await {
             Ok(None) => {}
+            Ok(Some(conflict)) => {
+                result.conflicts.push(conflict);
+                return Ok(result);
+            }
             Err(error) => {
                 result.errors.push(error);
                 return Ok(result);
@@ -675,23 +879,6 @@ pub(crate) async fn workflow_finish(
     }
     result.completed = 1;
     Ok(result)
-}
-
-fn remote_reference(target: &str, key: &str, operation_id: &str) -> String {
-    format!("{target}:{key}:{operation_id}")
-}
-
-async fn load_manifest(backend: &Backend, key: &str) -> Result<Option<Manifest>, String> {
-    let Some(bytes) = backend.latest(key).await? else {
-        return Ok(None);
-    };
-    let manifest = Manifest::parse(&bytes)?;
-    if backend.key_for_order(&manifest.order_number)?.as_str() != key
-        || (backend.requires_remote_revision() && manifest.revision.unwrap_or(0) == 0)
-    {
-        return Err("共享清单与订单位置不符。".into());
-    }
-    Ok(Some(manifest))
 }
 
 fn display_file_name(name: &str, fallback: &str) -> String {
@@ -718,16 +905,16 @@ struct Download {
 async fn download(
     state: &AppState,
     backend: &Backend,
-    manifest: &Manifest,
+    order: &OrderData,
 ) -> Result<Download, String> {
     let directory = download_directory(&state.data_root)?;
     let mut assets = Vec::new();
-    for asset in &manifest.assets {
+    for asset in &order.assets {
         let bytes = backend
-            .get_blob(&asset.sha256)
+            .get_image(asset.folder(), &asset.object_name)
             .await?
             .ok_or_else(|| format!("共享文件缺失：{}", asset.name))?;
-        if bytes.len() as u64 != asset.bytes || hash(&bytes) != asset.sha256 {
+        if bytes.len() as u64 != asset.bytes {
             return Err(format!("共享文件校验失败：{}", asset.name));
         }
         assets.push(write_import_file(directory.path(), asset, &bytes)?);
@@ -797,31 +984,28 @@ pub(crate) fn import_legacy(
     source_root: &Path,
 ) -> Result<Vec<(String, usize, usize)>, String> {
     let mut notices = Vec::new();
-    for order in source.list_orders().map_err(display)? {
-        let number = order.order_number;
+    for summary in source.list_orders().map_err(display)? {
+        let number = summary.order_number;
         if db::order_state(&state.store, &number)
             .map_err(display)?
             .is_some()
         {
             continue;
         }
-        let manifest = snapshot(
+        let (order, sources) = snapshot(
             source,
             source_root,
             &number,
             "legacy",
+            None,
             false,
             &random_hex_pub(16),
         )?;
         let directory = download_directory(&state.data_root)?;
         let mut assets = Vec::new();
-        for asset in &manifest.assets {
-            let bytes = std::fs::read(outbox_file(
-                source_root,
-                &manifest.operation_id,
-                &asset.sha256,
-            ))
-            .map_err(display)?;
+        let source_root = source_root.canonicalize().map_err(display)?;
+        for asset in &order.assets {
+            let bytes = sources[&asset.id].read(&source_root, asset.bytes)?;
             assets.push(write_import_file(directory.path(), asset, &bytes)?);
         }
         let download = Download { directory, assets };
@@ -833,7 +1017,7 @@ pub(crate) fn import_legacy(
         let new_productions = download.assets.len() - new_images;
         apply_download(
             &state.store,
-            &manifest,
+            &order,
             download,
             ImportAction::Sync,
             None,
@@ -846,24 +1030,25 @@ pub(crate) fn import_legacy(
 
 fn apply_download(
     store: &Store,
-    manifest: &Manifest,
+    order: &OrderData,
     request: Download,
     action: ImportAction,
     expected: Option<&str>,
     target: Option<&str>,
 ) -> Result<(), String> {
-    let metadata = manifest
+    let metadata = order
         .metadata
         .as_ref()
         .map(|value| serde_json::Value::Object(value.clone()).to_string());
     db::import(
         store,
         db::Import {
-            number: &manifest.order_number,
+            number: &order.order_number,
             expected,
             metadata: metadata.as_deref(),
-            shared: target.map(|target| (target, manifest.state.as_str(), manifest.operation_id.as_str())),
-            completed: target.is_none() && manifest.local_completed,
+            shared: target
+                .map(|target| (target, order.state.as_str(), order.operation_id.as_str())),
+            completed: target.is_none() && order.state == SharedState::Completed,
             action,
             assets: &request.assets,
         },
@@ -872,42 +1057,27 @@ fn apply_download(
     Ok(())
 }
 
-#[cfg(test)]
-async fn sync_one(
-    state: &AppState,
-    backend: &Backend,
-    key: &str,
-    active_order: Option<&str>,
-    result: &mut Outcome,
-) -> Result<(), String> {
-    let Some(manifest) = load_manifest(backend, key).await? else {
-        return Ok(());
-    };
-    apply_shared_order(state, backend, manifest, key, active_order, result).await
-}
-
 async fn apply_shared_order(
     state: &AppState,
     backend: &Backend,
-    manifest: Manifest,
-    key: &str,
+    order: OrderData,
     active_order: Option<&str>,
     result: &mut Outcome,
 ) -> Result<(), String> {
     let target = backend.target();
-    let number = manifest.order_number.as_str();
+    let number = order.order_number.as_str();
     let local = db::order_state(&state.store, number).map_err(display)?;
     let same_target = local.as_ref().and_then(|local| local.target.as_deref()) == Some(&target);
     if same_target
         && local.as_ref().is_some_and(|local| {
-            local.remote_operation_id.as_deref() == Some(manifest.operation_id.as_str())
+            local.remote_operation_id.as_deref() == Some(order.operation_id.as_str())
         })
     {
         return Ok(());
     }
-    if manifest.state == SharedState::Completed {
+    if order.state == SharedState::Completed {
         if same_target
-            && db::mark_remote_complete(&state.store, number, &target, &manifest.operation_id)
+            && db::mark_remote_complete(&state.store, number, &target, &order.operation_id)
                 .map_err(display)?
         {
             result.completed += 1;
@@ -919,18 +1089,16 @@ async fn apply_shared_order(
             !same_target || local.generation != local.synced_generation || local.local_completed
         })
     {
-        result.conflicts.push(preview(
-            &state.store,
-            &manifest,
-            remote_reference(&target, key, &manifest.operation_id),
-        )?);
+        result
+            .conflicts
+            .push(shared_conflict(&state.store, &target, Some(&order))?);
         return Ok(());
     }
     let version = local.as_ref().map(OrderState::version);
-    let downloaded = download(state, backend, &manifest).await?;
+    let downloaded = download(state, backend, &order).await?;
     apply_download(
         &state.store,
-        &manifest,
+        &order,
         downloaded,
         ImportAction::Sync,
         version.as_deref(),
@@ -945,63 +1113,33 @@ pub(crate) async fn workflow_sync(
     state: State<'_, AppState>,
     active_order: Option<String>,
 ) -> Result<Outcome, String> {
-    synchronize(&state, active_order.as_deref(), false).await
+    synchronize(&state, active_order.as_deref()).await
 }
 
 pub(crate) async fn synchronize(
     state: &AppState,
     active_order: Option<&str>,
-    require_mysql: bool,
 ) -> Result<Outcome, String> {
     let _operation = state.workflow_operations.lock().await;
     if db::role(&state.store) == "customer" {
         return Err("当前是排单端，请在制作端或二合一设备同步订单。".into());
     }
+    let mut index = shared_database(&state.data_root).await?;
     let backend = selected(state)?;
     let mut response = Outcome::default();
-    let target = backend.target();
-    let config = crate::mysql::load_config(&state.data_root);
-    let client = crate::mysql::MyClient::new(&config);
-    let mut index = None;
-    let mut indexed = std::collections::HashMap::new();
-    if config.enabled {
-        let connection = async {
-            let mut order_index = client.order_index().await?;
-            indexed = order_index.read(&target).await?;
-            Ok::<_, String>(order_index)
-        }
-        .await;
-        match connection {
-            Ok(connection) => index = Some(connection),
-            Err(error) if require_mysql => return Err(error),
-            Err(error) => response.errors.push(error),
-        }
-    } else if require_mysql {
-        return Err("请先启用共享数据库。".into());
-    }
-    let keys = backend.list_orders().await?;
-    for key in keys.into_iter().filter(|key| hex_id(key, 64)) {
-        let manifest = match load_manifest(&backend, &key).await {
-            Ok(Some(manifest)) => manifest,
-            Ok(None) => continue,
+    for record in index.read(&backend.target()).await? {
+        let number = record.number.clone();
+        let order = match OrderData::from_record(record) {
+            Ok(order) => order,
             Err(error) => {
-                response.errors.push(error);
+                response.errors.push(format!("{number}：{error}"));
                 continue;
             }
         };
-        if let Some(order_index) = &mut index {
-            let current = manifest.mysql_order();
-            if indexed.get(&current.number) != Some(&current) {
-                if let Err(error) = order_index.write(&target, &current).await {
-                    response.errors.push(error);
-                    index = None;
-                }
-            }
-        }
         if let Err(error) =
-            apply_shared_order(state, &backend, manifest, &key, active_order, &mut response).await
+            apply_shared_order(state, &backend, order, active_order, &mut response).await
         {
-            response.errors.push(error);
+            response.errors.push(format!("{number}：{error}"));
         }
     }
     Ok(response)
@@ -1015,31 +1153,51 @@ pub(crate) async fn workflow_resolve_conflict(
     active_order: Option<String>,
 ) -> Result<(), String> {
     let _operation = state.workflow_operations.lock().await;
-    let pieces: Vec<_> = reference.rsplitn(3, ':').collect();
-    let [operation_id, key, target] = pieces.as_slice() else {
-        return Err("请选择有效的共享订单。".into());
-    };
-    let backend = Backend::bound(&state.store, &state.data_root, target)?;
-    let manifest = load_manifest(&backend, key)
-        .await?
-        .ok_or("远端订单已不存在。")?;
-    if operation_id != &manifest.operation_id
-        || manifest.state != SharedState::Pending
-    {
-        return Err("远端订单已更新，请重新同步。".into());
+    let (target, number, operation_id): (String, String, String) =
+        serde_json::from_str(&reference).map_err(|_| "请选择有效的共享订单。")?;
+    let local = db::order_state(&state.store, &number).map_err(display)?;
+    if local.as_ref().map(OrderState::version) != local_version {
+        return Err("本机订单已变化，请关闭提示后重新操作。".into());
     }
-    if active_order.as_deref() == Some(&manifest.order_number) {
+    if db::role(&state.store) == "customer" {
+        let local = local.ok_or("排单端只能处理本机订单的上传冲突。")?;
+        let allowed_target = match local.target {
+            Some(target) => Some(target),
+            None => Backend::configured_target(&state.store, &state.data_root)?,
+        };
+        if allowed_target.as_deref() != Some(&target) {
+            return Err("该订单的共享存储已切换，请关闭提示后重新上传。".into());
+        }
+    }
+    let backend = Backend::bound(&state.store, &state.data_root, &target)?;
+    let mut index = shared_database(&state.data_root).await?;
+    let current = remote_order(&mut index, &target, &number).await?;
+    let order = reviewed_order(current, &operation_id)?;
+    if active_order.as_deref() == Some(&order.order_number) {
         return Err("这笔订单仍在编辑中，请切换编辑订单后再同步。".into());
     }
-    let downloaded = download(&state, &backend, &manifest).await?;
+    let downloaded = download(&state, &backend, &order).await?;
+    let latest = remote_order(&mut index, &target, &number).await?;
+    reviewed_order(latest, &operation_id)?;
     apply_download(
         &state.store,
-        &manifest,
+        &order,
         downloaded,
         ImportAction::Replace,
         local_version.as_deref(),
-        Some(target),
+        Some(&target),
     )
+}
+
+fn reviewed_order(current: Option<OrderData>, reviewed: &str) -> Result<OrderData, String> {
+    let current = current.ok_or("共享订单已不存在，本机订单和素材已保留。")?;
+    if current.state == SharedState::Completed {
+        return Err("共享订单已标记完成，本机订单和素材已保留。".into());
+    }
+    if reviewed != current.operation_id {
+        return Err("共享订单在确认期间已变化，请关闭提示后重新操作。".into());
+    }
+    Ok(current)
 }
 
 #[cfg(test)]
@@ -1069,6 +1227,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn shared_sync_requires_mysql() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        let error = synchronize(&state, None).await.err().unwrap();
+        assert!(error.contains("共享数据库"), "{error}");
+    }
+
+    #[tokio::test]
     async fn local_order_can_be_completed_without_an_export() {
         use tauri::Manager;
         let dir = tempfile::tempdir().unwrap();
@@ -1095,167 +1261,409 @@ mod tests {
     }
 
     #[test]
-    fn shared_completion_manifest_does_not_require_an_export() {
+    fn completion_reuses_the_uploaded_original_and_preserves_local_metadata() {
         let dir = tempfile::tempdir().unwrap();
         let state = workstation(&dir);
-        capture_order(&state, "shared-no-export");
-        let manifest = snapshot(
+        let number = "订单-001";
+        capture_order(&state, number);
+        let (published, sources) = snapshot(
             &state.store,
             &state.data_root,
-            "shared-no-export",
-            "finish",
-            true,
-            &random_hex_pub(16),
-        )
-        .unwrap();
-        assert!(manifest.state == SharedState::Completed && manifest.local_completed);
-        assert!(manifest.revision.is_some());
-        assert_eq!(manifest.assets.len(), 1);
-        assert!(!manifest.assets[0].production());
-        assert!(manifest.mysql_order().completed);
-    }
-
-    #[test]
-    fn nas_manifest_contains_metadata_without_a_revision_field() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = workstation(&dir);
-        capture_order(&state, "nas-flat-manifest");
-        let manifest = snapshot(
-            &state.store,
-            &state.data_root,
-            "nas-flat-manifest",
+            number,
             "publish",
+            None,
             false,
             &random_hex_pub(16),
         )
         .unwrap();
-        let json = serde_json::to_value(manifest).unwrap();
-        assert!(json.get("revision").is_none());
-        assert_eq!(json["orderNumber"], "nas-flat-manifest");
+        assert_eq!(sources.len(), 1);
+        assert!(!state.data_root.join("workflow-outbox").exists());
+        db::set_layout(&state.store, number, "ch-555").unwrap();
+        let archive = state.data_root.join("productions");
+        std::fs::create_dir(&archive).unwrap();
+        let file = archive.join("finished.png");
+        let original = &sources[&published.assets[0].id];
+        std::fs::copy(state.data_root.join(&original.path), &file).unwrap();
+        state
+            .store
+            .add_production(&random_hex_pub(16), number, None, &file)
+            .unwrap();
+        let (completed, sources) = snapshot(
+            &state.store,
+            &state.data_root,
+            number,
+            "finish",
+            Some(&published),
+            true,
+            &random_hex_pub(16),
+        )
+        .unwrap();
+        assert_eq!(sources.len(), 1);
+        assert!(completed.state == SharedState::Completed);
+        assert_eq!(completed.assets.len(), 2);
+        assert!(!completed.assets[0].object_name.contains('/'));
+        assert_eq!(
+            completed.assets[0].object_name,
+            published.assets[0].object_name
+        );
+        assert!(completed.assets[1].production());
+        assert!(completed.assets[1]
+            .object_name
+            .starts_with(&format!("{}/", order_key_segment(number))));
+        assert!(!outbox_file(
+            &state.data_root,
+            &completed.operation_id,
+            &completed.assets[0].id
+        )
+        .exists());
+        let payload = serde_json::to_string(&completed).unwrap();
+        let record = completed.record(payload);
+        assert!(record.completed);
+        let decoded = OrderData::from_record(record).unwrap();
+        assert_eq!(decoded.metadata.unwrap()["layoutNumber"], "ch-555");
+    }
+
+    #[test]
+    fn order_folders_preserve_standard_ids_and_escape_unsafe_paths() {
+        assert_eq!(order_key_segment("001234"), "001234");
+        assert_eq!(order_key_segment("A/B"), "~QS9C");
+        assert_eq!(order_key_segment(".."), "~Li4");
+        assert_ne!(order_key_segment("A/B"), order_key_segment("~QS9C"));
+    }
+
+    #[test]
+    fn archived_source_survives_restart_and_detects_changes_at_the_same_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let number = "archive-001";
+        let root = dir.path().canonicalize().unwrap();
+        let (id, size) = {
+            let state = workstation(&dir);
+            capture_order(&state, number);
+            let local = db::order_state(&state.store, number).unwrap().unwrap();
+            let (order, sources) = snapshot(
+                &state.store,
+                &root,
+                number,
+                "publish",
+                None,
+                true,
+                &random_hex_pub(16),
+            )
+            .unwrap();
+            let asset = &order.assets[0];
+            db::insert_task(
+                &state.store,
+                &Task {
+                    number: number.into(),
+                    kind: "publish".into(),
+                    target: "fixture".into(),
+                    expected_operation_id: None,
+                    generation: local.generation,
+                    payload: serde_json::to_string(&order).unwrap(),
+                    source_files: Some(serde_json::to_string(&sources).unwrap()),
+                },
+                &local.version(),
+            )
+            .unwrap();
+            (asset.id.clone(), asset.bytes)
+        };
+
+        let state = workstation(&dir);
+        let task = db::task(&state.store, number, "publish").unwrap().unwrap();
+        let sources: SourceFiles =
+            serde_json::from_str(task.source_files.as_ref().unwrap()).unwrap();
+        let source = &sources[&id];
+        assert!(source.path.starts_with("images"));
+        assert!(!task
+            .payload
+            .contains(&source.path.to_string_lossy().replace('\\', "\\\\")));
+        let path = root.join(&source.path);
+        let mut bytes = source.read(&root, size).unwrap();
+        *bytes.last_mut().unwrap() ^= 1;
+        std::fs::write(&path, &bytes).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(source.modified - std::time::Duration::from_secs(10))
+            .unwrap();
+        assert!(source.read(&root, size).unwrap_err().contains("已变化"));
+        std::fs::remove_file(path).unwrap();
+        assert!(source.read(&root, size).is_err());
+        assert!(!root.join("workflow-outbox").exists());
+    }
+
+    fn live_config() -> crate::mysql::MysqlConfig {
+        let path =
+            std::env::var_os("VAGAGA_TEST_MYSQL_CONFIG").expect("set VAGAGA_TEST_MYSQL_CONFIG");
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
     }
 
     #[tokio::test]
-    #[ignore = "uses a configured NAS in an isolated fixture prefix"]
-    async fn nas_two_workstations_publish_and_complete() {
-        use crate::cloud::load_config;
-        let config_dir = std::env::var_os("VAGAGA_TEST_NAS_CONFIG_DIR").unwrap();
-        let mut config = load_config(Path::new(&config_dir));
-        config.enabled = true;
-        // Each workflow command opens its own storage client.
-        let connect = || Backend::Nas(config.clone(), config.client().unwrap());
-        connect().test().await.unwrap();
-        let online_a = tempfile::tempdir().unwrap();
-        let online_b = tempfile::tempdir().unwrap();
-        let offline = tempfile::tempdir().unwrap();
-        let a = workstation(&online_a);
-        let b = workstation(&online_b);
-        let c = workstation(&offline);
-        let number = format!("FIXTURE-{}", random_hex_pub(16));
-        let key = number.clone();
-        let fixture_file = online_a.path().join("red.png");
-        image::RgbImage::from_fn(10, 10, |x, y| {
-            image::Rgb([rand::random(), x as u8, y as u8])
-        })
-        .save(&fixture_file)
-        .unwrap();
-        let original = std::fs::read(&fixture_file).unwrap();
-        a.store
-            .ingest_image(
+    #[ignore = "requires a dedicated MySQL test database"]
+    async fn upload_retry_checks_mysql_before_handling_a_missing_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        let config = crate::cloud::CloudConfig {
+            endpoint: "http://127.0.0.1:1".into(),
+            bucket: "fixture".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        };
+        let backend = Backend::Nas(config.clone(), config.client().unwrap());
+        let mut index = MyClient::new(&live_config()).order_index().await.unwrap();
+        for remote_received in [false, true] {
+            let number = format!("retry-{}", random_hex_pub(8));
+            capture_order(&state, &number);
+            let local = db::order_state(&state.store, &number).unwrap().unwrap();
+            let (order, sources) = snapshot(
+                &state.store,
+                &state.data_root,
                 &number,
-                &original,
-                "image/png",
-                &[("A01".into(), 2)],
-                "fixture",
-            )
-            .unwrap();
-        db::set_layout(&a.store, &number, "ch-555").unwrap();
-        let make_task = |vm: &AppState, backend: &Backend, kind: &str, operation: String| {
-            let local = db::order_state(&vm.store, &number).unwrap().unwrap();
-            let manifest = snapshot(
-                &vm.store,
-                &vm.data_root,
-                &number,
-                kind,
-                backend.target().starts_with("qiniu:"),
-                &operation,
+                "publish",
+                None,
+                backend.uses_order_directory(),
+                &random_hex_pub(16),
             )
             .unwrap();
             let task = Task {
                 number: number.clone(),
-                kind: kind.into(),
+                kind: "publish".into(),
                 target: backend.target(),
-                expected_operation_id: local.remote_operation_id.clone(),
+                expected_operation_id: None,
                 generation: local.generation,
-                manifest: serde_json::to_string(&manifest).unwrap(),
+                payload: serde_json::to_string(&order).unwrap(),
+                source_files: Some(serde_json::to_string(&sources).unwrap()),
             };
-            db::insert_task(&vm.store, &task, &local.version()).unwrap();
-            task
-        };
-        {
-            let backend = connect();
-            run_task(
-                &a,
-                &backend,
-                &make_task(&a, &backend, "publish", random_hex_pub(16)),
-                false,
-            )
-            .await
-            .unwrap();
+            db::insert_task(&state.store, &task, &local.version()).unwrap();
+            if remote_received {
+                assert!(index
+                    .write(&task.target, None, &order.record(task.payload.clone()))
+                    .await
+                    .unwrap());
+            }
+            let source = &sources[&order.assets[0].id];
+            std::fs::remove_file(state.data_root.join(&source.path)).unwrap();
+            let result = run_task(&state, &backend, &mut index, &task).await;
+            if remote_received {
+                assert!(result.ok().unwrap().is_none());
+                let local = db::order_state(&state.store, &number).unwrap().unwrap();
+                assert_eq!(
+                    local.remote_operation_id.as_deref(),
+                    Some(order.operation_id.as_str())
+                );
+            } else {
+                assert!(result.err().unwrap().contains("请检查素材后重新操作"));
+                assert!(index.get(&task.target, &number).await.unwrap().is_none());
+            }
+            assert!(db::task(&state.store, &number, "publish")
+                .unwrap()
+                .is_none());
+            assert!(!state.data_root.join("workflow-outbox").exists());
         }
-        let mut received = Outcome::default();
-        sync_one(&b, &connect(), &key, None, &mut received)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a dedicated MySQL test database"]
+    async fn customer_can_apply_an_upload_conflict_and_keeps_local_material_if_remote_finishes() {
+        use crate::qiniu_transport::tests::{local_server, receive, reply};
+        use tauri::Manager;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        let (listener, endpoint) = local_server();
+        let config = crate::cloud::CloudConfig {
+            enabled: true,
+            endpoint,
+            bucket: "fixture".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        };
+        std::fs::write(
+            crate::cloud::config_path(&state.data_root),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        let mysql = live_config();
+        crate::mysql::save_config(&state.data_root, &mysql).unwrap();
+        db::put_setting(&state.store, "role", "customer").unwrap();
+        let mut index = MyClient::new(&mysql).order_index().await.unwrap();
+        let target = config.target();
+        let number = format!("conflict-{}", random_hex_pub(8));
+        capture_order(&state, &number);
+        let (mut shared, sources) = snapshot(
+            &state.store,
+            &state.data_root,
+            &number,
+            "publish",
+            None,
+            false,
+            &random_hex_pub(16),
+        )
+        .unwrap();
+        let asset = &shared.assets[0];
+        let path = format!("GET /fixture/materials/original/{}", asset.object_name);
+        let bytes = sources[&asset.id]
+            .read(&state.data_root.canonicalize().unwrap(), asset.bytes)
+            .unwrap();
+        let record = shared.record(serde_json::to_string(&shared).unwrap());
+        assert!(index.write(&target, None, &record).await.unwrap());
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+
+        let resolve = |conflict: Preview| {
+            workflow_resolve_conflict(
+                app.state(),
+                conflict.reference,
+                conflict.local_version,
+                None,
+            )
+        };
+        let first = workflow_upload(app.state(), vec![number.clone()])
             .await
             .unwrap();
-        assert_eq!(received.updated, 1);
-        let incoming = b.store.get_order_by_number(&number).unwrap().unwrap();
+        assert_eq!(first.updated, 0);
+        assert!(first.errors.is_empty());
+        let (serve_first, serve_second) = (path.clone(), path);
+        let storage = target.clone();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = receive(&listener, &serve_first);
+            reply(socket, 200, &[], &bytes);
+            let (socket, _) = receive(&listener, &serve_second);
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                let mut index = MyClient::new(&mysql).order_index().await.unwrap();
+                let record = index.get(&storage, &record.number).await.unwrap().unwrap();
+                let mut completed = OrderData::from_record(record).unwrap();
+                let expected = std::mem::replace(&mut completed.operation_id, random_hex_pub(16));
+                completed.state = SharedState::Completed;
+                let record = completed.record(serde_json::to_string(&completed).unwrap());
+                assert!(index
+                    .write(&storage, Some(&expected), &record)
+                    .await
+                    .unwrap());
+            });
+            reply(socket, 200, &[], &bytes);
+        });
+        resolve(first.conflicts.into_iter().next().unwrap())
+            .await
+            .unwrap();
+        let state = app.state::<AppState>();
+        assert_eq!(state.store.list_orders().unwrap().len(), 2);
+
+        let expected = std::mem::replace(&mut shared.operation_id, random_hex_pub(16));
+        let record = shared.record(serde_json::to_string(&shared).unwrap());
+        assert!(index
+            .write(&target, Some(&expected), &record)
+            .await
+            .unwrap());
+        let second = workflow_upload(app.state(), vec![number.clone()])
+            .await
+            .unwrap();
+        let error = resolve(second.conflicts.into_iter().next().unwrap())
+            .await
+            .unwrap_err();
+        assert!(error.contains("共享订单已标记完成"));
+        assert_eq!(state.store.list_orders().unwrap().len(), 2);
+        let local = db::order_state(&state.store, &number).unwrap().unwrap();
         assert_eq!(
-            std::fs::read(&incoming.images[0].file_path).unwrap(),
-            original
+            local.remote_operation_id.as_deref(),
+            Some(expected.as_str())
         );
-        assert_eq!(incoming.images[0].templates[0].quantity, 2);
-        assert!(b
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn download_follows_database_image_reference_for_a_plain_order_number() {
+        use crate::qiniu_transport::tests::{local_server, receive, reply};
+        let sender_dir = tempfile::tempdir().unwrap();
+        let receiver_dir = tempfile::tempdir().unwrap();
+        let sender = workstation(&sender_dir);
+        let receiver = workstation(&receiver_dir);
+        let number = "001234";
+        capture_order(&sender, number);
+        db::set_layout(&sender.store, number, "ch-555").unwrap();
+        let (order, sources) = snapshot(
+            &sender.store,
+            &sender.data_root,
+            number,
+            "publish",
+            None,
+            true,
+            &random_hex_pub(16),
+        )
+        .unwrap();
+        let asset = &order.assets[0];
+        assert!(
+            asset.object_name.starts_with("001234/"),
+            "object reference must include the order number: {}",
+            asset.object_name
+        );
+        let bytes = sources[&asset.id]
+            .read(&sender.data_root.canonicalize().unwrap(), asset.bytes)
+            .unwrap();
+        let (listener, endpoint) = local_server();
+        let config = crate::cloud::CloudConfig {
+            enabled: true,
+            endpoint,
+            bucket: "fixture".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        };
+        let (_, name) = asset.object_name.split_once('/').unwrap();
+        let path = format!("/fixture/materials/001234/original/{name}");
+        let served = bytes.clone();
+        let server = std::thread::spawn(move || {
+            let (socket, upload) = receive(&listener, &format!("PUT {path}"));
+            assert_eq!(upload.body, served);
+            reply(socket, 200, &[], b"");
+            let (socket, _) = receive(&listener, &format!("GET {path}"));
+            reply(socket, 200, &[], &served);
+        });
+        let backend = Backend::Nas(config.clone(), config.client().unwrap());
+        backend
+            .put_image(asset.folder(), &asset.object_name, bytes.clone())
+            .await
+            .unwrap();
+        let mut result = Outcome::default();
+        let record = order.record(serde_json::to_string(&order).unwrap());
+        apply_shared_order(
+            &receiver,
+            &backend,
+            OrderData::from_record(record.clone()).unwrap(),
+            None,
+            &mut result,
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(result.updated, 1);
+        let received = receiver.store.get_order_by_number(number).unwrap().unwrap();
+        assert_eq!(std::fs::read(&received.images[0].file_path).unwrap(), bytes);
+        assert!(receiver
             .store
-            .order_metadata_by_number(&number)
+            .order_metadata_by_number(number)
             .unwrap()
             .unwrap()
             .contains("ch-555"));
-        let result_path = online_b.path().join("result.png");
-        image::RgbImage::from_fn(5, 5, |x, y| image::Rgb([x as u8, rand::random(), y as u8]))
-            .save(&result_path)
-            .unwrap();
-        let production = std::fs::read(&result_path).unwrap();
-        b.store
-            .add_production(
-                &random_hex_pub(16),
-                &number,
-                Some(&incoming.images[0].id),
-                &result_path,
-            )
-            .unwrap();
-        {
-            let backend = connect();
-            run_task(
-                &b,
-                &backend,
-                &make_task(&b, &backend, "finish", random_hex_pub(16)),
-                false,
-            )
-            .await
-            .unwrap();
-        }
-        let mut completion = Outcome::default();
-        sync_one(&a, &connect(), &key, None, &mut completion)
-            .await
-            .unwrap();
-        assert_eq!(completion.completed, 1);
-        assert!(a.store.list_productions(&number).unwrap().is_empty());
-        sync_one(&c, &connect(), &key, None, &mut Outcome::default())
-            .await
-            .unwrap();
-        assert!(c.store.list_orders().unwrap().is_empty());
-        connect()
-            .clean_fixture(&key, &[hash(original), hash(production)])
-            .await
-            .unwrap();
+        // An unchanged row does not make another request to the file store.
+        apply_shared_order(
+            &receiver,
+            &backend,
+            OrderData::from_record(record).unwrap(),
+            None,
+            &mut result,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.updated, 1);
     }
 }

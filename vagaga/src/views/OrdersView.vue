@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useOrdersStore, loadOrders, toast } from '../stores/orders'
 import {
   assetUrl,
@@ -64,7 +64,7 @@ function makeBlockReason(img: OrderImage) {
 /* ---------- 左栏数据：订单 + 素材树 ---------- */
 const entries = ref<{ summary: OrderSummary; images: OrderImage[] }[]>([])
 const orderSearch = ref('')
-const orderFilter = ref<'pending' | 'completed'>('pending')
+const orderFilter = ref<'pending' | 'completed' | 'all'>('pending')
 const isOrderComplete = (number: string) => Boolean(
   store.workflowOrders[number]?.localCompleted || store.workflowOrders[number]?.sharedState === 'completed',
 )
@@ -96,7 +96,7 @@ const visibleEntries = computed(() => {
 })
 
 function matchesOrder(order: OrderSummary) {
-  if ((orderFilter.value === 'completed') !== isOrderComplete(order.orderNumber)) return false
+  if (orderFilter.value !== 'all' && (orderFilter.value === 'completed') !== isOrderComplete(order.orderNumber)) return false
   const term = searchTerm.value
   return !term || order.orderNumber.toLowerCase().includes(term)
     || (parseMeta(order.metadata)?.layoutNumber?.toLowerCase().includes(term) ?? false)
@@ -121,14 +121,23 @@ watch(
   { immediate: true },
 )
 
-/* ---------- 展开状态：订单块 / 素材编辑面板 ---------- */
+/* ---------- 展开订单 ---------- */
 const expandedOrderId = ref<string | null>(null)
-const expandedImageId = ref<string | null>(null)
 const productionsByOrder = ref<Record<string, Production[]>>({})
 const productionRequests = new Map<string, number>()
 const expandedOrderNumber = computed(() =>
   store.orders.find(order => order.id === expandedOrderId.value)?.orderNumber,
 )
+
+watch(() => store.latestCapture, capture => {
+  const order = store.orders.find(row => row.id === capture?.orderId)
+  if (!order) return
+  if (orderFilter.value !== 'all') {
+    orderFilter.value = isOrderComplete(order.orderNumber) ? 'completed' : 'pending'
+  }
+  if (!matchesOrder(order)) orderSearch.value = ''
+  expandedOrderId.value = order.id
+})
 
 async function refreshProductions(orderNumber: string) {
   const request = (productionRequests.get(orderNumber) ?? 0) + 1
@@ -141,12 +150,7 @@ async function refreshProductions(orderNumber: string) {
 
 function chooseOrder(id: string) {
   void persistLayout().catch(reportLayoutError)
-  expandedImageId.value = null
   expandedOrderId.value = expandedOrderId.value === id ? null : id
-}
-
-function toggleImagePanel(img: OrderImage) {
-  expandedImageId.value = expandedImageId.value === img.id ? null : img.id
 }
 
 /* ---------- 模板编号映射 ---------- */
@@ -268,7 +272,6 @@ async function applySharedVersion({ orderNumber, reference, localVersion }: Work
   numberingDrafts.delete(orderNumber)
   if (expandedOrderNumber.value === orderNumber) {
     expandedOrderId.value = null
-    expandedImageId.value = null
   }
   if (!replacingOpenOrder) return
   removeNumberingListeners()
@@ -495,6 +498,28 @@ function openImage(filePath: string) {
   if (filePath) void openPath(filePath).catch(error => toast('error', `打开文件失败：${error}`))
 }
 
+const materialDialog = ref<HTMLDialogElement | null>(null)
+const previewMaterial = ref<OrderImage | null>(null)
+const materialPath = computed(() => previewMaterial.value?.filePath || previewMaterial.value?.thumbnailPath || '')
+const materialPreviewFailed = ref(false)
+
+async function showMaterial(img: OrderImage) {
+  if ((!img.filePath && !img.thumbnailPath) || !materialDialog.value) return
+  previewMaterial.value = img
+  materialPreviewFailed.value = false
+  await nextTick()
+  const dialog = materialDialog.value
+  if (dialog && !dialog.open) dialog.showModal()
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const unit = bytes >= 1024 * 1024 ? 'MB' : 'KB'
+  const value = bytes / (unit === 'MB' ? 1024 * 1024 : 1024)
+  return `${Number(value.toFixed(value < 100 ? 1 : 0))} ${unit}`
+}
+
 const savingImageId = ref('')
 async function saveImage(img: OrderImage) {
   if (savingImageId.value || !img.filePath || img.syncStatus === 'downloading') return
@@ -634,14 +659,17 @@ function orderProductions(orderNumber: string): Production[] {
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
         </button>
       </div>
-      <div class="orderSearch">
-        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-        <input v-model="orderSearch" type="search" placeholder="搜索订单号或排版编号" aria-label="搜索订单号或排版编号" autocomplete="off" />
+      <div class="orderTools">
+        <div class="orderSearch">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+          <input v-model="orderSearch" type="search" placeholder="搜索订单号或排版编号" aria-label="搜索订单号或排版编号" autocomplete="off" />
+        </div>
+        <select v-model="orderFilter" class="orderFilter" aria-label="按制作状态筛选">
+          <option value="pending">待制作</option>
+          <option value="completed">已完成</option>
+          <option value="all">全部订单</option>
+        </select>
       </div>
-      <nav class="orderFilters" aria-label="按制作状态筛选">
-        <button type="button" :aria-pressed="orderFilter === 'pending'" @click="orderFilter = 'pending'">待制作</button>
-        <button type="button" :aria-pressed="orderFilter === 'completed'" @click="orderFilter = 'completed'">已完成</button>
-      </nav>
       <div class="items">
         <div v-for="entry in visibleEntries" :key="entry.summary.id" class="orderBlock">
           <div
@@ -659,28 +687,37 @@ function orderProductions(orderNumber: string): Production[] {
               @change="emit('toggleUpload', entry.summary.orderNumber, ($event.target as HTMLInputElement).checked)" />
             <svg class="chevron" :class="{ open: expandedOrderId === entry.summary.id }" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             <div class="itemMain">
-              <div class="num">{{ entry.summary.orderNumber }}</div>
-              <div v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</div>
-              <div class="stat">{{ entry.images.length }} 图</div>
-              <div class="stat dim">{{ fmtTime(entry.summary.updatedAt) }}</div>
-              <div v-if="workflowLabel(entry.summary.orderNumber)" class="orderWorkflowLabel" :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">{{ workflowLabel(entry.summary.orderNumber) }}</div>
+              <div class="orderHeading">
+                <span class="num" :title="entry.summary.orderNumber">{{ entry.summary.orderNumber }}</span>
+                <time class="orderTime" :datetime="entry.summary.updatedAt" :title="'更新时间 ' + entry.summary.updatedAt">{{ fmtTime(entry.summary.updatedAt).slice(0, 11) }}</time>
+                <span v-if="store.workflowOrders[entry.summary.orderNumber]?.error" class="orderWarning"
+                  role="img" :aria-label="workflowLabel(entry.summary.orderNumber)"
+                  :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">!</span>
+              </div>
+              <div v-if="parseMeta(entry.summary.metadata)?.layoutNumber || (orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
+                <div class="orderDescriptors">
+                  <span v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</span>
+                  <span v-if="orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)" class="orderDone">已完成</span>
+                </div>
+                <button
+                  v-if="finishLabel(entry.summary.orderNumber)"
+                  class="miniBtn finishBtn"
+                  type="button"
+                  :disabled="workflowBusy"
+                  @click.stop="requestFinish(entry.summary.orderNumber)"
+                >{{ finishLabel(entry.summary.orderNumber) }}</button>
+                <button
+                  v-if="canDelete"
+                  class="itemDel"
+                  type="button"
+                  title="删除订单（素材文件保留）"
+                  aria-label="删除订单"
+                  @click.stop="removeOrder(entry.summary.id)"
+                >
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M6 6l1 15a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-15"/><path d="M10 11v6M14 11v6"/></svg>
+                </button>
+              </div>
             </div>
-            <button
-              v-if="finishLabel(entry.summary.orderNumber)"
-              class="miniBtn finishBtn"
-              type="button"
-              :disabled="workflowBusy"
-              @click.stop="requestFinish(entry.summary.orderNumber)"
-            >{{ finishLabel(entry.summary.orderNumber) }}</button>
-            <button
-              v-if="canDelete"
-              class="itemDel"
-              title="删除订单（素材文件保留）"
-              aria-label="删除订单"
-              @click.stop="removeOrder(entry.summary.id)"
-            >
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M6 6l1 15a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-15"/><path d="M10 11v6M14 11v6"/></svg>
-            </button>
           </div>
 
           <!-- 展开区：素材行 + 编辑面板 + 成品 -->
@@ -691,13 +728,26 @@ function orderProductions(orderNumber: string): Production[] {
               class="imgBlock"
               :class="{ busy: busyImageId === img.id }"
             >
-              <div
-                class="imgRow"
-                @click="toggleImagePanel(img)"
-              >
-                <svg class="chevron small" :class="{ open: expandedImageId === img.id }" viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                <img v-if="img.thumbnailPath || img.filePath" class="thumb" :src="assetUrl(img.thumbnailPath || img.filePath)" alt="" />
-                <span v-else class="thumb placeholder" aria-hidden="true">图</span>
+              <div class="imgRow">
+                <div class="materialTile">
+                  <button v-if="img.thumbnailPath || img.filePath" class="thumb thumbButton" type="button"
+                    :title="img.originalName" :aria-label="'预览素材 ' + img.originalName" @click="showMaterial(img)">
+                    <img :src="assetUrl(img.thumbnailPath || img.filePath)" alt="" />
+                  </button>
+                  <span v-else class="thumb placeholder" aria-hidden="true">图</span>
+                  <div v-if="img.thumbnailPath || img.filePath" class="materialFacts">
+                    <span v-if="img.width > 0 && img.height > 0" :title="`${img.width} × ${img.height} px`">{{ img.width }}×{{ img.height }}</span>
+                    <div class="materialFileActions">
+                      <span>{{ formatBytes(img.byteLength) }}</span>
+                      <button class="materialIcon" type="button"
+                        :title="img.sourceQuality === 'scaled' ? '下载缩略图' : '下载素材'"
+                        :aria-label="(img.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + img.originalName"
+                        :disabled="!!savingImageId || !img.filePath || img.syncStatus === 'downloading'" @click="saveImage(img)">
+                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
                 <div class="imgInfo">
                   <div v-if="qualityLabel(img) || syncLabel(img)" class="imageLabels" :title="img.syncError">
                     <span v-if="qualityLabel(img)" :class="{ caution: img.sourceQuality !== 'original' }">{{ qualityLabel(img) }}</span>
@@ -749,20 +799,7 @@ function orderProductions(orderNumber: string): Production[] {
                 </button>
               </div>
 
-              <!-- 素材编辑面板（展开） -->
-              <div v-if="expandedImageId === img.id" class="imgPanel">
-                <div v-if="img.filePath" class="panelRow meta">
-                  {{ img.width }}×{{ img.height }} · {{ (img.byteLength / 1024).toFixed(0) }}KB ·
-                  {{ fmtTime(img.createdAt) }}
-                </div>
-                <div v-if="img.filePath" class="panelRow materialActions">
-                  <button class="fileLink" @click="openImage(img.filePath)">打开本地文件</button>
-                  <button class="fileLink" :disabled="!!savingImageId || img.syncStatus === 'downloading'" @click="saveImage(img)">
-                    {{ img.sourceQuality === 'scaled' ? '另存缩略图' : '另存素材' }}
-                  </button>
-                </div>
-                <p v-if="img.syncError" class="assetError">{{ img.syncError }}</p>
-              </div>
+              <p v-if="img.syncError" class="assetError">{{ img.syncError }}</p>
             </div>
 
             <div v-if="!entry.images.length" class="noImages">该订单还没有素材。</div>
@@ -790,6 +827,7 @@ function orderProductions(orderNumber: string): Production[] {
         <div v-if="!visibleEntries.length && searchTerm" class="empty">没有找到匹配的订单。</div>
         <div v-else-if="!visibleEntries.length" class="empty">
           <template v-if="orderFilter === 'completed'">本机暂无已完成订单。</template>
+          <template v-else-if="orderFilter === 'all'">本机暂无订单。</template>
           <template v-else>
             暂无待制作订单。<br />{{ store.workflow.role === 'production' ? '同步后会显示已接收的订单。' : '在千帆客服里右键买家图片 → 进入排单。' }}
           </template>
@@ -849,6 +887,35 @@ function orderProductions(orderNumber: string): Production[] {
       </template>
     </div>
 
+    <dialog ref="materialDialog" class="materialDialog" aria-labelledby="material-preview-title"
+      @click.self="materialDialog?.close()" @close="previewMaterial = null">
+      <div v-if="previewMaterial" class="materialView">
+        <header class="materialViewBar">
+          <h2 id="material-preview-title">{{ previewMaterial.originalName }}</h2>
+          <button class="materialIcon" type="button" aria-label="关闭素材预览" title="关闭" autofocus @click="materialDialog?.close()">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </header>
+        <div class="materialStage">
+          <img v-if="!materialPreviewFailed" :src="assetUrl(materialPath)" :alt="previewMaterial.originalName" @error="materialPreviewFailed = true" />
+          <p v-else class="dim" role="status">无法读取这张素材。</p>
+        </div>
+        <footer class="materialViewBar materialViewFooter">
+          <div class="materialViewFacts">
+            <span v-if="previewMaterial.width > 0 && previewMaterial.height > 0">{{ previewMaterial.width }} × {{ previewMaterial.height }} px</span>
+            <span v-if="previewMaterial.byteLength > 0">{{ formatBytes(previewMaterial.byteLength) }}</span>
+            <span v-if="previewMaterial.sourceQuality === 'scaled' || !previewMaterial.filePath">缩略图</span>
+          </div>
+          <button class="materialIcon" type="button"
+            :title="previewMaterial.sourceQuality === 'scaled' ? '下载缩略图' : '下载素材'"
+            :aria-label="(previewMaterial.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + previewMaterial.originalName"
+            :disabled="!!savingImageId || !previewMaterial.filePath || previewMaterial.syncStatus === 'downloading'" @click="saveImage(previewMaterial)">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>
+          </button>
+        </footer>
+      </div>
+    </dialog>
+
     <!-- 快捷键指南 -->
     <dialog
       class="guideDialog"
@@ -903,11 +970,17 @@ function orderProductions(orderNumber: string): Production[] {
 .listHead span {
   flex: 1;
 }
+.orderTools {
+  display: flex;
+  gap: 6px;
+  margin: 0 12px 9px;
+}
 .orderSearch {
   display: flex;
+  flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 7px;
-  margin: 0 12px 9px;
   padding: 0 9px;
   min-height: 32px;
   border: 1px solid var(--stroke);
@@ -928,6 +1001,17 @@ function orderProductions(orderNumber: string): Production[] {
   color: var(--text);
   font: inherit;
   font-size: 12px;
+}
+.orderFilter {
+  flex-shrink: 0;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius-sm);
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 .iconBtn {
   width: 26px;
@@ -973,16 +1057,42 @@ function orderProductions(orderNumber: string): Production[] {
 .chevron.open {
   transform: rotate(90deg);
 }
-.chevron.small {
-  margin-top: 0;
-}
 .itemMain {
   flex: 1;
   min-width: 0;
 }
+.orderHeading {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
 .num {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 700;
   font-size: 13px;
+}
+.orderTime {
+  flex-shrink: 0;
+  color: #52647d;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.orderDetails {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.orderDescriptors {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 .orderCode {
   color: var(--accent);
@@ -990,9 +1100,16 @@ function orderProductions(orderNumber: string): Production[] {
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.stat {
+.orderDone {
   font-size: 11px;
-  color: var(--text);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.orderWarning {
+  flex-shrink: 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
 }
 .dim {
   color: var(--text-dim);
@@ -1010,7 +1127,7 @@ function orderProductions(orderNumber: string): Production[] {
   opacity: 0;
   transition: opacity 0.15s, background 0.15s;
 }
-.item:hover .itemDel {
+.item:hover .itemDel, .itemDel:focus-visible {
   opacity: 1;
 }
 .itemDel:hover {
@@ -1043,10 +1160,9 @@ function orderProductions(orderNumber: string): Production[] {
 }
 .imgRow {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  cursor: pointer;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 6px;
   border-radius: var(--radius-sm);
 }
 .imgRow:hover {
@@ -1057,12 +1173,66 @@ function orderProductions(orderNumber: string): Production[] {
   pointer-events: none;
 }
 .thumb {
-  width: 34px;
-  height: 34px;
-  object-fit: cover;
-  border-radius: 6px;
+  width: 64px;
+  height: 64px;
+  border-radius: 7px;
+  background: var(--bg-input);
+}
+.materialTile {
+  flex: 0 0 68px;
+  min-width: 0;
+}
+.thumbButton {
+  display: block;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid var(--stroke);
+  cursor: zoom-in;
+}
+.thumbButton:hover {
+  border-color: var(--accent);
+}
+.thumbButton img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.materialFacts {
+  display: grid;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 3px;
+  color: #52647d;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.materialFileActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.materialIcon {
+  display: inline-grid;
   flex-shrink: 0;
-  background: #f0f3f8;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+.materialIcon:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.materialIcon:disabled {
+  color: var(--text-dim);
+  opacity: .45;
+  cursor: default;
 }
 .placeholder {
   display: inline-grid;
@@ -1101,23 +1271,8 @@ function orderProductions(orderNumber: string): Production[] {
 }
 .assetError {
   font-size: 11px;
-  margin: 0;
+  margin: 0 6px 4px;
   overflow-wrap: anywhere;
-}
-.fileLink {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-}
-.fileLink:disabled {
-  color: var(--text-dim);
-  cursor: wait;
-}
-.materialActions {
-  font-size: 12px;
-  gap: 14px;
 }
 .rules {
   display: flex;
@@ -1219,7 +1374,7 @@ function orderProductions(orderNumber: string): Production[] {
   opacity: 0;
   transition: opacity 0.15s, background 0.15s;
 }
-.imgRow:hover .imgDel {
+.imgRow:hover .imgDel, .imgDel:focus-visible {
   opacity: 1;
 }
 .imgDel:hover {
@@ -1230,22 +1385,6 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
   color: var(--text-dim);
   padding: 2px 8px 4px;
-}
-/* 素材编辑面板 */
-.imgPanel {
-  padding: 8px 10px 10px 24px;
-  border-top: 1px dashed var(--stroke);
-}
-.panelRow {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 5px 0;
-  flex-wrap: wrap;
-}
-.panelRow.meta {
-  font-size: 11px;
-  color: var(--text-dim);
 }
 .miniBtn {
   font-size: 11px;
@@ -1301,26 +1440,6 @@ button.prodThumb {
 button.prodThumb:hover {
   border-color: rgba(91, 140, 255, 0.5);
 }
-.orderFilters {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 10px 7px;
-}
-.orderFilters button {
-  border: 0;
-  border-radius: 6px;
-  padding: 4px 5px;
-  background: transparent;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.orderFilters button:hover { background: var(--bg-card-hover); }
-.orderFilters button[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
-.orderWorkflowLabel { color: var(--accent); font-size: 11px; }
 .finishBtn { flex: 0 0 auto; white-space: nowrap; }
 .empty {
   padding: 18px;
@@ -1412,6 +1531,61 @@ button.prodThumb:hover {
   display: inline-block;
   width: 40px;
   color: var(--text-dim);
+}
+.materialDialog {
+  width: min(840px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 1px solid var(--stroke);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text);
+}
+.materialDialog::backdrop {
+  background: rgba(22, 32, 48, .65);
+}
+.materialViewBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+}
+.materialViewBar h2 {
+  min-width: 0;
+  overflow: hidden;
+  margin: 0;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.materialViewBar .materialIcon {
+  width: 32px;
+  height: 32px;
+}
+.materialStage {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  padding: 12px;
+  background: var(--bg-base);
+}
+.materialStage img {
+  display: block;
+  max-width: 100%;
+  max-height: 68dvh;
+  object-fit: contain;
+}
+.materialViewFooter {
+  border-top: 1px solid var(--stroke);
+}
+.materialViewFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  color: #52647d;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .guideDialog {
   width: min(560px, calc(100vw - 32px));

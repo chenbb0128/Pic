@@ -1,6 +1,5 @@
-//! 共享订单的字段与制作状态。原图和成品由共享存储管理。
+//! 共享订单、制作状态和素材引用。图片字节由共享存储管理。
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use mysql_async::prelude::*;
@@ -64,9 +63,8 @@ pub struct MyClient {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SharedOrder {
     pub number: String,
-    pub revision: u64,
     pub operation_id: String,
-    pub metadata: Option<serde_json::Value>,
+    pub payload: String,
     pub completed: bool,
 }
 
@@ -80,7 +78,9 @@ impl MyClient {
             .user(Some(config.user.as_str()))
             .pass(Some(config.password.as_str()))
             .db_name(Some(config.dbname.as_str()));
-        Self { pool: Pool::new(options) }
+        Self {
+            pool: Pool::new(options),
+        }
     }
 
     async fn conn(&self) -> Result<Conn, String> {
@@ -91,59 +91,116 @@ impl MyClient {
     }
 
     pub async fn test(&self) -> Result<String, String> {
-        self.conn().await?.query_drop("SELECT 1").await.map_err(mysql_error)?;
+        self.conn()
+            .await?
+            .query_drop("SELECT 1")
+            .await
+            .map_err(mysql_error)?;
         Ok("连接成功。".into())
     }
 
     pub async fn order_index(&self) -> Result<OrderIndex, String> {
         let mut conn = self.conn().await?;
         conn.query_drop(
-            "CREATE TABLE IF NOT EXISTS vagaga_shared_orders (
-                storage_id BINARY(32) NOT NULL,
-                order_number VARCHAR(256) COLLATE utf8mb4_bin NOT NULL,
-                revision BIGINT UNSIGNED NOT NULL,
+            "CREATE TABLE IF NOT EXISTS orders (
+                storage_id VARBINARY(1024) NOT NULL,
+                order_number VARBINARY(256) NOT NULL,
                 operation_id CHAR(32) CHARACTER SET ascii NOT NULL,
-                metadata JSON,
+                payload JSON NOT NULL,
                 completed BOOLEAN NOT NULL,
                 PRIMARY KEY (storage_id, order_number)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
-        ).await.map_err(mysql_error)?;
+        )
+        .await
+        .map_err(mysql_error)?;
         Ok(OrderIndex(conn))
     }
 }
 
 impl OrderIndex {
-    pub async fn write(&mut self, storage: &str, order: &SharedOrder) -> Result<bool, String> {
-        let metadata = order.metadata.as_ref().map(serde_json::Value::to_string);
-        // The operation ID identifies a retry.  A completed row is terminal;
-        // otherwise the current metadata is simply replaced by the latest
-        // manifest.  The legacy numeric revision column remains for schema
-        // compatibility but is not used for ordering.
-        self.0.exec_drop(
-            "INSERT INTO vagaga_shared_orders
-             (storage_id, order_number, revision, operation_id, metadata, completed)
-             VALUES (UNHEX(SHA2(?, 256)), ?, ?, ?, ?, ?)
-             ON DUPLICATE KEY UPDATE
-                operation_id = IF(NOT completed, VALUES(operation_id), operation_id),
-                metadata = IF(NOT completed, VALUES(metadata), metadata),
-                revision = IF(NOT completed, VALUES(revision), revision),
-                completed = completed OR VALUES(completed)",
-            (storage, &order.number, order.revision, &order.operation_id, metadata, order.completed),
-        ).await.map_err(mysql_error)?;
-        Ok(self.0.affected_rows() != 0)
+    pub async fn write(
+        &mut self,
+        storage: &str,
+        expected_operation: Option<&str>,
+        order: &SharedOrder,
+    ) -> Result<bool, String> {
+        if let Some(expected) = expected_operation {
+            self.0
+                .exec_drop(
+                    "UPDATE orders SET operation_id=?,payload=?,completed=?
+                 WHERE storage_id=? AND order_number=? AND operation_id=? AND NOT completed",
+                    (
+                        &order.operation_id,
+                        &order.payload,
+                        order.completed,
+                        storage,
+                        &order.number,
+                        expected,
+                    ),
+                )
+                .await
+                .map_err(mysql_error)?;
+            if self.0.affected_rows() != 0 {
+                return Ok(true);
+            }
+        } else if !order.completed {
+            let result = self.0.exec_drop(
+                "INSERT INTO orders(storage_id,order_number,operation_id,payload,completed)
+                 VALUES(?,?,?,?,FALSE)",
+                (storage, &order.number, &order.operation_id, &order.payload),
+            ).await;
+            match result {
+                Ok(()) => return Ok(true),
+                Err(mysql_async::Error::Server(error)) if error.code == 1062 => {}
+                Err(error) => return Err(mysql_error(error)),
+            }
+        }
+        // Read the operation ID to recognize an earlier successful attempt even
+        // if the response was lost. SQL enforces the expected row on every write.
+        Ok(self
+            .get(storage, &order.number)
+            .await?
+            .is_some_and(|current| current.operation_id == order.operation_id))
     }
 
-    pub async fn read(&mut self, storage: &str) -> Result<HashMap<String, SharedOrder>, String> {
-        let rows: Vec<(String, u64, String, Option<String>, bool)> = self.0.exec(
-            "SELECT order_number, revision, operation_id, metadata, completed
-             FROM vagaga_shared_orders WHERE storage_id=UNHEX(SHA2(?, 256))",
-            (storage,),
-        ).await.map_err(mysql_error)?;
-        rows.into_iter().map(|(number, revision, operation_id, metadata, completed)| {
-            let metadata = metadata.map(|value| serde_json::from_str(&value)).transpose()
-                .map_err(|error| format!("MySQL 订单字段无效：{error}"))?;
-            Ok((number.clone(), SharedOrder { number, revision, operation_id, metadata, completed }))
-        }).collect()
+    pub async fn get(
+        &mut self,
+        storage: &str,
+        number: &str,
+    ) -> Result<Option<SharedOrder>, String> {
+        let row: Option<(String, String, String, bool)> = self
+            .0
+            .exec_first(
+                "SELECT order_number, operation_id, payload, completed FROM orders
+             WHERE storage_id=? AND order_number=?",
+                (storage, number),
+            )
+            .await
+            .map_err(mysql_error)?;
+        Ok(row.map(shared_order))
+    }
+
+    pub async fn read(&mut self, storage: &str) -> Result<Vec<SharedOrder>, String> {
+        self.0
+            .exec_map(
+                "SELECT order_number, operation_id, payload, completed FROM orders
+             WHERE storage_id=?",
+                (storage,),
+                shared_order,
+            )
+            .await
+            .map_err(mysql_error)
+    }
+}
+
+fn shared_order(
+    (number, operation_id, payload, completed): (String, String, String, bool),
+) -> SharedOrder {
+    SharedOrder {
+        number,
+        operation_id,
+        payload,
+        completed,
     }
 }
 

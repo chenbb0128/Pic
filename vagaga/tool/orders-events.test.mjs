@@ -235,6 +235,7 @@ function environment(t, overrides = {}) {
       return snapshot
     },
     getQiniuStatus: async () => qiniuStatus,
+    workflowOrders: async () => [],
     listProductions: async orderNumber => structuredClone(productions.filter(p => p.orderNumber === orderNumber)),
     saveProduction: async (orderNumber, dataB64, fileName, imageId) => {
       savedProductions.push({ orderNumber, dataB64, fileName, imageId })
@@ -447,6 +448,61 @@ test('local order search matches partial order numbers and layout codes', async 
   assert.equal(view.visibleEntries.value.length, 2)
 })
 
+test('the order status filter can search across pending and completed orders', async t => {
+  const env = environment(t)
+  env.rows([order('pending'), order('finished')])
+  await env.store.loadOrders()
+  env.store.useOrdersStore().workflowOrders['ORDER-finished'] = { localCompleted: true }
+  const view = await env.mountView()
+  const ids = () => view.visibleEntries.value.map(entry => entry.summary.id).join(',')
+  assert.equal(ids(), 'pending')
+  view.orderFilter.value = 'completed'
+  assert.equal(ids(), 'finished')
+  view.orderFilter.value = 'all'
+  assert.equal(ids(), 'pending,finished')
+  view.orderSearch.value = 'finished'
+  assert.equal(ids(), 'finished')
+})
+
+test('capturing material for a completed order reveals its images without reopening the order', async t => {
+  const finished = { orderNumber: 'ORDER-finished', localCompleted: true }
+  const env = environment(t, { workflowOrders: async () => [finished] })
+  const state = env.store.useOrdersStore()
+  env.rows([order('pending'), order('finished', [image('first')])])
+  await env.store.refreshWorkflowOrders()
+  await env.store.loadOrders()
+  await env.store.bindEvents()
+  const view = await env.mountView()
+  view.orderSearch.value = 'pending'
+  assert.equal(view.visibleEntries.value[0].summary.id, 'pending')
+  env.rows([order('finished', [image('first'), image('second')]), order('pending')])
+  await env.emit({ kind: 'ingested', orderNumber: 'ORDER-finished', imageId: 'second' })
+  assert.equal(view.orderFilter.value, 'completed')
+  assert.equal(view.orderSearch.value, '')
+  assert.equal(view.expandedOrderId.value, 'finished')
+  assert.equal(view.visibleEntries.value[0].images[1].id, 'second')
+  assert.equal(state.workflowOrders['ORDER-finished'].localCompleted, true)
+})
+
+test('opening a material shows its original and downloading saves that material', async t => {
+  const saved = []
+  const env = environment(t, { saveOrderImage: async id => { saved.push(id); return null } })
+  const view = await env.mountView()
+  let opened = false
+  view.materialDialog.value = { open: false, showModal() { opened = true } }
+  const material = { ...image('photo'), thumbnailPath: 'thumb.png', byteLength: 2.5 * 1024 * 1024 }
+  await view.showMaterial(material)
+  assert.equal(opened, true)
+  assert.equal(view.materialPath.value, material.filePath)
+  assert.equal(view.formatBytes(material.byteLength), '2.5 MB')
+  await view.saveImage(view.previewMaterial.value)
+  assert.deepEqual(saved, ['photo'])
+  await view.showMaterial({ ...material, filePath: '' })
+  assert.equal(view.materialPath.value, 'thumb.png')
+  await view.saveImage(view.previewMaterial.value)
+  assert.deepEqual(saved, ['photo'])
+})
+
 test('making uses the clicked order remark and restores that order’s deliberately blank draft', async t => {
   const env = environment(t)
   await env.store.refreshQiniuStatus()
@@ -571,4 +627,30 @@ test('selecting the shared version replaces an open order only after the replace
     ['remote:5', 'local:2', null],
     ['remote:5', 'local:2', null],
   ])
+})
+
+test('upload and finish open the comparison without a separate sync action', async t => {
+  const conflict = { orderNumber: 'ORDER-conflict', reference: 'shared-head', localVersion: 'local-head', changes: ['商家备注'] }
+  const env = environment(t, {
+    workflowOrders: async () => [],
+    workflowUpload: async () => ({ updated: 1, conflicts: [conflict], errors: [], uploadedOrderNumbers: ['ORDER-ok'] }),
+    workflowFinish: async () => ({ completed: 0, conflicts: [conflict], errors: [] }),
+  })
+  env.store.useOrdersStore().workflow.role = 'customer'
+  const applied = []
+  const workflow = env.mountWorkflow({ saveLayout: async () => {}, applySharedVersion: async value => applied.push(value) })
+  const dialog = vue.markRaw({ open: false, showModal() { this.open = true }, close() { this.open = false } })
+  workflow.dialog.value = dialog
+  assert.deepEqual(await workflow.upload(['ORDER-conflict', 'ORDER-ok']), ['ORDER-ok'])
+  assert.equal(dialog.open, true)
+  assert.equal(workflow.preview.value.orderNumber, 'ORDER-conflict')
+  workflow.dismiss(conflict)
+  assert.equal(dialog.open, false)
+  assert.equal(applied.length, 0)
+  env.store.useOrdersStore().workflow.role = 'production'
+  await workflow.finish(conflict.orderNumber)
+  assert.equal(dialog.open, true)
+  await workflow.replace()
+  assert.equal(applied[0].reference, conflict.reference)
+  assert.equal(dialog.open, false)
 })

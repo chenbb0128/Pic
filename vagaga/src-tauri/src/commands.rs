@@ -256,7 +256,7 @@ pub(crate) async fn mysql_sync_now(
     state: State<'_, AppState>,
     active_order: Option<String>,
 ) -> Result<crate::workflow::Outcome, String> {
-    crate::workflow::synchronize(&state, active_order.as_deref(), true).await
+    crate::workflow::synchronize(&state, active_order.as_deref()).await
 }
 
 /// 成品保存到本机，交付时再上传。

@@ -93,6 +93,11 @@ func newHandler(devices authDevices, repo repository, objects objectStore, maxBy
 	if mysql, ok := repo.(mysqlRepository); ok {
 		registerWorkflow(route, h, mysql.db)
 	}
+	materials := map[string]endpoint{
+		"GET": h.sharedMaterialDownload, "POST": h.sharedMaterialUpload,
+	}
+	route("/shared-materials/{kind}/{name}", materials)
+	route("/shared-materials/{order}/{kind}/{name}", materials)
 	route("/device", map[string]endpoint{"GET": h.device})
 	route("/upload-sessions", map[string]endpoint{"POST": h.createSession})
 	route("/upload-sessions/{id}/complete", map[string]endpoint{"POST": h.completeSession})

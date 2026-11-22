@@ -18,6 +18,7 @@ interface State {
   qiniu: QiniuStatus | null
   workflow: WorkflowSettings
   workflowOrders: Record<string, WorkflowOrder>
+  latestCapture: { orderId: string } | null
 }
 
 const state = reactive<State>({
@@ -30,6 +31,7 @@ const state = reactive<State>({
   qiniu: null,
   workflow: { role: 'both', target: null },
   workflowOrders: {},
+  latestCapture: null,
 })
 
 let toastSeq = 0
@@ -97,9 +99,12 @@ export async function handlePaidanEvent(event: PaidanEvent) {
       ? event.scaled ? '（缩图，仅保存在本机）' : '（已保存本地，同步状态见订单）'
       : event.scaled ? '（缩图）' : ''
     toast('ok', `排单已入库：订单 ${event.orderNumber}${note}`)
-    await loadOrders()
+    await Promise.all([loadOrders(), refreshWorkflowOrders().catch(() => {})])
     const target = state.orders.find(o => o.orderNumber === event.orderNumber)
-    if (target && target.id !== state.selectedId) await selectOrder(target.id)
+    if (target) {
+      if (target.id !== state.selectedId) await selectOrder(target.id)
+      state.latestCapture = { orderId: target.id }
+    }
   } else {
     toast('error', `排单入库失败（${event.orderNumber}）：${event.detail ?? '未知原因'}`)
   }
