@@ -4,7 +4,7 @@
     return states.map(state => ({ ...state, clip: typeof state.clip === 'boolean' ? state.clip : legacyClip === true }));
   }
   function capture({ name, cfg, base, states, photoAt, catalog, settings, customRows, copy }) {
-    const keys = ['w', 'h', 'slots', 'placements', 'widthMm', 'heightMm', 'contentOffsetX', 'photoTypes', 'text', 'custom'];
+    const keys = ['w', 'h', 'slots', 'placements', 'widthMm', 'heightMm', 'contentOffsetX', 'photoTypes', 'text', 'custom', 'notice'];
     const template = Object.fromEntries(keys.filter(k => cfg[k] !== undefined).map(k => [k, cfg[k]]));
     template.motifSlots = catalog; template.name = name;
     if (!cfg.text) template.image = cfg.custom ? cfg.background : base;
@@ -24,7 +24,9 @@
     for (let i = 0; i < cfg.slots.length; i++) {
       const p = cfg.slots[i], st = data.states[i];
       if (!p || !['x', 'y', 'w', 'h'].every(k => finite(p[k])) || p.w <= 0 || p.h <= 0 || !st || typeof st !== 'object') bad();
+      if (p.photoArea && (!['x', 'y', 'w', 'h'].every(k => finite(p.photoArea[k])) || p.photoArea.w <= 0 || p.photoArea.h <= 0)) bad();
       for (const key of ['size', 'dx', 'dy', 'imageScale', 'imageDx', 'imageDy']) if (st[key] !== undefined && !finite(st[key])) bad();
+      if (st.photoLight !== undefined && (!finite(st.photoLight) || st.photoLight < 0 || st.photoLight > 200)) bad();
       if (st.motif && (!assets[st.motif.assetId] || !st.motif.image?.naturalWidth || !st.motif.frame || !st.motif.placement)) bad();
       if (st.background?.type === 'image' && !st.background.image?.naturalWidth) bad();
       if (data.photos[i] && !data.photos[i].naturalWidth) bad();

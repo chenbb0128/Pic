@@ -48,7 +48,6 @@ function syncLabel(asset: OrderImage | Production) {
 
 function qualityLabel(img: OrderImage) {
   if (img.sourceQuality === 'scaled') return '来源为缩图'
-  if (img.sourceQuality === 'original') return '原图'
   if (img.sourceQuality === 'unknown') return '原图来源未确认'
   return ''
 }
@@ -750,11 +749,10 @@ function orderProductions(orderNumber: string): Production[] {
                 </div>
                 <div class="imgInfo">
                   <div v-if="qualityLabel(img) || syncLabel(img)" class="imageLabels" :title="img.syncError">
-                    <span v-if="qualityLabel(img)" :class="{ caution: img.sourceQuality !== 'original' }">{{ qualityLabel(img) }}</span>
+                    <span v-if="qualityLabel(img)" class="caution">{{ qualityLabel(img) }}</span>
                     <span v-if="syncLabel(img)" class="syncLabel" :class="img.syncStatus">{{ syncLabel(img) }}</span>
                   </div>
                   <div class="specSection" role="group" aria-label="待制作规格">
-                    <span class="specLabel">待制作规格</span>
                     <div class="rules">
                       <span v-if="!img.templates.length" class="specEmpty">请在下方勾选规格</span>
                       <span v-for="spec in specificationsFor(img).filter(spec => spec.quantity !== null)" :key="spec.webId" class="ruleGroup">

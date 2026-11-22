@@ -18,6 +18,7 @@
         "height": 780,
         "minWidth": 1530,
         "minHeight": 640,
+        "dragDropEnabled": false,
         "decorations": false,
         "transparent": true,
         "windowEffects": {

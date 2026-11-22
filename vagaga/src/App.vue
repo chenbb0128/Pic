@@ -82,7 +82,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell" @dragover.prevent @drop.prevent>
     <TitleBar
       :view="view"
       :before-close="saveLayoutBeforeClose"

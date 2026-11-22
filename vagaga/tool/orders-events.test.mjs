@@ -23,6 +23,19 @@ const order = (id, images = []) => ({ id, orderNumber: `ORDER-${id}`, images,
   imageCount: images.length, createdAt: '2026-11-19T12:00:00',
   updatedAt: '2026-11-19T12:00:00', metadata: null })
 
+test('the embedded editor offers the latest presets, lighting and direct photo controls', () => {
+  for (const template of ['草莓.png', '圣诞.png']) {
+    assert.ok(editorSource.includes(`<option value="${template}">`), template)
+  }
+  for (const script of ['strawberry-template.js', 'christmas-template.js', 'photo-lighting.js', 'photo-lighting-controls.js']) {
+    assert.ok(editorSource.includes(`src="./${script}?`), script)
+    assert.ok(readFileSync(new URL(`../public/embedded/heart-star/${script}`, import.meta.url)).length)
+  }
+  assert.match(editorSource, /id="photoLightingCompact"/)
+  assert.match(editorSource, /id="photoScaleNumber"[^>]*type="number"/)
+  assert.ok(editorSource.includes("previewPanel.addEventListener('drop',onPreviewDrop)"))
+})
+
 function editorFixture() {
   const between = (start, end) => editorSource.slice(editorSource.indexOf(start), editorSource.indexOf(end))
   const field = value => Object.assign(new EventTarget(), { value })
@@ -39,6 +52,10 @@ function editorFixture() {
     numberingEnabled: { checked: true }, sheetTotal: { value: '1' }, sheetIndex: { value: '1' },
   }
   const photos = new Map()
+  const previewDropStyles = new Set()
+  const previewPanel = Object.assign(new EventTarget(), {
+    classList: { toggle(name, enabled) { if (enabled) previewDropStyles.add(name); else previewDropStyles.delete(name) } },
+  })
   let selectedIds = [0]
   const images = []
   const downloads = []
@@ -51,10 +68,12 @@ function editorFixture() {
   const dimensions = { totalW: 100, totalH: 100, dpi: 300 }
   const context = vm.createContext({
     window: frame, Event, File, TextEncoder, URLSearchParams, atob, btoa,
+    previewPanel,
     setTimeout: (callback, delay) => setTimeout(callback, delay).unref(), clearTimeout,
     document: {
       getElementById: id => controls[id],
       createElement: () => ({ click() { downloads.push(this.download) } }),
+      addEventListener() {},
     },
     Image: class { set src(value) { images.push(this) } },
     URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
@@ -75,6 +94,7 @@ function editorFixture() {
     canvas, exportBusy: false, outputConfig: () => dimensions, renderConfig: () => dimensions,
     portraitConfig: config => config, portraitCanvas: source => source, addDpiMetadata: async blob => blob,
     motifEditor: { busy: () => false }, slotBackgrounds: { busy: () => false },
+    photoLightingEditor: undefined,
     HeartStarWatermark: { preview: source => source },
   })
   const bridge = [...editorSource.matchAll(/<script>([\s\S]*?)<\/script>/g)]
@@ -83,15 +103,38 @@ function editorFixture() {
   vm.runInContext([
     between('const footerHeightMm=', 'function drawFooter('),
     between('async function setFiles(', 'function applySolidPhotos('),
+    between('function hasImageTransfer(', "cancelPhotoLightingButton.addEventListener('click'"),
     between('async function exportPng(', 'const customAssets='),
     bridge,
   ].join('\n'), context)
   return {
     frame, photos, images, prefix, input, output, downloads, posted, template, widthInput, heightInput,
+    previewPanel, previewDropStyles,
     useSlots(count, ids) { context.states = Array.from({ length: count }, () => ({})); selectedIds = ids },
     exportPng: context.exportPng,
   }
 }
+
+test('dropping an image onto the preview replaces only the selected position', async () => {
+  const editor = editorFixture()
+  editor.useSlots(2, [1])
+  const original = {}
+  editor.photos.set(0, { image: original })
+  const dataTransfer = { files: [new File(['fixture'], 'portrait.png', { type: 'image/png' })] }
+  const enter = Object.assign(new Event('dragover', { cancelable: true }), { dataTransfer })
+  editor.previewPanel.dispatchEvent(enter)
+  assert.ok(enter.defaultPrevented)
+  assert.ok(editor.previewDropStyles.has('is-file-dragover'))
+  const drop = Object.assign(new Event('drop', { cancelable: true }), { dataTransfer })
+  editor.previewPanel.dispatchEvent(drop)
+  assert.ok(drop.defaultPrevented)
+  assert.equal(editor.previewDropStyles.size, 0)
+  const droppedImage = editor.images.shift()
+  droppedImage.onload()
+  await flush()
+  assert.equal(editor.photos.get(0).image, original)
+  assert.equal(editor.photos.get(1).image, droppedImage)
+})
 
 test('the editor fills its actual numbering controls when the photo finishes loading', async () => {
   const editor = editorFixture()

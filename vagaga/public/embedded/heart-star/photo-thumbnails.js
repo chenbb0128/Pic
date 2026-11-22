@@ -11,41 +11,56 @@
     const close = document.createElement('button'); close.type = 'button'; close.className = 'photo-thumb-action';
     close.textContent = '✕ 关闭'; close.setAttribute('aria-label', '关闭大图');
     const body = document.createElement('div'); body.className = 'photo-zoom-body';
-    const canvas = document.createElement('canvas');
-    head.append(title, close); body.append(canvas); dialog.append(head, body);
+    const createPanel = labelText => {
+      const panel = document.createElement('div'); panel.className = 'photo-zoom-panel';
+      const label = document.createElement('span'); label.className = 'photo-zoom-label'; label.textContent = labelText;
+      const canvas = document.createElement('canvas'); panel.append(label, canvas); body.append(panel);
+      return canvas;
+    };
+    const originalCanvas = createPanel('原图'), previewCanvas = createPanel('当前效果');
+    head.append(title, close); dialog.append(head, body);
     close.addEventListener('click', () => dialog.close());
     dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
     (document.body || document.documentElement).append(dialog);
-    zoomDialog = { dialog, title, canvas };
+    zoomDialog = { dialog, title, originalCanvas, previewCanvas };
     return zoomDialog;
+  }
+  function drawZoomCanvas(canvas, image) {
+    const width = image.naturalWidth || image.width || 0, height = image.naturalHeight || image.height || 0;
+    const cap = width > 0 && height > 0 ? Math.min(1, 2048 / Math.max(width, height)) : 1;
+    canvas.width = Math.max(1, Math.round((width || 1) * cap));
+    canvas.height = Math.max(1, Math.round((height || 1) * cap));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+    return { width, height };
   }
   function openZoom(item, index) {
     const zoom = ensureZoomDialog();
-    const width = item.image.naturalWidth || item.image.width || 0, height = item.image.naturalHeight || item.image.height || 0;
-    const cap = width > 0 && height > 0 ? Math.min(1, 2048 / Math.max(width, height)) : 1;
-    zoom.canvas.width = Math.max(1, Math.round((width || 1) * cap));
-    zoom.canvas.height = Math.max(1, Math.round((height || 1) * cap));
-    zoom.canvas.getContext('2d').drawImage(item.image, 0, 0, zoom.canvas.width, zoom.canvas.height);
-    zoom.title.textContent = `照片 ${index + 1} · ${item.processed ? '已处理' : '原图'}${width > 0 ? ` · ${width} × ${height} px` : ''}`;
+    const originalSize = drawZoomCanvas(zoom.originalCanvas, item.image);
+    const currentImage = item.preview || item.image;
+    const currentSize = drawZoomCanvas(zoom.previewCanvas, currentImage);
+    const lit = currentImage !== item.image;
+    const width = currentSize.width || originalSize.width, height = currentSize.height || originalSize.height;
+    zoom.title.textContent = `照片 ${index + 1} · ${item.processed ? '已处理' : lit ? '已补光' : '原图'}${item.processed && lit ? ' · 已补光' : ''}${width > 0 ? ` · ${width} × ${height} px` : ''}`;
     if (zoom.dialog.open !== true) zoom.dialog.showModal();
   }
-  function create({ container, getBoard, isProcessed, canRestore, process, restore }) {
+  function create({ container, getBoard, isProcessed, canRestore, process, restore, displayImage = image => image }) {
     let previous = [], previousToken, buttons = [];
     function update() {
       const board = getBoard(), entries = [], byImage = new Map();
       for (const id of board.ids) {
         const image = board.photoAt(id); if (!image) continue;
-        if (!byImage.has(image)) {
-          const item = { image, ids: [], processed: false };
-          entries.push(item); byImage.set(image, item);
+        const preview = displayImage(image, id);
+        if (!byImage.has(preview)) {
+          const item = { image, preview, ids: [], processed: false };
+          entries.push(item); byImage.set(preview, item);
         }
-        const item = byImage.get(image); item.ids.push(id);
+        const item = byImage.get(preview); item.ids.push(id);
         item.processed ||= isProcessed(image) || !!board.processedAt?.(id);
       }
       const unchanged = previousToken === board.token && previous.length === entries.length &&
         container.children.length === entries.length && entries.every((item, i) => {
           const old = previous[i];
-          return old.image === item.image && old.processed === item.processed &&
+          return old.image === item.image && old.preview === item.preview && old.processed === item.processed &&
             old.ids.length === item.ids.length && old.ids.every((id, j) => id === item.ids[j]);
         });
       if (unchanged) { buttons.forEach(({ button, unavailable }) => { button.disabled = !board.ready || unavailable; }); return; }
@@ -54,17 +69,17 @@
         const card = document.createElement('div'); card.className = 'photo-thumb-card';
         const surface = document.createElement('canvas'); surface.className = 'photo-thumb-image photo-thumb-zoom';
         surface.width = surface.height = 112;
-        const w = item.image.naturalWidth || item.image.width, h = item.image.naturalHeight || item.image.height;
+        const w = item.preview.naturalWidth || item.preview.width, h = item.preview.naturalHeight || item.preview.height;
         if (w > 0 && h > 0) {
           const scale = Math.min(112 / w, 112 / h), width = w * scale, height = h * scale;
-          surface.getContext('2d').drawImage(item.image, (112 - width) / 2, (112 - height) / 2, width, height);
+          surface.getContext('2d').drawImage(item.preview, (112 - width) / 2, (112 - height) / 2, width, height);
         }
-        surface.setAttribute('aria-label', `照片 ${index + 1}${item.processed ? '，已处理' : ''}，点击查看大图`);
+        surface.setAttribute('aria-label', `照片 ${index + 1}${item.processed ? '，已处理' : ''}${item.preview !== item.image ? '，已补光' : ''}，点击查看大图`);
         surface.addEventListener('click', () => openZoom(item, index));
         card.append(surface);
-        if (item.processed) {
+        if (item.processed || item.preview !== item.image) {
           const badge = document.createElement('span'); badge.className = 'photo-thumb-badge';
-          badge.textContent = '已处理'; card.append(badge);
+          badge.textContent = [item.processed ? '已处理' : '', item.preview !== item.image ? '已补光' : ''].filter(Boolean).join(' · '); card.append(badge);
         }
         const action = document.createElement('button'); action.type = 'button'; action.className = 'photo-thumb-action';
         const restorable = canRestore(item.image), unavailable = item.processed && !restorable;
