@@ -32,11 +32,11 @@ void main() {
       initialTemplates.map((template) => template.id).toSet(),
       webTemplates.map((template) => template.id).toSet(),
     );
-    expect(initialTemplates, hasLength(17));
+    expect(initialTemplates, hasLength(18));
   });
 
   test('桌面端模板清单与 web 爱心星星工具一致，并兼容旧模板编号', () {
-    expect(webTemplates, hasLength(17));
+    expect(webTemplates, hasLength(18));
     expect(
       webTemplates.map((template) => template.webValue),
       containsAll([
@@ -47,6 +47,7 @@ void main() {
         '甜心派对.png',
         '缤纷糖果.png',
         '草莓.png',
+        '圣诞.png',
         '模板混合.png',
         '经典豹纹混合.png',
         '黑粉奶油混合豹纹.png',

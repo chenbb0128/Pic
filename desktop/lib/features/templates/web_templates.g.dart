@@ -9,6 +9,7 @@ const webTemplates = <TemplateDefinition>[
   TemplateDefinition(id: "甜心派对.png", name: "甜心派对 · A5 竖版"),
   TemplateDefinition(id: "缤纷糖果.png", name: "缤纷糖果 · A5 竖版"),
   TemplateDefinition(id: "草莓.png", name: "草莓款 · A5 竖版"),
+  TemplateDefinition(id: "圣诞.png", name: "圣诞款 · A5 竖版"),
   TemplateDefinition(id: "模板混合.png", name: "爱心＋星星混合款"),
   TemplateDefinition(id: "经典豹纹混合.png", name: "经典豹纹款 · 爱心＋星星"),
   TemplateDefinition(id: "黑粉奶油混合豹纹.png", name: "黑粉奶油混合豹纹"),
