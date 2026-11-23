@@ -27,6 +27,16 @@ pub enum Provider {
     Smb,
 }
 
+impl Provider {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Minio => "MinIO",
+            Self::Webdav => "WebDAV",
+            Self::Smb => "SMB",
+        }
+    }
+}
+
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CloudConfig {
@@ -89,11 +99,7 @@ impl CloudConfig {
     }
 
     pub(crate) async fn test(&self) -> Result<String, String> {
-        match self.client()? {
-            FileStorage::Minio(client) => client.test().await,
-            FileStorage::Webdav(client) => client.test().await,
-            FileStorage::Smb(client) => client.test().await,
-        }
+        self.client()?.test().await
     }
 }
 
@@ -358,13 +364,7 @@ impl S3Client {
             if let Some(token) = token.as_deref() {
                 query.push(("continuation-token", token));
             }
-            let response = self.request(reqwest::Method::GET, "", &query, EMPTY_SHA256, None, false).await?;
-            if !response.status().is_success() {
-                return Err(format!("列举失败（HTTP {}）：{}", response.status(), response.text().await.unwrap_or_default()));
-            }
-            let text = response.text().await.map_err(|error| format!("列举响应读取失败：{error}"))?;
-            let page: S3PrefixPage = quick_xml::de::from_str(&text)
-                .map_err(|error| format!("MinIO 目录列表无效：{error}"))?;
+            let page = self.list_page(&query).await?;
             prefixes.extend(page.common_prefixes.into_iter().filter_map(|entry| {
                 let name = entry.prefix.strip_prefix(prefix)?.trim_end_matches('/');
                 (!name.is_empty()).then(|| name.to_owned())
@@ -381,8 +381,17 @@ impl S3Client {
     }
 
     pub async fn test(&self) -> Result<String, String> {
-        self.list_prefixes("").await?;
+        self.list_page(&[("list-type", "2"), ("max-keys", "1")]).await?;
         Ok(format!("连接正常（bucket={}）", self.bucket))
+    }
+
+    async fn list_page(&self, query: &[(&str, &str)]) -> Result<S3PrefixPage, String> {
+        let response = self.request(reqwest::Method::GET, "", query, EMPTY_SHA256, None, false).await?;
+        if !response.status().is_success() {
+            return Err(format!("列举失败（HTTP {}）：{}", response.status(), response.text().await.unwrap_or_default()));
+        }
+        let text = response.text().await.map_err(|error| format!("列举响应读取失败：{error}"))?;
+        quick_xml::de::from_str(&text).map_err(|error| format!("MinIO 目录列表无效：{error}"))
     }
 }
 
@@ -617,6 +626,14 @@ pub(crate) enum FileStorage {
 }
 
 impl FileStorage {
+    pub(crate) async fn test(&self) -> Result<String, String> {
+        match self {
+            Self::Minio(client) => client.test().await,
+            Self::Webdav(client) => client.test().await,
+            Self::Smb(client) => client.test().await,
+        }
+    }
+
     pub(crate) async fn put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
         match self {
             Self::Minio(client) => client.put_object(key, bytes).await,

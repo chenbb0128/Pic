@@ -165,12 +165,15 @@ pub(crate) async fn save_qiniu_settings(
     state: State<'_, AppState>,
     settings: SettingsInput,
 ) -> Result<Settings, String> {
+    let _guard = state.workflow_operations.lock().await;
     let (mut saved, mut encrypted) = load(&state.store)?;
     if !(10..=60).contains(&settings.poll_seconds) {
         return Err("同步间隔应在 10 到 60 秒之间".into());
     }
     let url = settings.api_url.trim().trim_end_matches('/');
-    if settings.enabled {
+    let new_binding = !saved.has_token || saved.api_url != url
+        || settings.token.as_deref().is_some_and(|token| !token.trim().is_empty());
+    if settings.enabled && new_binding {
         if settings
             .token
             .as_deref()
@@ -210,6 +213,9 @@ pub(crate) async fn save_qiniu_settings(
         .store
         .write_qiniu_settings(&json, &encrypted)
         .map_err(|e| e.to_string())?;
+    if settings.enabled {
+        crate::workflow_storage::StorageSelection::Qiniu.save(&state.store)?;
+    }
     Ok(saved)
 }
 

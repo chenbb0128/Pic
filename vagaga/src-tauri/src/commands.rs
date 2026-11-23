@@ -236,10 +236,11 @@ pub fn get_mysql_config(state: State<'_, AppState>) -> crate::mysql::MysqlConfig
 }
 
 #[tauri::command]
-pub fn save_mysql_config(
+pub async fn save_mysql_config(
     state: State<'_, AppState>,
     config: crate::mysql::MysqlConfig,
 ) -> Result<(), String> {
+    let _guard = state.workflow_operations.lock().await;
     crate::mysql::save_config(&state.data_root, &config)
 }
 
@@ -338,7 +339,11 @@ pub async fn save_cloud_config(
     config: crate::cloud::CloudConfig,
 ) -> Result<(), String> {
     let _guard = state.workflow_operations.lock().await;
-    state.cloud.save(&state.data_root, &config).await
+    state.cloud.save(&state.data_root, &config).await?;
+    if config.enabled {
+        crate::workflow_storage::StorageSelection::Nas.save(&state.store)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -52,6 +52,7 @@ export interface AppInfo {
 }
 
 export type CloudProvider = 'minio' | 'webdav' | 'smb'
+export type StorageProvider = CloudProvider | 'qiniu'
 
 export interface WebDavConfig {
   endpoint: string
@@ -152,6 +153,7 @@ export type WorkflowRole = 'customer' | 'production' | 'both'
 export interface WorkflowSettings {
   role: WorkflowRole
   target: string | null
+  storageProvider?: StorageProvider | null
 }
 
 export interface WorkflowOrder {

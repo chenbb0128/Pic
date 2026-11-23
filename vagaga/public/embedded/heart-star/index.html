@@ -171,19 +171,58 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </style></head>
 <body>
 <link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
-<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-2">
 <link rel="stylesheet" href="./product-preview.css?v=product-1">
+<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-6">
 <header class="editor-toolbar" aria-label="排版工具栏">
+ <div class="editor-order"><span>订单编号</span><strong id="desktopOrderNumber"></strong></div>
  <label class="label" for="footerText">排版编号</label>
  <div class="footer-text-row">
   <select id="footerPrefix" aria-label="编号前缀"><option value="ch" selected>ch</option><option value="yy">yy</option><option value="x">x</option></select>
   <input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号" aria-label="本次排版编号" required>
  </div>
- <button type="button" class="btn primary" id="download" disabled>下载 PNG</button>
+ <button type="button" class="btn primary" id="download" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>下载 PNG</button>
 </header>
 <main class="app">
-<section class="panel">
- <div class="pic-group-head">模板</div><div class="field"><div class="label">选择模板 <span class="small">18 款＋自定义</span></div><select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="甜心派对.png">甜心派对 · A5 竖版</option><option value="缤纷糖果.png">缤纷糖果 · A5 竖版</option><option value="草莓.png">草莓款 · A5 竖版</option><option value="圣诞.png">圣诞款 · A5 竖版</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select></div>
+<section class="panel" aria-label="制作设置">
+ <div class="editor-template">
+  <label class="label" for="template">选择模板</label>
+  <select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="甜心派对.png">甜心派对 · A5 竖版</option><option value="缤纷糖果.png">缤纷糖果 · A5 竖版</option><option value="草莓.png">草莓款 · A5 竖版</option><option value="圣诞.png">圣诞款 · A5 竖版</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select>
+  <div id="desktopEditorFeedback" class="editor-feedback" role="status"></div>
+  <div id="status" class="status" role="status"></div>
+ </div>
+ <div class="editor-sections">
+ <div class="field" id="customField" hidden>
+  <div class="label">逐排组合 <span class="small">保留原图大小</span></div>
+  <p class="custom-help">点击缩略图选择图案的大款／小款，再设置数量。各款保持原模板尺寸，只调整位置和间距。</p>
+  <div id="customRows"></div>
+  <button type="button" class="btn copy-apply" id="addCustomRow">＋ 添加一排</button>
+  <div class="custom-summary small" id="customSummary" role="status" aria-live="polite"></div>
+  <button type="button" class="btn primary copy-apply" id="applyCustom">应用排版</button>
+  <p class="custom-help">图案按从左到右、从上到下排列。四周留 3 mm，图案间至少留 2 mm；图片仍按上传顺序填入。</p>
+ </div>
+ <details class="editor-options" id="editorPhotoOptions" open>
+  <summary>照片与头像</summary>
+  <div class="editor-options-body">
+   <div class="field editor-photo-input">
+   <label class="upload" id="drop"><strong>选择图片</strong><input id="files" type="file" accept="image/*" multiple></label>
+   <div class="thumbs" id="thumbs"></div>
+    <div class="editor-cutout-actions" id="editorCutoutActions"></div>
+   <details class="editor-suboptions"><summary>人像补光</summary>
+   <div id="photoLightingCompact"><div class="label"><span>补光强度</span><output data-light-value>未补光</output></div><input id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="0" aria-label="补光强度"><div class="photo-lighting-compact-actions"><button type="button" class="btn primary" data-light-auto>一键补光</button><button type="button" class="btn" data-light-reset>恢复原图</button></div><p data-light-status role="status" aria-live="polite"></p></div><button type="button" class="btn" id="cancelPhotoLighting" hidden disabled style="width:100%;height:36px;margin-top:8px;font-size:12px">取消补光处理</button>
+   </details>
+   </div>
+   <div class="field"><div class="label"><span id="selectionTitle">选择图形</span> <span class="small" id="selectedCount">已选 1 个</span></div><label class="check multi-check"><input id="multiMode" type="checkbox"><span id="multiModeLabel">多选图案并统一控制</span></label><div class="selection-actions"><button type="button" class="btn" id="selectAll">全选</button><button type="button" class="btn" id="clearSelection">清空选择</button></div><select class="select" id="slotSelect"></select><div id="replacePhotoActions"><button type="button" class="btn copy-apply replace-photo" id="replacePhoto" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg><span>替换所选图片</span></button><input id="replacePhotoFile" type="file" accept="image/*" hidden><button type="button" class="btn" id="removeSelectedPhoto" style="width:100%;height:36px;margin-top:8px;font-size:12px" title="仅删除所选位置的照片，保留图案轮廓和背景" disabled>删除所选照片</button></div><div class="small" id="slotInfo" style="margin-top:7px">开启多选后，可在预览中逐个点选图形</div></div>
+   <div class="field photo-tune" id="photoFrameField">
+   <div class="label">头像微调 <button type="button" class="photo-tune-reset" id="resetPhoto" aria-label="重置头像大小和位置">重置</button></div>
+   <div class="photo-tune-control"><div class="photo-tune-control-label"><label for="photoScale">头像大小</label><span class="photo-tune-percent-input"><input id="photoScaleNumber" type="number" min="25" max="400" step="1" value="100" aria-label="头像大小百分比"><span>%</span></span><output id="photoScaleOut" for="photoScale" hidden>100%</output></div><input id="photoScale" type="range" min="25" max="400" step="1" value="100" aria-label="头像大小"></div>
+   <div class="photo-tune-control"><label for="photoOffsetY">上下位置 <output id="photoOffsetYOut" for="photoOffsetY">居中</output></label><input id="photoOffsetY" type="range" min="-200" max="200" step="1" value="0" aria-label="头像上下位置"></div>
+   <div class="photo-tune-control"><label for="photoOffsetX">左右位置 <output id="photoOffsetXOut" for="photoOffsetX">居中</output></label><input id="photoOffsetX" type="range" min="-200" max="200" step="1" value="0" aria-label="头像左右位置"></div>
+   <p class="photo-tune-help">仅调整选中的头像，多选可批量微调。</p>
+   <div hidden><input id="photoDragMode" type="checkbox"><select id="photoMoveStep"><option value="5">5 px</option></select><span id="photoOffsetReadout"></span></div>
+   </div>
+   <div class="actions"><button class="btn" id="clear">清空图片</button></div>
+  </div>
+ </details>
  <details class="editor-options">
   <summary>预览与导出设置</summary>
   <div class="editor-options-body">
@@ -206,65 +245,60 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
    <div class="editor-toolbar-actions" hidden><button type="button" class="btn" data-editor-action="shortcuts" aria-haspopup="dialog">快捷键指南</button></div>
   </div>
  </details>
- <div class="field" id="customField" hidden>
-  <div class="label">逐排组合 <span class="small">保留原图大小</span></div>
-  <p class="custom-help">点击缩略图选择图案的大款／小款，再设置数量。各款保持原模板尺寸，只调整位置和间距。</p>
-  <div id="customRows"></div>
-  <button type="button" class="btn copy-apply" id="addCustomRow">＋ 添加一排</button>
-  <div class="custom-summary small" id="customSummary" role="status" aria-live="polite"></div>
-  <button type="button" class="btn primary copy-apply" id="applyCustom">应用排版</button>
-  <p class="custom-help">图案按从左到右、从上到下排列。四周留 3 mm，图案间至少留 2 mm；图片仍按上传顺序填入。</p>
- </div>
-
- <div class="pic-group-head">尺寸与文案</div><div class="field" id="copyField" hidden>
-  <div class="copy-tabs" role="tablist" aria-label="文案编辑"><button type="button" id="copyEditTab" role="tab" aria-selected="true" aria-controls="copyEditPane">所选编辑</button><button type="button" id="copyListTab" role="tab" aria-selected="false" aria-controls="copyListPane" tabindex="-1">文案清单</button><button type="button" class="preview-tool" id="copyUndo" title="撤销" aria-label="撤销" disabled></button><button type="button" class="preview-tool" id="copyRedo" title="重做" aria-label="重做" disabled></button></div>
-  <div id="copyEditPane" role="tabpanel" aria-labelledby="copyEditTab"><label class="label" for="copyText">所选文案 <span class="small" id="copyEditStatus"></span></label><textarea class="copy-input" id="copyText" rows="3" maxlength="500">人生是狂野</textarea><button type="button" class="btn copy-apply" id="applyCopy">应用到所选</button></div>
-  <div id="copyListPane" role="tabpanel" aria-labelledby="copyListTab" hidden><div class="copy-list-head"><span>文案</span><span>数量</span></div><div id="copyJobs"></div><div class="copy-list-actions"><button type="button" class="preview-tool" id="addCopyJob" title="新增文案" aria-label="新增文案"></button><button type="button" class="preview-tool" id="toggleCopyImport" title="批量粘贴" aria-label="批量粘贴" aria-expanded="false"></button><select class="select" id="copyOrder" aria-label="排列顺序"><option value="grouped">同类连续</option><option value="alternate">交替排列</option></select></div><div id="copyImportPane" hidden><label class="label" for="copyImportText">批量文案</label><textarea id="copyImportText" class="copy-input" rows="4"></textarea><div class="copy-import-controls"><select class="select" id="copyImportMode" aria-label="文案分隔方式"><option value="line">每行一条</option><option value="paragraph">空行分隔</option></select><input id="copyImportQuantity" type="number" min="1" max="480" value="1" aria-label="每条数量"></div><label class="check copy-weight"><input id="copyImportReplace" type="checkbox" checked><span>替换清单</span></label><button type="button" class="btn copy-apply" id="importCopyJobs">导入清单</button></div><div class="small" id="copyJobSummary" role="status"></div><button type="button" class="btn primary copy-apply" id="layoutCopyJobs">自动排版</button></div>
-  <div class="label copy-style-label">整页样式</div><div class="copy-controls"><label for="copyFont">字体<select class="select" id="copyFont"><optgroup label="可爱网络字体"><option value="longcang" selected>龙藏手写</option><option value="zcool">站酷快乐体</option><option value="zhimang">志莽行书</option><option value="mashan">马善政毛笔楷书</option><option value="liujian">刘建毛草</option><option value="qingke">站酷庆科黄油体</option><option value="xiaowei">站酷小薇体</option></optgroup><optgroup label="本机字体"><option value="sans">黑体</option><option value="serif">宋体</option><option value="kai">楷体</option><option value="round">圆体</option><option value="hand">手写体</option><option value="mono">等宽字体</option></optgroup></select></label><label for="copyColor">颜色<input id="copyColor" type="color" value="#28252d"></label></div><div class="small" id="copyFontStatus" role="status" aria-live="polite" style="margin-top:7px"></div><label class="copy-size" for="copySize">字号<input id="copySize" type="number" min="12" max="180" step="1" value="32"></label><div class="copy-grid"><label class="copy-size" for="copyColumns">每行数量<input id="copyColumns" type="number" min="2" max="12" step="1" value="6"></label><label class="copy-size" for="copyRows">行数<input id="copyRows" type="number" min="4" max="40" step="1" value="20"></label></div><label class="check copy-weight"><input id="copyBold" type="checkbox"><span>加粗</span></label>
- </div>
- <div class="field"><div class="label">模板内容尺寸 <span class="small">不含编号区</span></div><div class="print-size"><label>宽 <input id="outWidth" type="number" min="20" max="1000" step="1" value="144"> mm</label><span>×</span><label>高 <input id="outHeight" type="number" min="20" max="1000" step="1" value="210"> mm</label></div><div class="dpi-line"><label>打印精度 <select id="dpi"><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="500">500 DPI</option><option value="600" selected>600 DPI</option></select></label></div><div class="size-summary" aria-live="polite"><div><span class="size-summary-label" id="footerAreaLabel">底部编号区</span><span class="size-summary-value" id="footerAreaSize">另加 3 mm 高</span></div><div><span class="size-summary-label">PNG 总尺寸<small id="footerSizeHint">含底部编号区</small></span><span class="size-summary-value" id="exportSize"></span></div><div><span class="size-summary-label">PNG 像素尺寸</span><span class="size-summary-value" id="exportPixels"></span></div></div></div>
- <div class="pic-group-head">照片与图形调整</div><div class="field"><div class="label">上传照片 <span class="small">仅替换选中图案</span></div><label class="upload" id="drop"><div class="icon">＋</div><strong>选择图片（也可拖入右侧预览区）</strong><span>JPG、PNG、WEBP 均可 · 支持多张</span><input id="files" type="file" accept="image/*" multiple></label><div class="thumbs" id="thumbs"></div><div id="photoLightingCompact"><div class="label"><span>人像补光</span><output data-light-value>未补光</output></div><input id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="0" aria-label="补光强度"><div class="photo-lighting-compact-actions"><button type="button" class="btn primary" data-light-auto>一键补光</button><button type="button" class="btn" data-light-reset>恢复原图</button></div><p data-light-status role="status" aria-live="polite"></p></div><button type="button" class="btn" id="cancelPhotoLighting" hidden disabled style="width:100%;height:36px;margin-top:8px;font-size:12px">取消补光处理</button></div>
- <div class="field"><div class="label"><span id="selectionTitle">选择图形</span> <span class="small" id="selectedCount">已选 1 个</span></div><label class="check multi-check"><input id="multiMode" type="checkbox"><span id="multiModeLabel">多选图案并统一控制</span></label><div class="selection-actions"><button type="button" class="btn" id="selectAll">全选</button><button type="button" class="btn" id="clearSelection">清空选择</button></div><select class="select" id="slotSelect"></select><div id="replacePhotoActions"><button type="button" class="btn copy-apply replace-photo" id="replacePhoto" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg><span>替换所选图片</span></button><input id="replacePhotoFile" type="file" accept="image/*" hidden><button type="button" class="btn" id="removeSelectedPhoto" style="width:100%;height:36px;margin-top:8px;font-size:12px" title="仅删除所选位置的照片，保留图案轮廓和背景" disabled>删除所选照片</button></div><div class="small" id="slotInfo" style="margin-top:7px">开启多选后，可在预览中逐个点选图形</div></div>
- <div class="field"><div class="label"><span id="slotSizeLabel">裁剪形状大小</span> <span class="small">只影响选中的图形</span></div><div class="size-entry"><input id="sizeNumber" type="number" min="25" max="120" step="1" value="62"><span>%</span></div><div class="range-line"><input id="scale" type="range" min="25" max="120" value="62"><output id="scaleOut">62%</output></div></div>
- <div class="field"><div class="label"><span id="slotPositionLabel">裁剪形状位置</span> <span class="small">上下左右独立调整</span></div><div class="move-control"><div class="move-pad"><span></span><button type="button" data-move="0,-1" aria-label="上移">↑</button><span></span><button type="button" data-move="-1,0" aria-label="左移">←</button><button type="button" class="home" id="resetPosition" aria-label="重置位置">居中</button><button type="button" data-move="1,0" aria-label="右移">→</button><span></span><button type="button" data-move="0,1" aria-label="下移">↓</button><span></span></div><label class="step">步长 <select id="moveStep"><option value="1">1 px</option><option value="5" selected>5 px</option><option value="10">10 px</option></select></label></div><div class="small" id="offsetReadout" style="margin-top:8px">X 0 px　Y 0 px</div></div>
- <div class="field"><div class="label">图片形状 <span class="small">只影响选中的图形</span></div><label class="check clip-toggle"><input id="clip" type="checkbox"><span>启用裁剪</span></label><select class="select" id="clipShape"><option value="mixed" disabled>混合</option><option value="template" selected>跟随图案</option><option value="heart">爱心</option><option value="star">星星</option><option value="circle">圆形</option><option value="oval">椭圆</option><option value="roundRect">圆角方形</option><option value="square">正方形</option><option value="diamond">菱形</option><option value="hexagon">六边形</option></select></div>
- <div class="field photo-tune" id="photoFrameField">
-  <div class="label">头像微调 <button type="button" class="photo-tune-reset" id="resetPhoto" aria-label="重置头像大小和位置">重置</button></div>
-  <div class="photo-tune-control"><div class="photo-tune-control-label"><label for="photoScale">头像大小</label><span class="photo-tune-percent-input"><input id="photoScaleNumber" type="number" min="25" max="400" step="1" value="100" aria-label="头像大小百分比"><span>%</span></span><output id="photoScaleOut" for="photoScale" hidden>100%</output></div><input id="photoScale" type="range" min="25" max="400" step="1" value="100" aria-label="头像大小"></div>
-  <div class="photo-tune-control"><label for="photoOffsetY">上下位置 <output id="photoOffsetYOut" for="photoOffsetY">居中</output></label><input id="photoOffsetY" type="range" min="-200" max="200" step="1" value="0" aria-label="头像上下位置"></div>
-  <div class="photo-tune-control"><label for="photoOffsetX">左右位置 <output id="photoOffsetXOut" for="photoOffsetX">居中</output></label><input id="photoOffsetX" type="range" min="-200" max="200" step="1" value="0" aria-label="头像左右位置"></div>
-  <p class="photo-tune-help">仅调整选中的头像，多选可批量微调。</p>
-  <div hidden><input id="photoDragMode" type="checkbox"><select id="photoMoveStep"><option value="5">5 px</option></select><span id="photoOffsetReadout"></span></div>
- </div>
- <div class="field" id="slotBackgroundField">
-  <div class="label">替换图案背景 <span class="small">只影响选中位置 · 可多选</span></div>
-  <select class="select" id="slotBackgroundMode" aria-label="图案背景类型"><option value="none">不启用（保留原效果）</option><option value="transparent">移除底图（仅照片）</option><option value="outline">保留轮廓（照片裁剪）</option><option value="color">纯色背景</option><option value="image">图片背景</option><option value="mixed" disabled>混合背景</option></select>
-  <div id="slotBackgroundColorRow" hidden style="margin-top:10px"><label class="small">背景颜色 <input id="slotBackgroundColor" type="color" value="#fff0f5" aria-label="图案背景颜色" style="width:56px;height:36px;vertical-align:middle;border:1px solid var(--line);border-radius:8px;background:#fff"></label></div>
-  <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%;margin-top:10px">上传背景图片</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
-  <label class="check clip-toggle"><input id="backgroundDragMode" type="checkbox" disabled><span>拖动背景</span></label>
-  <div class="small" style="line-height:1.6">开启后，在选中图案上拖动背景；多选可一起移动，照片、字母和轮廓不变。</div>
-  <div id="slotBackgroundImageRow" hidden style="margin-top:10px">
+ <details class="editor-options" id="editorSizeOptions">
+  <summary>尺寸与文案</summary>
+  <div class="editor-options-body">
+   <div class="field" id="copyField" hidden>
+   <div class="copy-tabs" role="tablist" aria-label="文案编辑"><button type="button" id="copyEditTab" role="tab" aria-selected="true" aria-controls="copyEditPane">所选编辑</button><button type="button" id="copyListTab" role="tab" aria-selected="false" aria-controls="copyListPane" tabindex="-1">文案清单</button><button type="button" class="preview-tool" id="copyUndo" title="撤销" aria-label="撤销" disabled></button><button type="button" class="preview-tool" id="copyRedo" title="重做" aria-label="重做" disabled></button></div>
+   <div id="copyEditPane" role="tabpanel" aria-labelledby="copyEditTab"><label class="label" for="copyText">所选文案 <span class="small" id="copyEditStatus"></span></label><textarea class="copy-input" id="copyText" rows="3" maxlength="500">人生是狂野</textarea><button type="button" class="btn copy-apply" id="applyCopy">应用到所选</button></div>
+   <div id="copyListPane" role="tabpanel" aria-labelledby="copyListTab" hidden><div class="copy-list-head"><span>文案</span><span>数量</span></div><div id="copyJobs"></div><div class="copy-list-actions"><button type="button" class="preview-tool" id="addCopyJob" title="新增文案" aria-label="新增文案"></button><button type="button" class="preview-tool" id="toggleCopyImport" title="批量粘贴" aria-label="批量粘贴" aria-expanded="false"></button><select class="select" id="copyOrder" aria-label="排列顺序"><option value="grouped">同类连续</option><option value="alternate">交替排列</option></select></div><div id="copyImportPane" hidden><label class="label" for="copyImportText">批量文案</label><textarea id="copyImportText" class="copy-input" rows="4"></textarea><div class="copy-import-controls"><select class="select" id="copyImportMode" aria-label="文案分隔方式"><option value="line">每行一条</option><option value="paragraph">空行分隔</option></select><input id="copyImportQuantity" type="number" min="1" max="480" value="1" aria-label="每条数量"></div><label class="check copy-weight"><input id="copyImportReplace" type="checkbox" checked><span>替换清单</span></label><button type="button" class="btn copy-apply" id="importCopyJobs">导入清单</button></div><div class="small" id="copyJobSummary" role="status"></div><button type="button" class="btn primary copy-apply" id="layoutCopyJobs">自动排版</button></div>
+   <div class="label copy-style-label">整页样式</div><div class="copy-controls"><label for="copyFont">字体<select class="select" id="copyFont"><optgroup label="可爱网络字体"><option value="longcang" selected>龙藏手写</option><option value="zcool">站酷快乐体</option><option value="zhimang">志莽行书</option><option value="mashan">马善政毛笔楷书</option><option value="liujian">刘建毛草</option><option value="qingke">站酷庆科黄油体</option><option value="xiaowei">站酷小薇体</option></optgroup><optgroup label="本机字体"><option value="sans">黑体</option><option value="serif">宋体</option><option value="kai">楷体</option><option value="round">圆体</option><option value="hand">手写体</option><option value="mono">等宽字体</option></optgroup></select></label><label for="copyColor">颜色<input id="copyColor" type="color" value="#28252d"></label></div><div class="small" id="copyFontStatus" role="status" aria-live="polite" style="margin-top:7px"></div><label class="copy-size" for="copySize">字号<input id="copySize" type="number" min="12" max="180" step="1" value="32"></label><div class="copy-grid"><label class="copy-size" for="copyColumns">每行数量<input id="copyColumns" type="number" min="2" max="12" step="1" value="6"></label><label class="copy-size" for="copyRows">行数<input id="copyRows" type="number" min="4" max="40" step="1" value="20"></label></div><label class="check copy-weight"><input id="copyBold" type="checkbox"><span>加粗</span></label>
+   </div>
+   <div class="field"><div class="label">模板内容尺寸 <span class="small">不含编号区</span></div><div class="print-size"><label>宽 <input id="outWidth" type="number" min="20" max="1000" step="1" value="144"> mm</label><span>×</span><label>高 <input id="outHeight" type="number" min="20" max="1000" step="1" value="210"> mm</label></div><div class="dpi-line"><label>打印精度 <select id="dpi"><option value="150">150 DPI</option><option value="300">300 DPI</option><option value="500">500 DPI</option><option value="600" selected>600 DPI</option></select></label></div><div class="size-summary" aria-live="polite"><div><span class="size-summary-label" id="footerAreaLabel">底部编号区</span><span class="size-summary-value" id="footerAreaSize">另加 3 mm 高</span></div><div><span class="size-summary-label">PNG 总尺寸<small id="footerSizeHint">含底部编号区</small></span><span class="size-summary-value" id="exportSize"></span></div><div><span class="size-summary-label">PNG 像素尺寸</span><span class="size-summary-value" id="exportPixels"></span></div></div></div>
+   <div class="field"><div class="label"><span id="slotSizeLabel">裁剪形状大小</span> <span class="small">只影响选中的图形</span></div><div class="size-entry"><input id="sizeNumber" type="number" min="25" max="120" step="1" value="62"><span>%</span></div><div class="range-line"><input id="scale" type="range" min="25" max="120" value="62"><output id="scaleOut">62%</output></div></div>
+   <div class="field"><div class="label"><span id="slotPositionLabel">裁剪形状位置</span> <span class="small">上下左右独立调整</span></div><div class="move-control"><div class="move-pad"><span></span><button type="button" data-move="0,-1" aria-label="上移">↑</button><span></span><button type="button" data-move="-1,0" aria-label="左移">←</button><button type="button" class="home" id="resetPosition" aria-label="重置位置">居中</button><button type="button" data-move="1,0" aria-label="右移">→</button><span></span><button type="button" data-move="0,1" aria-label="下移">↓</button><span></span></div><label class="step">步长 <select id="moveStep"><option value="1">1 px</option><option value="5" selected>5 px</option><option value="10">10 px</option></select></label></div><div class="small" id="offsetReadout" style="margin-top:8px">X 0 px　Y 0 px</div></div>
+  </div>
+ </details>
+ <details class="editor-options" id="editorGraphicOptions">
+  <summary>图形与背景</summary>
+  <div class="editor-options-body">
+   <div class="field"><div class="label">图片形状 <span class="small">只影响选中的图形</span></div><label class="check clip-toggle"><input id="clip" type="checkbox"><span>启用裁剪</span></label><select class="select" id="clipShape"><option value="mixed" disabled>混合</option><option value="template" selected>跟随图案</option><option value="heart">爱心</option><option value="star">星星</option><option value="circle">圆形</option><option value="oval">椭圆</option><option value="roundRect">圆角方形</option><option value="square">正方形</option><option value="diamond">菱形</option><option value="hexagon">六边形</option></select></div>
+   <div class="field" id="slotBackgroundField">
+   <div class="label">替换图案背景 <span class="small">只影响选中位置 · 可多选</span></div>
+   <select class="select" id="slotBackgroundMode" aria-label="图案背景类型"><option value="none">不启用（保留原效果）</option><option value="transparent">移除底图（仅照片）</option><option value="outline">保留轮廓（照片裁剪）</option><option value="color">纯色背景</option><option value="image">图片背景</option><option value="mixed" disabled>混合背景</option></select>
+   <div id="slotBackgroundColorRow" hidden style="margin-top:10px"><label class="small">背景颜色 <input id="slotBackgroundColor" type="color" value="#fff0f5" aria-label="图案背景颜色" style="width:56px;height:36px;vertical-align:middle;border:1px solid var(--line);border-radius:8px;background:#fff"></label></div>
+   <button type="button" class="btn" id="slotBackgroundUpload" style="width:100%;margin-top:10px">上传背景图片</button><input id="slotBackgroundFile" type="file" accept="image/*" hidden>
+   <label class="check clip-toggle"><input id="backgroundDragMode" type="checkbox" disabled><span>拖动背景</span></label>
+   <div class="small" style="line-height:1.6">开启后，在选中图案上拖动背景；多选可一起移动，照片、字母和轮廓不变。</div>
+   <div id="slotBackgroundImageRow" hidden style="margin-top:10px">
    <label class="small" style="display:flex;align-items:center;gap:8px;margin-top:10px">花纹大小 <input id="slotBackgroundScale" type="number" min="25" max="1000" step="1" value="100" aria-label="背景花纹缩放百分比" style="width:80px;min-height:36px"> %</label>
    <div class="range-line"><input id="slotBackgroundScaleRange" type="range" min="25" max="1000" step="1" value="100" aria-label="背景花纹缩放滑杆"></div>
    <div class="small" style="margin-top:6px;line-height:1.6">新图片作为完整背景，默认等比铺满外轮廓。可实时缩放、移动，超出轮廓自动裁掉；照片独立不变。</div>
    <div class="photo-offsets"><label>X <input id="slotBackgroundX" type="number" min="-10000" max="10000" value="0" step="1" aria-label="背景图片水平偏移"> px</label><label>Y <input id="slotBackgroundY" type="number" min="-10000" max="10000" value="0" step="1" aria-label="背景图片垂直偏移"> px</label></div>
    <button type="button" class="btn" id="slotBackgroundReset" style="width:100%;height:36px;font-size:12px">重置背景缩放与位置</button>
+   </div>
+   <p class="small" id="slotBackgroundNote" role="status" style="line-height:1.6">未启用，保留原有效果。可多选后批量设置。</p>
+   <button type="button" class="btn" id="slotBackgroundClear" style="width:100%;height:36px;font-size:12px">恢复所选原图案</button>
+   </div>
+   <div class="field" id="heartMotifField" hidden>
+   <div class="label">更换内置图案 <span class="small">全部图案可互换</span></div>
+   <div class="selection-actions"><button type="button" class="btn" id="replaceHeartMotif">更换图案</button><button type="button" class="btn" id="restoreHeartMotif">恢复原图案</button></div>
+   <p class="small" id="heartMotifSize" role="status" style="line-height:1.6"></p>
+   <p class="small" style="line-height:1.6">爱心、星星、圆形、方块及 I ♥ ME / I ♥ VE 全部可互换，不限大小款，可混合多选。超出原位置时等比缩小并居中，能放下则保持原尺寸，不拉伸、不放大。仅更换所选位置，自定义背景会移除，照片保留。</p>
+   <details><summary style="cursor:pointer">查看本模板图案尺寸</summary><p class="small">按当前输出宽高计算，单位 mm；为完整图案尺寸，不是照片框尺寸。</p><div id="heartTemplateSizeTable" style="max-height:320px;overflow:auto"></div></details>
+   </div>
   </div>
-  <p class="small" id="slotBackgroundNote" role="status" style="line-height:1.6">未启用，保留原有效果。可多选后批量设置。</p>
-  <button type="button" class="btn" id="slotBackgroundClear" style="width:100%;height:36px;font-size:12px">恢复所选原图案</button>
+ </details>
+ <details class="editor-options" id="editorPhotoHelp">
+  <summary>操作说明</summary>
+  <div class="editor-options-body">
+   <div class="hint">先在预览中选择图案，再选择照片或将图片拖入右侧预览区；只替换选中位置，其他图案不变。未启用裁剪时，照片等比完整放入图案内部的预设区域并留安全边距，可手动缩放、移动。多选可批量替换，点击“全选”后才替换全部。多张照片按选中位置的排版顺序循环填入。图片只在当前浏览器中处理，导入后默认不补光，可在“人像补光”中手动调节。</div>
+  </div>
+ </details>
  </div>
- <div class="field" id="heartMotifField" hidden>
-  <div class="label">更换内置图案 <span class="small">全部图案可互换</span></div>
-  <div class="selection-actions"><button type="button" class="btn" id="replaceHeartMotif">更换图案</button><button type="button" class="btn" id="restoreHeartMotif">恢复原图案</button></div>
-  <p class="small" id="heartMotifSize" role="status" style="line-height:1.6"></p>
-  <p class="small" style="line-height:1.6">爱心、星星、圆形、方块及 I ♥ ME / I ♥ VE 全部可互换，不限大小款，可混合多选。超出原位置时等比缩小并居中，能放下则保持原尺寸，不拉伸、不放大。仅更换所选位置，自定义背景会移除，照片保留。</p>
-  <details><summary style="cursor:pointer">查看本模板图案尺寸</summary><p class="small">按当前输出宽高计算，单位 mm；为完整图案尺寸，不是照片框尺寸。</p><div id="heartTemplateSizeTable" style="max-height:320px;overflow:auto"></div></details>
- </div>
- <div class="hint">先在预览中选择图案，再选择照片或将图片拖入右侧预览区；只替换选中位置，其他图案不变。未启用裁剪时，照片等比完整放入图案内部的预设区域并留安全边距，可手动缩放、移动。多选可批量替换，点击“全选”后才替换全部。多张照片按选中位置的排版顺序循环填入。图片只在当前浏览器中处理，导入后默认不补光，可在“人像补光”中手动调节。</div>
- <div class="actions"><button class="btn" id="clear">清空图片</button></div><div class="status" id="status"></div>
 </section>
 <section class="preview" id="previewPanel">
- <div class="stage" id="stage"><div class="preview-surface" id="previewSurface"><div class="empty" id="empty">正在准备模板…</div><canvas id="canvas" hidden></canvas></div></div><div class="footer-note">PNG 按上方毫米尺寸与 DPI 换算像素；导出前请确认尺寸和图案位置。</div>
+ <div class="stage" id="stage"><div class="preview-surface" id="previewSurface"><div class="empty" id="empty">正在准备模板…</div><canvas id="canvas" hidden></canvas></div></div>
 </section>
 </main>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
@@ -350,7 +384,7 @@ function setPreviewScale(value){const old=canvas.getBoundingClientRect(),bounds=
 function changePreviewZoom(step){setPreviewScale(zoomLevels[Math.max(0,Math.min(zoomLevels.length-1,zoomLevels.indexOf(previewScale)+step))])}
 previewZoom.addEventListener('change',()=>setPreviewScale(previewZoom.value));zoomOut.addEventListener('click',()=>changePreviewZoom(-1));zoomIn.addEventListener('click',()=>changePreviewZoom(1));if(typeof ResizeObserver!=='undefined')new ResizeObserver(resizePreview).observe(stage);else window.addEventListener('resize',resizePreview);zoomOut.disabled=true;
 const copyText=document.getElementById('copyText'),copyFont=document.getElementById('copyFont'),copyColor=document.getElementById('copyColor'),copySize=document.getElementById('copySize'),copyBold=document.getElementById('copyBold'),copyColumns=document.getElementById('copyColumns'),copyRows=document.getElementById('copyRows'),copyFontStatus=document.getElementById('copyFontStatus');
-const DEFAULT_COPY='人生是狂野',copyTextTemplate='文案模板.png',applyCopy=document.getElementById('applyCopy'),copyEditStatus=document.getElementById('copyEditStatus'),copyJobBox=document.getElementById('copyJobs'),copyUndo=document.getElementById('copyUndo'),copyRedo=document.getElementById('copyRedo');const selectionField=slotSelect.closest('.field'),selectionHome=selectionField.parentElement,selectionNext=sizeNumber.closest('.field');
+const DEFAULT_COPY='人生是狂野',copyTextTemplate='文案模板.png',applyCopy=document.getElementById('applyCopy'),copyEditStatus=document.getElementById('copyEditStatus'),copyJobBox=document.getElementById('copyJobs'),copyUndo=document.getElementById('copyUndo'),copyRedo=document.getElementById('copyRedo');const selectionField=slotSelect.closest('.field'),selectionHome=selectionField.parentElement,selectionNext=selectionField.nextElementSibling;
 let copyStates=null,copyJobs=[{text:DEFAULT_COPY,quantity:120}],copyJobsEdited=false,copyOrderActive=false,copySequence='grouped',copyLayout={columns:6,rows:20},copyStyle={font:copyFont.value,color:copyColor.value,size:32,bold:false},copyDraftDirty=false,copyCountNodes=[],copyHistoryGroup={key:'',time:0};const copyUndoStack=[],copyRedoStack=[];
 function makeCopyState(text=DEFAULT_COPY){return{size:1,dx:0,dy:0,shape:'template',text}}
 function ensureCopyStates(){if(!copyStates)copyStates=templates[copyTextTemplate].slots.map(()=>makeCopyState());return copyStates}
@@ -381,7 +415,26 @@ function loadFontStyle(family,mirror=false){return new Promise((resolve,reject)=
 function copyFontStyle(family){if(!fontStyles.has(family))fontStyles.set(family,loadFontStyle(family).catch(()=>loadFontStyle(family,true)).catch(error=>{fontStyles.delete(family);throw error}));return fontStyles.get(family)}
 async function prepareCopyFont(){const request=++fontRequest,family=webCopyFonts[copyFont.value],sample=templates[sel.value].text?copyGlyphs():'';if(!templates[sel.value].text||!family||!sample){fontBusy=false;copyFontStatus.textContent='';draw();return}fontBusy=true;copyFontStatus.textContent='字体加载中…';draw();try{if(!document.fonts)throw new Error('当前浏览器不支持网络字体');await copyFontStyle(family);const faces=await fontTimeout(document.fonts.load(`400 32px "${family}"`,sample),12000);if(!faces.length)throw new Error('字体未加载');if(request===fontRequest)copyFontStatus.textContent=''}catch(error){if(request===fontRequest)copyFontStatus.textContent='网络字体加载失败，当前使用本机手写字体。'}finally{if(request===fontRequest){fontBusy=false;draw()}}}
 copyColor.addEventListener('input',()=>copyChange(()=>copyStyle.color=copyColor.value,'color'));copySize.addEventListener('input',()=>copyChange(()=>copyStyle.size=Math.max(12,Math.min(180,Number(copySize.value)||32)),'font-size'));copyBold.addEventListener('input',()=>copyChange(()=>copyStyle.bold=copyBold.checked));copyFont.addEventListener('change',()=>{copyChange(()=>copyStyle.font=copyFont.value);clearTimeout(fontInputTimer);prepareCopyFont()});copyText.addEventListener('input',()=>{copyDraftDirty=true;applyCopy.disabled=!selectedSlots.size});copySize.addEventListener('change',()=>{copySize.value=String(Math.max(12,Math.min(180,Number(copySize.value)||32)));copyChange(()=>copyStyle.size=Number(copySize.value),'font-size')});[copyColumns,copyRows].forEach(el=>el.addEventListener('change',resizeCopyLayout));if(document.fonts)document.fonts.addEventListener('loadingdone',()=>draw());document.addEventListener('keydown',event=>{if(!templates[sel.value].text||!(event.ctrlKey||event.metaKey)||event.altKey||event.target.isContentEditable||['INPUT','TEXTAREA','SELECT'].includes(event.target.tagName))return;if(event.key.toLowerCase()==='z'){event.preventDefault();stepCopyHistory(event.shiftKey)}else if(event.key.toLowerCase()==='y'){event.preventDefault();stepCopyHistory(true)}});
-function updateTemplateFields(){document.getElementById('customField').hidden=!templates[sel.value].custom;const text=!!templates[sel.value].text;sizeNumber.closest('.field').hidden=!text;document.getElementById('slotPositionLabel').closest('.field').hidden=!text;document.getElementById('photoFrameField').hidden=text;document.getElementById('slotSizeLabel').textContent=text?'文案大小':'裁剪形状大小';document.getElementById('slotPositionLabel').textContent=text?'文案位置':'裁剪形状位置';document.getElementById('copyField').hidden=!text;if(text)document.getElementById('copyEditPane').prepend(selectionField);else selectionHome.insertBefore(selectionField,selectionNext);document.getElementById('selectionTitle').textContent=text?'选择位置':'选择图形';document.getElementById('multiModeLabel').textContent=text?'多选位置':'多选图案并统一控制';drop.closest('.field').hidden=text;clip.closest('.field').hidden=text;document.getElementById('clear').hidden=text;document.querySelector('.hint').hidden=text;document.querySelector('.hint').textContent=templates[sel.value].notice||originalPhotoHint}
+function updateTemplateFields(){
+ const cfg=templates[sel.value],text=!!cfg.text;
+ document.getElementById('customField').hidden=!cfg.custom;
+ document.getElementById('editorPhotoOptions').hidden=text;
+ document.getElementById('editorGraphicOptions').hidden=text;
+ document.getElementById('editorPhotoHelp').hidden=text;
+ const copyField=document.getElementById('copyField');
+ if(text&&copyField.hidden)document.getElementById('editorSizeOptions').open=true;
+ copyField.hidden=!text;
+ sizeNumber.closest('.field').hidden=!text;
+ document.getElementById('slotPositionLabel').closest('.field').hidden=!text;
+ document.getElementById('photoFrameField').hidden=text;
+ document.getElementById('slotSizeLabel').textContent='文案大小';
+ document.getElementById('slotPositionLabel').textContent='文案位置';
+ if(text)document.getElementById('copyEditPane').prepend(selectionField);
+ else selectionHome.insertBefore(selectionField,selectionNext);
+ document.getElementById('selectionTitle').textContent=text?'选择位置':'选择图形';
+ document.getElementById('multiModeLabel').textContent=text?'多选位置':'多选图案并统一控制';
+ document.querySelector('.hint').textContent=cfg.notice||originalPhotoHint;
+}
 function wrapCopy(text,maxWidth){const lines=[];for(const paragraph of text.replace(/\r\n?/g,'\n').split('\n')){let line='';for(const char of Array.from(paragraph)){const next=line+char;if(line&&ctx.measureText(next).width>maxWidth){lines.push(line);line=char}else line=next}lines.push(line)}return lines}
 function drawCopy(x,y,w,h,size,content){const text=content.trim();if(!text)return;ctx.save();ctx.fillStyle=copyColor.value;ctx.textAlign='center';ctx.textBaseline='middle';const family=copyFonts[copyFont.value]||copyFonts.sans,weight=copyBold.checked?700:400,maxWidth=w*.94,maxHeight=h*.9;let fontSize=Math.max(12,Math.min(180,Number(copySize.value)||32))*size,lines,lineHeight;
  // Fit each slot's wrapped text before drawing the preview or export.
@@ -902,7 +955,6 @@ const backgroundDragMode=document.getElementById('backgroundDragMode');
 const backgroundDrag=HeartStarBackground.createDrag({canvas,mode:backgroundDragMode,photoMode:photoDragMode,getBoard:()=>{const board=selectionBoard(),cfg=templates[sel.value];return{...board,ready:board.ready&&!cfg.text,selected:selectedSlots,offsetX:cfg.contentOffsetX||0,slots:board.ready&&!cfg.text?HeartStarBackground.regions(cfg,motifEditor.source(cfg.custom?cfg.background:base),states):[]}},redraw:()=>{slotBackgrounds.update();requestPhotoDraw()},onModeChange:()=>{finishPhotoDrag();ignorePhotoClick=false;updatePhotoControls()}});
 document.getElementById('replaceHeartMotif').addEventListener('click',openHeartMotifPicker);
 document.getElementById('restoreHeartMotif').addEventListener('click',()=>{if(!exportBusy&&!motifEditor.busy())motifEditor.restore(motifEditor.selection())});
-HeartStarInteractions.createSections([...document.querySelectorAll('.panel > .field:not(#photoFrameField)')]);
 if(HeartStarTemplateLink.selectInitial(sel,templates,window.location.search))HeartStarPreset.selectSize(templates[sel.value],widthInput,heightInput);
 const clearSelectionButton=document.getElementById('clearSelection');
 clearSelectionButton.textContent='清空选择 (Esc)';clearSelectionButton.title='取消全部选中（Esc）';clearSelectionButton.setAttribute('aria-keyshortcuts','Escape');
@@ -912,10 +964,10 @@ function solidPhotoBoard(all=false){const cfg=templates[sel.value];return{token:
  ready:!cfg.text&&!canvas.hidden&&!exportBusy&&!photoUploadBusy&&!replacementBusy&&!slotBackgrounds.busy()&&!motifEditor.busy()&&!(cfg.custom&&(customBusy||customDirty)),
  ids:cfg.text?[]:all?states.map((_,i)=>i):[...selectedSlots],photoAt:slotPhoto,processedAt:i=>!!states[i]?.photoBackgroundRemoved}}
 const cutoutPhotoBoard=(all=false)=>{const board=solidPhotoBoard(all);return{...board,ready:board.ready&&!photoLightingEditor?.busy()}};
-const solidBackgroundButton=document.createElement('button');solidBackgroundButton.type='button';solidBackgroundButton.id='removeSolidBackground';solidBackgroundButton.className='btn';solidBackgroundButton.style.cssText='width:100%;height:36px;margin-top:8px;font-size:12px';document.getElementById('thumbs').after(solidBackgroundButton);
+const solidBackgroundButton=document.createElement('button');solidBackgroundButton.type='button';solidBackgroundButton.id='removeSolidBackground';solidBackgroundButton.className='btn';document.getElementById('editorCutoutActions').append(solidBackgroundButton);
 const solidBackgroundStore=HeartStarSolidBackground.createStore({getBoard:cutoutPhotoBoard,apply:applySolidPhotos});
 var solidBackgroundEditor=HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw});
-const aiCutoutButton=document.createElement('button');aiCutoutButton.type='button';aiCutoutButton.id='aiCutout';aiCutoutButton.className='btn';aiCutoutButton.title='联网调用 AI 抠图服务去除照片背景，同图重复处理免费';aiCutoutButton.style.cssText='width:100%;height:36px;margin-top:8px;font-size:12px';solidBackgroundButton.after(aiCutoutButton);
+const aiCutoutButton=document.createElement('button');aiCutoutButton.type='button';aiCutoutButton.id='aiCutout';aiCutoutButton.className='btn';aiCutoutButton.title='联网调用 AI 抠图服务去除照片背景，同图重复处理免费';solidBackgroundButton.after(aiCutoutButton);
 var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw});
 var photoLightingEditor=HeartStarPhotoLightingControls.mount({root:document.getElementById('photoLightingCompact'),processor:photoLighting,
  getBoard:()=>{const board=solidPhotoBoard();return{...board,states,ready:board.ready&&!solidBackgroundEditor?.busy()&&!aiCutoutEditor?.busy()}},
@@ -1066,7 +1118,10 @@ window.__picDoInject = async function (data) {
     urls = [];
   }
   applyOrderNumbering(data);
-  if (data.orderNumber) orderImageId = data.imageId || null;
+  if (data.orderNumber) {
+    orderImageId = data.imageId || null;
+    say('');
+  }
 };
 window.addEventListener('message', async function (event) {
   const data = event.data;

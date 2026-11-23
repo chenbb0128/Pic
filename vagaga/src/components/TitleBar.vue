@@ -1,24 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { WorkflowRole } from '../types'
+import { Copy, Minus, Square, X } from '@lucide/vue'
+import { Button } from './ui/button'
 
 const props = defineProps<{
-  view: 'orders' | 'settings'
   beforeClose: () => Promise<boolean>
-  role: WorkflowRole
-  uploadCount: number
-  operation: 'upload' | 'sync' | 'finish' | 'resolve' | null
 }>()
-const emit = defineEmits<{ change: ['orders' | 'settings']; upload: []; sync: [] }>()
 
 const win = getCurrentWindow()
 const maximized = ref(false)
-
-const tabs: { key: 'orders' | 'settings'; label: string }[] = [
-  { key: 'orders', label: '订单' },
-  { key: 'settings', label: '设置' },
-]
 
 onMounted(async () => {
   const sync = () => {
@@ -42,27 +33,19 @@ async function close() {
 <template>
   <header class="titlebar" data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><span class="brandIcon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 19.5 9.5H13L13 2z" fill="currentColor" stroke="none"/></svg></span>vagaga</span>
-    <nav class="tabs">
-      <button
-        v-for="tab in tabs"
-        :key="tab.key"
-        class="tab"
-        :class="{ on: props.view === tab.key }"
-        @click="emit('change', tab.key)"
-      >{{ tab.label }}</button>
-    </nav>
-    <div class="workflowActions" aria-label="订单同步操作">
-      <button v-if="role !== 'production'" type="button" class="workflowBtn" :disabled="!!operation || !uploadCount" @click="emit('upload')">
-        {{ operation === 'upload' ? '正在上传…' : uploadCount ? '数据上传（' + uploadCount + '）' : '数据上传' }}
-      </button>
-      <button v-if="role !== 'customer'" type="button" class="workflowBtn" :disabled="!!operation" @click="emit('sync')">
-        {{ operation === 'sync' ? '正在同步…' : '数据同步' }}
-      </button>
-    </div>
     <div class="controls">
-      <button class="ctl" title="最小化" @click="minimize">─</button>
-      <button class="ctl" :title="maximized ? '还原' : '最大化'" @click="toggleMaximize">{{ maximized ? '❐' : '□' }}</button>
-      <button class="ctl close" title="关闭" @click="close">✕</button>
+      <Button type="button" variant="ghost" size="icon-sm" title="最小化" aria-label="最小化" @click="minimize">
+        <Minus class="size-4" aria-hidden="true" />
+      </Button>
+      <Button type="button" variant="ghost" size="icon-sm"
+        :title="maximized ? '还原' : '最大化'" :aria-label="maximized ? '还原' : '最大化'" @click="toggleMaximize">
+        <Copy v-if="maximized" class="size-3.5" aria-hidden="true" />
+        <Square v-else class="size-3.5" aria-hidden="true" />
+      </Button>
+      <Button type="button" variant="ghost" size="icon-sm" class="hover:bg-destructive hover:text-white"
+        title="关闭" aria-label="关闭" @click="close">
+        <X class="size-4" aria-hidden="true" />
+      </Button>
     </div>
   </header>
 </template>
@@ -79,71 +62,25 @@ async function close() {
   flex-shrink: 0;
 }
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-weight: 700;
   font-size: 14px;
   color: var(--text);
 }
-.tabs {
-  display: flex;
-  gap: 4px;
-  margin-left: 10px;
-}
-.tab {
-  border: none;
-  border-radius: 8px;
-  padding: 4px 14px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-}
-.tab:hover {
-  background: var(--bg-card-hover);
-  color: var(--text);
-}
-.tab.on {
-  background: rgba(56, 107, 255, 0.12);
+.brandIcon {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 600;
 }
-.workflowActions {
-  display: flex;
-  gap: 6px;
-}
-.workflowBtn {
-  border: 1px solid var(--stroke);
-  border-radius: 7px;
-  padding: 4px 9px;
-  background: var(--bg-card);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.workflowBtn:hover:not(:disabled) { background: var(--bg-card-hover); }
-.workflowBtn:disabled { opacity: .5; cursor: default; }
 .controls {
   margin-left: auto;
   display: flex;
-  gap: 6px;
-}
-.ctl {
-  width: 30px;
-  height: 26px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text);
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-}
-.ctl:hover {
-  background: #e8edf5;
-}
-.ctl.close:hover {
-  background: var(--danger);
-  color: #fff;
+  gap: 4px;
 }
 </style>

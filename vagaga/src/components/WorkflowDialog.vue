@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { ArrowRight, GitCompareArrows, X } from '@lucide/vue'
+import { Button } from './ui/button'
 import { workflowFinish, workflowSync, workflowUpload } from '../lib/tauri'
 import { loadOrders, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
 import type { WorkflowPreview } from '../types'
@@ -125,15 +127,15 @@ defineExpose({ upload, sync, finish, operation })
 <template>
   <dialog ref="dialog" class="workflowDialog" aria-labelledby="workflow-title" @cancel.prevent="close">
     <header class="dialogHead">
-      <h2 id="workflow-title">订单内容有冲突</h2>
-      <button type="button" class="closeBtn" aria-label="关闭" :disabled="!!operation" @click="close">×</button>
+      <h2 id="workflow-title" class="flex items-center gap-2"><GitCompareArrows class="size-5 text-primary" aria-hidden="true" />订单内容有冲突</h2>
+      <Button type="button" variant="ghost" size="icon-sm" aria-label="关闭" :disabled="!!operation" @click="close"><X aria-hidden="true" /></Button>
     </header>
     <div class="dialogBody" :aria-busy="!!operation">
       <p class="hint">请查看本机与共享订单的差异，再选择如何处理。</p>
       <div v-if="!preview" class="rowList" aria-label="等待确认的订单">
-        <button v-for="row in conflicts" :key="row.reference" class="previewRow" type="button" :disabled="!!operation" @click="showPreview(row)">
-          <span>{{ row.orderNumber }}</span><span>查看差异 →</span>
-        </button>
+        <Button v-for="row in conflicts" :key="row.reference" variant="outline" class="justify-between" type="button" :disabled="!!operation" @click="showPreview(row)">
+          <span>{{ row.orderNumber }}</span><span class="flex items-center gap-1.5 text-primary">查看差异 <ArrowRight class="size-3.5" aria-hidden="true" /></span>
+        </Button>
       </div>
       <section v-else class="previewDetails" aria-label="订单差异">
         <h3>{{ preview.orderNumber }}</h3>
@@ -144,10 +146,10 @@ defineExpose({ upload, sync, finish, operation })
       </section>
     </div>
     <footer v-if="preview" class="dialogFoot">
-      <button v-if="conflicts.length > 1" type="button" :disabled="!!operation" @click="showPreview(null)">返回列表</button>
+      <Button v-if="conflicts.length > 1" type="button" variant="ghost" :disabled="!!operation" @click="showPreview(null)">返回列表</Button>
       <div class="actions">
-        <button type="button" :disabled="!!operation" @click="dismiss(preview)">保留本机</button>
-        <button type="button" class="primary" :disabled="!!operation" @click="replace">{{ operation === 'resolve' ? '正在同步…' : '使用共享内容' }}</button>
+        <Button type="button" variant="outline" :disabled="!!operation" @click="dismiss(preview)">保留本机</Button>
+        <Button type="button" :disabled="!!operation" @click="replace">{{ operation === 'resolve' ? '正在同步…' : '使用共享内容' }}</Button>
       </div>
     </footer>
   </dialog>
@@ -180,27 +182,12 @@ defineExpose({ upload, sync, finish, operation })
 .dialogFoot { border-top: 1px solid var(--stroke); }
 .dialogBody { padding: 16px 18px; }
 h2, h3 { margin: 0; font-size: 16px; }
-button {
-  border: 1px solid var(--stroke);
-  border-radius: 8px;
-  background: var(--bg-card);
-  color: inherit;
-  padding: 6px 12px;
-  font: inherit;
-}
-button { cursor: pointer; }
-button:hover:not(:disabled) { background: var(--bg-card-hover); }
-button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: white; }
-button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(.92); }
-.closeBtn { font-size: 17px; line-height: 1; }
 .hint { color: var(--text-dim); font-size: 12px; }
 .hint { margin: 0; }
 .resolveError { margin: 0; color: #ae2424; font-size: 12px; }
 .dialogBody > * + * { margin-top: 12px; }
-.rowList { display: grid; max-height: 230px; overflow: auto; }
-.previewRow { padding: 8px 4px; border-bottom: 1px solid var(--stroke); }
-.previewRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; }
+.rowList { display: grid; gap: 6px; max-height: 230px; overflow: auto; }
+.actions { margin-left: auto; }
 .previewDetails { display: grid; gap: 8px; }
 .previewDetails ul { margin-bottom: 0; padding-left: 20px; }
 </style>

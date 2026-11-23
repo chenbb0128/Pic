@@ -4,6 +4,7 @@ import test from 'node:test'
 import vm from 'node:vm'
 import ts from 'typescript'
 import * as vue from 'vue'
+import * as icons from '@lucide/vue'
 import { parse, compileScript } from 'vue/compiler-sfc'
 
 const storeSource = readFileSync(new URL('../src/stores/orders.ts', import.meta.url), 'utf8')
@@ -329,6 +330,10 @@ function environment(t, overrides = {}) {
     },
     async mountView() {
       const component = evaluate(viewSource, {
+        '@lucide/vue': icons,
+        '../components/OptionSelect.vue': {},
+        '../components/ui/button': {},
+        '../components/ui/input': {},
         vue: { ...vue, onMounted: callback => mounted.push(callback), onBeforeUnmount: callback => unmounted.push(callback) },
         '../stores/orders': store, '../lib/tauri': api,
       }).default
@@ -341,6 +346,7 @@ function environment(t, overrides = {}) {
     },
     mountWorkflow(props) {
       const component = evaluate(workflowSource, {
+        '@lucide/vue': icons, './ui/button': {},
         vue, '../stores/orders': store, '../lib/tauri': api,
       }).default
       return component.setup(props, { expose() {} })

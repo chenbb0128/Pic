@@ -66,6 +66,12 @@ impl Qiniu {
         self.target.clone()
     }
 
+    pub(crate) async fn check_connection(&self) -> Result<(), String> {
+        // The gateway stats the object in Kodo before returning a missing-object response.
+        let reference = format!("{}.png", crate::store::random_hex_pub(16));
+        self.location("original", &reference).await.map(|_| ())
+    }
+
     fn image_request(
         &self,
         method: Method,

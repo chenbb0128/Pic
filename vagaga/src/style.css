@@ -1,3 +1,28 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "tw-animate-css";
+
+@theme inline {
+  --color-background: var(--bg-card);
+  --color-foreground: var(--text);
+  --color-primary: #315fdf;
+  --color-primary-foreground: #fff;
+  --color-secondary: var(--bg-base);
+  --color-secondary-foreground: var(--text);
+  --color-muted: #ecf0f7;
+  --color-muted-foreground: #5d6c82;
+  --color-accent: var(--bg-card-hover);
+  --color-accent-foreground: var(--text);
+  --color-popover: var(--bg-card);
+  --color-popover-foreground: var(--text);
+  --color-input: var(--stroke-strong);
+  --color-border: var(--stroke-strong);
+  --color-ring: var(--accent);
+  --color-destructive: var(--danger);
+  --radius-md: var(--radius-sm);
+}
+
 /* 设计令牌：对齐千帆客服工作台（浅色 / 白卡片 / #386bff 主色） */
 :root {
   --bg-base: #eef1f6;
@@ -48,13 +73,15 @@ body {
   background: var(--bg-card-hover);
 }
 
-button {
-  font: inherit;
-  color: inherit;
-}
+@layer base {
+  button {
+    font: inherit;
+    color: inherit;
+  }
 
-input {
-  font: inherit;
+  input {
+    font: inherit;
+  }
 }
 
 ::-webkit-scrollbar {

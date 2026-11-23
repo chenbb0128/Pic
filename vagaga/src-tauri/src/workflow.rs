@@ -441,9 +441,11 @@ pub(crate) struct Outcome {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
     role: String,
     target: Option<String>,
+    storage_provider: Option<&'static str>,
 }
 
 fn preview(store: &Store, order: &OrderData, reference: String) -> Result<Preview, String> {
@@ -506,14 +508,16 @@ fn shared_conflict(
 
 fn selected(state: &AppState) -> Result<Backend, String> {
     Backend::current(&state.store, &state.data_root)?
-        .ok_or_else(|| "请先在设置中启用共享存储。".into())
+        .ok_or_else(|| "请先在设置 → 共享存储中选择服务并保存配置。".into())
 }
 
 #[tauri::command]
 pub(crate) fn workflow_settings(state: State<'_, AppState>) -> Result<Settings, String> {
+    let storage = crate::workflow_storage::Configuration::load(&state.store, &state.data_root)?;
     Ok(Settings {
         role: db::role(&state.store),
-        target: Backend::configured_target(&state.store, &state.data_root)?,
+        target: storage.as_ref().and_then(|configuration| configuration.target()),
+        storage_provider: storage.as_ref().map(|configuration| configuration.provider()),
     })
 }
 
@@ -545,13 +549,14 @@ pub(crate) fn workflow_set_layout(
 
 async fn shared_database(root: &Path) -> Result<OrderIndex, String> {
     let config = crate::mysql::load_config(root);
-    if !config.enabled {
-        return Err("请先在设置中启用共享数据库（MySQL）。".into());
-    }
     if !config.valid() {
-        return Err("请填写完整的共享数据库配置。".into());
+        return Err("请先在设置 → 共享数据库中保存完整的 MySQL 配置。".into());
     }
-    MyClient::new(&config).order_index().await
+    let client = MyClient::new(&config);
+    tokio::time::timeout(std::time::Duration::from_secs(15), client.order_index())
+        .await
+        .map_err(|_| "请确保共享数据库（MySQL）可连接并可用。连接检测超时。".to_string())?
+        .map_err(|error| format!("请确保共享数据库（MySQL）可连接并可用。{error}"))
 }
 
 async fn run_task(
@@ -729,11 +734,30 @@ async fn clear_outbox(root: &Path, operation: &str) {
     }
 }
 
+type StorageChecks = BTreeMap<String, Result<(), String>>;
+
+async fn check_upload_storage(
+    backend: &Backend,
+    checks: Option<&mut StorageChecks>,
+) -> Result<(), String> {
+    if let Some(checks) = checks {
+        let target = backend.target();
+        if let Some(result) = checks.get(&target) {
+            return result.clone();
+        }
+        let result = backend.check_connection().await;
+        checks.insert(target, result.clone());
+        return result;
+    }
+    Ok(())
+}
+
 async fn upload_one(
     state: &AppState,
     index: &mut OrderIndex,
     number: &str,
     kind: &str,
+    checks: Option<&mut StorageChecks>,
 ) -> Result<Option<Preview>, String> {
     let local = db::order_state(&state.store, number)
         .map_err(display)?
@@ -742,6 +766,7 @@ async fn upload_one(
         if OrderData::parse(task.payload.as_bytes()).is_ok() {
             verify_provider_role(&state.store, &task.target, kind)?;
             let backend = Backend::bound(&state.store, &state.data_root, &task.target)?;
+            check_upload_storage(&backend, checks).await?;
             return run_task(state, &backend, index, &task).await;
         }
         // Rebuild an old queued upload from its local originals.
@@ -762,6 +787,7 @@ async fn upload_one(
     };
     let target = backend.target();
     verify_provider_role(&state.store, &target, kind)?;
+    check_upload_storage(&backend, checks).await?;
     let previous = remote_order(index, &target, number).await?;
     if kind == "finish" && previous.is_none() {
         return Err("共享数据库里没有这笔订单，请在排单端重新上传后再交付。".into());
@@ -822,11 +848,12 @@ pub(crate) async fn workflow_upload(
     }
     let mut index = shared_database(&state.data_root).await?;
     let mut seen = std::collections::HashSet::new();
+    let mut checks = StorageChecks::new();
     for number in order_numbers {
         if !seen.insert(number.clone()) {
             continue;
         }
-        match upload_one(&state, &mut index, &number, "publish").await {
+        match upload_one(&state, &mut index, &number, "publish", Some(&mut checks)).await {
             Ok(None) => {
                 result.updated += 1;
                 result.uploaded_order_numbers.push(number);
@@ -863,7 +890,7 @@ pub(crate) async fn workflow_finish(
     }
     if local.target.is_some() {
         let mut index = shared_database(&state.data_root).await?;
-        match upload_one(&state, &mut index, &order_number, "finish").await {
+        match upload_one(&state, &mut index, &order_number, "finish", None).await {
             Ok(None) => {}
             Ok(Some(conflict)) => {
                 result.conflicts.push(conflict);
@@ -1126,6 +1153,7 @@ pub(crate) async fn synchronize(
     }
     let mut index = shared_database(&state.data_root).await?;
     let backend = selected(state)?;
+    backend.check_connection().await?;
     let mut response = Outcome::default();
     for record in index.read(&backend.target()).await? {
         let number = record.number.clone();
@@ -1232,6 +1260,25 @@ mod tests {
         let state = workstation(&dir);
         let error = synchronize(&state, None).await.err().unwrap();
         assert!(error.contains("共享数据库"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn saved_mysql_connection_is_attempted_with_legacy_switch_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        let (listener, _) = crate::qiniu_transport::tests::local_server();
+        let config = crate::mysql::MysqlConfig {
+            enabled: false,
+            host: "127.0.0.1".into(),
+            port: listener.local_addr().unwrap().port(),
+            user: "fixture".into(),
+            ..Default::default()
+        };
+        crate::mysql::save_config(&state.data_root, &config).unwrap();
+        // Return a connection failure without contacting an actual database.
+        drop(listener);
+        let error = synchronize(&state, None).await.err().unwrap();
+        assert!(error.contains("请确保共享数据库（MySQL）可连接并可用"), "{error}");
     }
 
     #[tokio::test]
@@ -1523,16 +1570,17 @@ mod tests {
                 None,
             )
         };
-        let first = workflow_upload(app.state(), vec![number.clone()])
-            .await
-            .unwrap();
-        assert_eq!(first.updated, 0);
-        assert!(first.errors.is_empty());
         let (serve_first, serve_second) = (path.clone(), path);
         let storage = target.clone();
         let server = std::thread::spawn(move || {
+            let probe = || {
+                let (socket, _) = receive(&listener, "GET /fixture/?list-type=2&max-keys=1");
+                reply(socket, 200, &[], b"<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>");
+            };
+            probe();
             let (socket, _) = receive(&listener, &serve_first);
             reply(socket, 200, &[], &bytes);
+            probe();
             let (socket, _) = receive(&listener, &serve_second);
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -1552,6 +1600,11 @@ mod tests {
             });
             reply(socket, 200, &[], &bytes);
         });
+        let first = workflow_upload(app.state(), vec![number.clone()])
+            .await
+            .unwrap();
+        assert_eq!(first.updated, 0);
+        assert!(first.errors.is_empty());
         resolve(first.conflicts.into_iter().next().unwrap())
             .await
             .unwrap();

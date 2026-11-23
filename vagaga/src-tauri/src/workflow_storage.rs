@@ -2,6 +2,72 @@ use std::path::Path;
 
 use crate::{cloud, qiniu_settings, store, workflow_db, workflow_qiniu::Qiniu};
 
+const STORAGE_SETTING: &str = "shared-storage";
+
+pub(crate) enum StorageSelection {
+    Nas,
+    Qiniu,
+}
+
+impl StorageSelection {
+    pub(crate) fn save(self, store: &store::Store) -> Result<(), String> {
+        let value = match self {
+            Self::Nas => "nas",
+            Self::Qiniu => "qiniu",
+        };
+        workflow_db::put_setting(store, STORAGE_SETTING, value).map_err(display)
+    }
+}
+
+pub(crate) enum Configuration {
+    Nas(cloud::CloudConfig),
+    Qiniu(qiniu_settings::Settings),
+}
+
+impl Configuration {
+    pub(crate) fn load(store: &store::Store, root: &Path) -> Result<Option<Self>, String> {
+        match workflow_db::setting(store, STORAGE_SETTING).map_err(display)?.as_deref() {
+            Some("qiniu") => qiniu_settings::load(store).map(|(settings, _)| Some(Self::Qiniu(settings))),
+            Some("nas") => Ok(Some(Self::Nas(cloud::load_config(root)))),
+            None => {
+                // Preserve the previous choice and reuse complete profiles saved before this setting.
+                let (qiniu, _) = qiniu_settings::load(store)?;
+                if qiniu.enabled {
+                    return Ok(Some(Self::Qiniu(qiniu)));
+                }
+                let nas = cloud::load_config(root);
+                if nas.enabled || nas.client().is_ok() {
+                    return Ok(Some(Self::Nas(nas)));
+                }
+                Ok(qiniu.has_token.then_some(Self::Qiniu(qiniu)))
+            }
+            Some(_) => Err("共享存储选择无效，请在设置中重新保存配置。".into()),
+        }
+    }
+
+    pub(crate) fn provider(&self) -> &'static str {
+        match self {
+            Self::Nas(config) => match config.provider {
+                cloud::Provider::Minio => "minio",
+                cloud::Provider::Webdav => "webdav",
+                cloud::Provider::Smb => "smb",
+            },
+            Self::Qiniu(_) => "qiniu",
+        }
+    }
+
+    pub(crate) fn target(&self) -> Option<String> {
+        match self {
+            Self::Nas(config) => Some(config.target()),
+            Self::Qiniu(settings) => Qiniu::configured_target(settings),
+        }
+    }
+}
+
+fn connection_error(service: &str, error: &str) -> String {
+    format!("请确保共享存储（{service}）可连接并可用。{error}")
+}
+
 pub(crate) enum Backend {
     Nas(cloud::CloudConfig, cloud::FileStorage),
     Qiniu(Qiniu),
@@ -12,25 +78,22 @@ impl Backend {
         store: &store::Store,
         root: &Path,
     ) -> Result<Option<String>, String> {
-        let (qiniu, _) = qiniu_settings::load(store)?;
-        if qiniu.enabled {
-            return Ok(Qiniu::configured_target(&qiniu));
-        }
-        let config = cloud::load_config(root);
-        Ok(config.enabled.then(|| config.target()))
+        Ok(Configuration::load(store, root)?.and_then(|configuration| configuration.target()))
     }
 
     pub(crate) fn current(store: &store::Store, root: &Path) -> Result<Option<Self>, String> {
-        if qiniu_settings::load(store)?.0.enabled {
-            return Qiniu::new(store).map(Self::Qiniu).map(Some);
+        match Configuration::load(store, root)? {
+            Some(Configuration::Qiniu(_)) => Qiniu::new(store)
+                .map(Self::Qiniu)
+                .map(Some)
+                .map_err(|error| connection_error("七牛 Kodo", &error)),
+            Some(Configuration::Nas(config)) => {
+                let backend = Self::nas(config)?;
+                backend.remember(store)?;
+                Ok(Some(backend))
+            }
+            None => Ok(None),
         }
-        let config = cloud::load_config(root);
-        if !config.enabled {
-            return Ok(None);
-        }
-        let backend = Self::nas(config)?;
-        backend.remember(store)?;
-        Ok(Some(backend))
     }
 
     pub(crate) fn bound(store: &store::Store, root: &Path, target: &str) -> Result<Self, String> {
@@ -57,8 +120,25 @@ impl Backend {
     }
 
     fn nas(config: cloud::CloudConfig) -> Result<Self, String> {
-        let client = config.client()?;
+        let client = config.client().map_err(|error| connection_error(config.provider.label(), &error))?;
         Ok(Self::Nas(config, client))
+    }
+
+    pub(crate) async fn check_connection(&self) -> Result<(), String> {
+        let service = match self {
+            Self::Nas(config, _) => config.provider.label(),
+            Self::Qiniu(_) => "七牛 Kodo",
+        };
+        let probe = async {
+            match self {
+                Self::Nas(_, client) => client.test().await.map(|_| ()),
+                Self::Qiniu(client) => client.check_connection().await,
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(15), probe)
+            .await
+            .map_err(|_| connection_error(service, "连接检测超时。"))?
+            .map_err(|error| connection_error(service, &error))
     }
 
     fn remember(&self, store: &store::Store) -> Result<(), String> {
@@ -139,4 +219,56 @@ fn image_key(kind: &str, reference: &str) -> String {
 
 fn display(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::qiniu_transport::tests::{local_server, receive, reply};
+
+    fn minio_config(endpoint: String) -> cloud::CloudConfig {
+        cloud::CloudConfig {
+            endpoint,
+            bucket: "fixture".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn saved_selection_overrides_legacy_switches() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store::Store::open(dir.path()).unwrap();
+        let config = minio_config("http://127.0.0.1:9000".into());
+        cloud::Sync::new().save(dir.path(), &config).await.unwrap();
+        let load = || Configuration::load(&store, dir.path()).unwrap().unwrap();
+        assert_eq!(load().provider(), "minio");
+
+        let qiniu = qiniu_settings::Settings {
+            enabled: true,
+            workspace_id: Some("fixture".into()),
+            ..Default::default()
+        };
+        store.write_qiniu_settings(&serde_json::to_string(&qiniu).unwrap(), &[]).unwrap();
+        assert_eq!(load().provider(), "qiniu");
+        StorageSelection::Nas.save(&store).unwrap();
+        assert_eq!(load().provider(), "minio");
+        StorageSelection::Qiniu.save(&store).unwrap();
+        assert_eq!(load().provider(), "qiniu");
+    }
+
+    #[tokio::test]
+    async fn minio_probe_reports_permission_errors_without_writing_an_object() {
+        let (listener, endpoint) = local_server();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = receive(&listener, "GET /fixture/?list-type=2&max-keys=1");
+            reply(socket, 403, &[], b"<Error><Code>AccessDenied</Code></Error>");
+        });
+        let backend = Backend::nas(minio_config(endpoint)).unwrap();
+        let error = backend.check_connection().await.unwrap_err();
+        assert!(error.contains("共享存储（MinIO）可连接并可用"), "{error}");
+        assert!(error.contains("403"), "{error}");
+        server.join().unwrap();
+    }
 }

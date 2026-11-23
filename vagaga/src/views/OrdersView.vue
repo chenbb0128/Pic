@@ -1,5 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { Boxes, Check, CircleCheck, Clock3, Download, PanelsTopLeft, RefreshCw, Search, X } from '@lucide/vue'
+import OptionSelect from '../components/OptionSelect.vue'
+import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import { useOrdersStore, loadOrders, toast } from '../stores/orders'
 import {
   assetUrl,
@@ -64,6 +68,11 @@ function makeBlockReason(img: OrderImage) {
 const entries = ref<{ summary: OrderSummary; images: OrderImage[] }[]>([])
 const orderSearch = ref('')
 const orderFilter = ref<'pending' | 'completed' | 'all'>('pending')
+const orderFilters = [
+  { id: 'pending', label: '待制作', detail: '查看还需要制作的订单', icon: Clock3 },
+  { id: 'completed', label: '已完成', detail: '查看已标记完成的订单', icon: CircleCheck },
+  { id: 'all', label: '全部订单', detail: '查看所有制作状态', icon: Boxes },
+] as const
 const isOrderComplete = (number: string) => Boolean(
   store.workflowOrders[number]?.localCompleted || store.workflowOrders[number]?.sharedState === 'completed',
 )
@@ -310,6 +319,18 @@ const exportStatus = computed(() => {
   }
 })
 
+function updateEditorHeader() {
+  const orderLabel = numberingDocument?.getElementById('desktopOrderNumber')
+  if (orderLabel) {
+    orderLabel.textContent = lastInjectedOrder.value ?? ''
+    orderLabel.title = lastInjectedOrder.value ?? ''
+  }
+  const feedback = numberingDocument?.getElementById('desktopEditorFeedback')
+  if (feedback) feedback.textContent = status.value || exportStatus.value
+}
+
+watch([lastInjectedOrder, status, exportStatus], updateEditorHeader)
+
 watch(
   [() => store.orders, expandedOrderNumber, () => lastExport.value?.orderNumber],
   ([, expandedNumber, exportedNumber]) => {
@@ -401,7 +422,7 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
     lastInjectedOrder.value = orderNumber
     lastInjectedImageId = img.id
     lastExport.value = null
-    status.value = '素材已注入编辑器，请排版调整后导出。'
+    status.value = ''
   } catch (error) {
     status.value = String(error)
   } finally {
@@ -490,7 +511,7 @@ function onFrameLoad() {
   numberingDocument?.addEventListener('input', onNumberingEdit)
   numberingDocument?.addEventListener('change', onNumberingEdit)
   editorReady.value = true
-  status.value = '编辑器已就绪：从左侧选择规格「制作」，或在编辑器内粘贴图片。'
+  updateEditorHeader()
 }
 
 function openImage(filePath: string) {
@@ -654,20 +675,19 @@ function orderProductions(orderNumber: string): Production[] {
     <aside class="list glass">
       <div class="listHead">
         <span>订单</span>
-        <button class="iconBtn" title="刷新本地列表" aria-label="刷新本地列表" @click="loadOrders().catch(error => toast('error', `刷新订单失败：${error}`))">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-        </button>
+        <div class="orderActions" role="group" aria-label="订单同步操作">
+          <slot name="workflow-actions" />
+        </div>
+        <Button variant="ghost" size="icon-xs" title="刷新本地列表" aria-label="刷新本地列表" @click="loadOrders().catch(error => toast('error', `刷新订单失败：${error}`))">
+          <RefreshCw aria-hidden="true" />
+        </Button>
       </div>
       <div class="orderTools">
         <div class="orderSearch">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
-          <input v-model="orderSearch" type="search" placeholder="搜索订单号或排版编号" aria-label="搜索订单号或排版编号" autocomplete="off" />
+          <Search class="pointer-events-none absolute left-2.5 top-2 size-4 text-muted-foreground" aria-hidden="true" />
+          <Input v-model="orderSearch" class="h-8 pl-8 text-xs md:text-xs" type="search" placeholder="搜索订单号或排版编号" aria-label="搜索订单号或排版编号" autocomplete="off" />
         </div>
-        <select v-model="orderFilter" class="orderFilter" aria-label="按制作状态筛选">
-          <option value="pending">待制作</option>
-          <option value="completed">已完成</option>
-          <option value="all">全部订单</option>
-        </select>
+        <OptionSelect v-model="orderFilter" :options="orderFilters" compact aria-label="按制作状态筛选" />
       </div>
       <div class="items">
         <div v-for="entry in visibleEntries" :key="entry.summary.id" class="orderBlock">
@@ -698,13 +718,15 @@ function orderProductions(orderNumber: string): Production[] {
                   <span v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</span>
                   <span v-if="orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)" class="orderDone">已完成</span>
                 </div>
-                <button
+                <Button
                   v-if="finishLabel(entry.summary.orderNumber)"
-                  class="miniBtn finishBtn"
+                  variant="outline"
+                  size="xs"
+                  class="finishBtn"
                   type="button"
                   :disabled="workflowBusy"
                   @click.stop="requestFinish(entry.summary.orderNumber)"
-                >{{ finishLabel(entry.summary.orderNumber) }}</button>
+                ><Check aria-hidden="true" />{{ finishLabel(entry.summary.orderNumber) }}</Button>
                 <button
                   v-if="canDelete"
                   class="itemDel"
@@ -738,12 +760,12 @@ function orderProductions(orderNumber: string): Production[] {
                     <span v-if="img.width > 0 && img.height > 0" :title="`${img.width} × ${img.height} px`">{{ img.width }}×{{ img.height }}</span>
                     <div class="materialFileActions">
                       <span>{{ formatBytes(img.byteLength) }}</span>
-                      <button class="materialIcon" type="button"
+                      <Button variant="outline" size="icon-xs" type="button"
                         :title="img.sourceQuality === 'scaled' ? '下载缩略图' : '下载素材'"
                         :aria-label="(img.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + img.originalName"
                         :disabled="!!savingImageId || !img.filePath || img.syncStatus === 'downloading'" @click="saveImage(img)">
-                        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>
-                      </button>
+                        <Download aria-hidden="true" />
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -757,14 +779,14 @@ function orderProductions(orderNumber: string): Production[] {
                       <span v-if="!img.templates.length" class="specEmpty">请在下方勾选规格</span>
                       <span v-for="spec in specificationsFor(img).filter(spec => spec.quantity !== null)" :key="spec.webId" class="ruleGroup">
                         <span class="selectedSpec">{{ spec.code }} × {{ spec.quantity }}</span>
-                        <button
+                        <Button
                           type="button"
-                          class="makeBtn"
+                          size="xs"
                           :disabled="workflowBusy || !!busyImageId || !!makeBlockReason(img)"
                           :title="makeBlockReason(img) || spec.name"
                           :aria-label="`制作 ${spec.code}`"
                           @click.stop="injectImage(img, entry.summary, spec.webId)"
-                        >制作</button>
+                        >制作</Button>
                       </span>
                     </div>
                   </div>
@@ -835,15 +857,13 @@ function orderProductions(orderNumber: string): Production[] {
 
     <!-- 右栏：常驻编辑器 -->
     <section class="editorWrap glass">
-      <div class="editorBar">
-        <span class="makingFor" v-if="lastInjectedOrder">制作中：订单 {{ lastInjectedOrder }}</span>
-        <span class="dim" v-else>从左侧选择规格「制作」开始排版</span>
-      </div>
       <div class="editorBox">
         <div v-if="!editorSrc" class="loading">
-          <button class="miniBtn" @click="openEditor">打开编辑器</button>
+          <span class="editorPrompt">从左侧选择规格「制作」开始排版</span>
+          <Button @click="openEditor"><PanelsTopLeft aria-hidden="true" />打开编辑器</Button>
+          <div v-if="status" class="editorPrompt" role="status">{{ status }}</div>
         </div>
-        <div v-else-if="!editorReady" class="loading">正在加载爱心星星编辑器…</div>
+        <div v-else-if="!editorReady" class="loading" role="status">{{ status || '正在加载编辑器…' }}</div>
         <iframe
           v-if="editorSrc"
           ref="frame"
@@ -852,10 +872,6 @@ function orderProductions(orderNumber: string): Production[] {
           title="素材制作编辑器"
           @load="onFrameLoad"
         ></iframe>
-      </div>
-      <div v-if="status || exportStatus" class="status" role="status">
-        <div v-if="status">{{ status }}</div>
-        <div v-if="exportStatus">{{ exportStatus }}</div>
       </div>
     </section>
 
@@ -890,9 +906,9 @@ function orderProductions(orderNumber: string): Production[] {
       <div v-if="previewMaterial" class="materialView">
         <header class="materialViewBar">
           <h2 id="material-preview-title">{{ previewMaterial.originalName }}</h2>
-          <button class="materialIcon" type="button" aria-label="关闭素材预览" title="关闭" autofocus @click="materialDialog?.close()">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
-          </button>
+          <Button variant="ghost" size="icon-sm" type="button" aria-label="关闭素材预览" title="关闭" autofocus @click="materialDialog?.close()">
+            <X aria-hidden="true" />
+          </Button>
         </header>
         <div class="materialStage">
           <img v-if="!materialPreviewFailed" :src="assetUrl(materialPath)" :alt="previewMaterial.originalName" @error="materialPreviewFailed = true" />
@@ -904,12 +920,12 @@ function orderProductions(orderNumber: string): Production[] {
             <span v-if="previewMaterial.byteLength > 0">{{ formatBytes(previewMaterial.byteLength) }}</span>
             <span v-if="previewMaterial.sourceQuality === 'scaled' || !previewMaterial.filePath">缩略图</span>
           </div>
-          <button class="materialIcon" type="button"
+          <Button variant="outline" size="icon-sm" class="border-primary/25 bg-primary/5 text-primary hover:bg-primary/10 hover:text-primary" type="button"
             :title="previewMaterial.sourceQuality === 'scaled' ? '下载缩略图' : '下载素材'"
             :aria-label="(previewMaterial.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + previewMaterial.originalName"
             :disabled="!!savingImageId || !previewMaterial.filePath || previewMaterial.syncStatus === 'downloading'" @click="saveImage(previewMaterial)">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>
-          </button>
+            <Download aria-hidden="true" />
+          </Button>
         </footer>
       </div>
     </dialog>
@@ -923,7 +939,7 @@ function orderProductions(orderNumber: string): Production[] {
       <div class="guideBox" @click.stop>
         <div class="guideHead">
           <h2>快捷键指南</h2>
-          <button class="guideClose" @click="showShortcutGuide = false">×</button>
+          <Button variant="ghost" size="icon-sm" aria-label="关闭快捷键指南" @click="showShortcutGuide = false"><X aria-hidden="true" /></Button>
         </div>
         <p class="guideNote">先点击画板再使用快捷键。</p>
         <section v-for="g in shortcutGroups" :key="g.title" class="guideGroup">
@@ -944,14 +960,16 @@ function orderProductions(orderNumber: string): Production[] {
 
 <style scoped>
 .body {
+  --editor-min-width: 1150px;
+  --panel-gap: 8px;
   display: flex;
   flex: 1;
   min-height: 0;
-  gap: 12px;
-  padding: 12px;
+  gap: var(--panel-gap);
+  padding: var(--panel-gap);
 }
 .list {
-  width: 340px;
+  width: clamp(304px, calc(100% - var(--editor-min-width) - var(--panel-gap)), 340px);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -962,11 +980,17 @@ function orderProductions(orderNumber: string): Production[] {
   justify-content: flex-end;
   align-items: center;
   gap: 6px;
-  padding: 12px 14px 8px;
+  padding: 8px 12px 6px 14px;
+  font-size: 15px;
   font-weight: 700;
 }
-.listHead span {
-  flex: 1;
+.listHead > span {
+  margin-right: auto;
+  white-space: nowrap;
+}
+.orderActions {
+  display: flex;
+  gap: 6px;
 }
 .orderTools {
   display: flex;
@@ -974,54 +998,9 @@ function orderProductions(orderNumber: string): Production[] {
   margin: 0 12px 9px;
 }
 .orderSearch {
-  display: flex;
+  position: relative;
   flex: 1;
   min-width: 0;
-  align-items: center;
-  gap: 7px;
-  padding: 0 9px;
-  min-height: 32px;
-  border: 1px solid var(--stroke);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  color: var(--text-dim);
-}
-.orderSearch:focus-within {
-  border-color: var(--accent);
-}
-.orderSearch input {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-}
-.orderFilter {
-  flex-shrink: 0;
-  padding: 0 6px 0 8px;
-  border: 1px solid var(--stroke);
-  border-radius: var(--radius-sm);
-  background: var(--bg-input);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-.iconBtn {
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
 }
 .items {
   overflow-y: auto;
@@ -1036,6 +1015,7 @@ function orderProductions(orderNumber: string): Production[] {
   align-items: flex-start;
   gap: 6px;
   padding: 10px 12px;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
 }
@@ -1099,8 +1079,11 @@ function orderProductions(orderNumber: string): Production[] {
   overflow-wrap: anywhere;
 }
 .orderDone {
+  border-radius: 5px;
+  background: #eaf7ef;
+  padding: 1px 5px;
   font-size: 11px;
-  color: var(--text-dim);
+  color: #14704f;
   white-space: nowrap;
 }
 .orderWarning {
@@ -1211,27 +1194,6 @@ function orderProductions(orderNumber: string): Production[] {
   gap: 2px;
   white-space: nowrap;
 }
-.materialIcon {
-  display: inline-grid;
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--accent);
-  cursor: pointer;
-}
-.materialIcon:hover:not(:disabled) {
-  background: var(--accent-soft);
-}
-.materialIcon:disabled {
-  color: var(--text-dim);
-  opacity: .45;
-  cursor: default;
-}
 .placeholder {
   display: inline-grid;
   place-items: center;
@@ -1291,8 +1253,8 @@ function orderProductions(orderNumber: string): Production[] {
 .ruleGroup {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
-  overflow: hidden;
+  border-radius: var(--radius-sm);
+  padding: 2px;
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
   color: var(--accent);
@@ -1338,27 +1300,12 @@ function orderProductions(orderNumber: string): Production[] {
 .ruleChip:hover:not(:disabled),
 .ruleChip[aria-checked="true"] {
   background: var(--accent-soft);
+  border-color: var(--accent-border);
   color: var(--accent);
 }
 .ruleChip:focus-visible {
-  outline-offset: -2px;
-}
-.makeBtn {
-  border: none;
-  font-size: 11px;
-  padding: 2px 8px;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
-  font-family: inherit;
-  transition: background 0.15s;
-}
-.makeBtn:hover:not(:disabled) {
-  background: #2f5fe0;
-}
-.makeBtn:disabled, .miniBtn:disabled {
-  opacity: .55;
-  cursor: default;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .imgDel {
   flex-shrink: 0;
@@ -1383,17 +1330,6 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
   color: var(--text-dim);
   padding: 2px 8px 4px;
-}
-.miniBtn {
-  font-size: 11px;
-  padding: 3px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--stroke);
-  background: var(--bg-input);
-  color: var(--text);
-  cursor: pointer;
-  font-family: inherit;
-  white-space: nowrap;
 }
 /* 成品 */
 .prodRow {
@@ -1449,23 +1385,10 @@ button.prodThumb:hover {
 /* 右栏编辑器 */
 .editorWrap {
   flex: 1;
-  min-width: 1150px;
+  min-width: var(--editor-min-width);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-}
-.editorBar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--stroke);
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.makingFor {
-  font-weight: 700;
-  color: var(--accent);
 }
 .editorBox {
   flex: 1;
@@ -1475,7 +1398,7 @@ button.prodThumb:hover {
 }
 .frame {
   flex: 1;
-  min-width: 1150px;
+  min-width: var(--editor-min-width);
   border: none;
   background: #fff;
 }
@@ -1483,6 +1406,8 @@ button.prodThumb:hover {
   position: absolute;
   inset: 0;
   display: flex;
+  flex-direction: column;
+  gap: 12px;
   align-items: center;
   justify-content: center;
   color: var(--text-dim);
@@ -1490,14 +1415,10 @@ button.prodThumb:hover {
   z-index: 1;
   background: var(--bg-card);
 }
-.status {
-  padding: 6px 14px;
-  font-size: 11px;
-  color: var(--text-dim);
-  background: #f7f9fc;
-  border-top: 1px solid var(--stroke);
+.editorPrompt {
+  max-width: 70%;
   overflow-wrap: anywhere;
-  flex-shrink: 0;
+  text-align: center;
 }
 .hoverCard {
   position: fixed;
@@ -1538,6 +1459,7 @@ button.prodThumb:hover {
   border-radius: var(--radius);
   background: var(--bg-card);
   color: var(--text);
+  box-shadow: 0 16px 52px #17234138;
 }
 .materialDialog::backdrop {
   background: rgba(22, 32, 48, .65);
@@ -1556,10 +1478,6 @@ button.prodThumb:hover {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.materialViewBar .materialIcon {
-  width: 32px;
-  height: 32px;
 }
 .materialStage {
   display: grid;
@@ -1607,16 +1525,6 @@ button.prodThumb:hover {
 .guideHead h2 {
   margin: 0;
   font-size: 16px;
-}
-.guideClose {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--stroke);
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-dim);
-  font-size: 16px;
-  cursor: pointer;
 }
 .guideNote {
   font-size: 12px;

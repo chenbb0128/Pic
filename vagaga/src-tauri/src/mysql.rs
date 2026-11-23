@@ -36,7 +36,7 @@ impl Default for MysqlConfig {
 
 impl MysqlConfig {
     pub fn valid(&self) -> bool {
-        !self.host.is_empty() && !self.user.is_empty() && !self.dbname.is_empty()
+        self.port > 0 && !self.host.trim().is_empty() && !self.user.trim().is_empty() && !self.dbname.trim().is_empty()
     }
 }
 
