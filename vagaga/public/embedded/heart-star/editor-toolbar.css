@@ -160,6 +160,7 @@
   margin: 0;
   text-align: left;
 }
+#exportControlsFallback:not([hidden]) { display: grid; gap: 10px; }
 .editor-options .watermark-downloads {
   display: flex;
   flex-wrap: wrap;

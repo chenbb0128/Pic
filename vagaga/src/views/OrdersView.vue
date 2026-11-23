@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
 import { useOrdersStore, loadOrders, toast } from '../stores/orders'
+import { mountEditorExportControls } from '../lib/editor-export-controls'
 import {
   assetUrl,
   cutoutImageBytes,
@@ -505,9 +506,13 @@ async function onMessage(event: MessageEvent) {
   }
 }
 
+let unmountExportControls: (() => void) | undefined
+
 function onFrameLoad() {
   removeNumberingListeners()
+  unmountExportControls?.()
   numberingDocument = frame.value?.contentDocument ?? null
+  unmountExportControls = numberingDocument ? mountEditorExportControls(numberingDocument) : undefined
   numberingDocument?.addEventListener('input', onNumberingEdit)
   numberingDocument?.addEventListener('change', onNumberingEdit)
   editorReady.value = true
@@ -607,6 +612,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   void persistLayout().catch(reportLayoutError)
   removeNumberingListeners()
+  unmountExportControls?.()
   sourcesRequest++
   productionRequests.clear()
   window.removeEventListener('message', onMessage)
@@ -791,8 +797,8 @@ function orderProductions(orderNumber: string): Production[] {
                   </div>
                 </div>
                 <div v-if="qualityLabel(img) || syncLabel(img)" class="imageLabels" :title="img.syncError">
-                    <span v-if="qualityLabel(img)" class="caution">{{ qualityLabel(img) }}</span>
-                    <span v-if="syncLabel(img)" class="syncLabel" :class="img.syncStatus">{{ syncLabel(img) }}</span>
+                  <span v-if="qualityLabel(img)" class="caution">{{ qualityLabel(img) }}</span>
+                  <span v-if="syncLabel(img)" class="syncLabel" :class="img.syncStatus">{{ syncLabel(img) }}</span>
                 </div>
                 <div class="imgInfo">
                   <div class="specSection" role="group" aria-label="待制作规格">

@@ -342,6 +342,7 @@ function environment(t, overrides = {}) {
         '../components/ui/button': {},
         '../components/ui/checkbox': {},
         '../components/ui/input': {},
+        '../lib/editor-export-controls': { mountEditorExportControls() {} },
         vue: { ...vue, onMounted: callback => mounted.push(callback), onBeforeUnmount: callback => unmounted.push(callback) },
         '../stores/orders': store, '../lib/tauri': api,
       }).default

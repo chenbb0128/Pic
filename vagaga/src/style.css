@@ -24,7 +24,8 @@
 }
 
 /* 设计令牌：对齐千帆客服工作台（浅色 / 白卡片 / #386bff 主色） */
-:root {
+:root,
+:host {
   --bg-base: #eef1f6;
   --bg-card: #ffffff;
   --bg-card-hover: #f5f7fb;

@@ -42,7 +42,7 @@ async function close() {
         <Copy v-if="maximized" class="size-3.5" aria-hidden="true" />
         <Square v-else class="size-3.5" aria-hidden="true" />
       </Button>
-      <Button type="button" variant="ghost" size="icon-sm" class="hover:bg-destructive hover:text-white"
+      <Button type="button" variant="ghost" size="icon-sm" class="windowClose"
         title="关闭" aria-label="关闭" @click="close">
         <X class="size-4" aria-hidden="true" />
       </Button>
@@ -82,5 +82,10 @@ async function close() {
   margin-left: auto;
   display: flex;
   gap: 4px;
+}
+.windowClose:hover,
+.windowClose:focus-visible {
+  background-color: var(--danger);
+  color: white;
 }
 </style>
