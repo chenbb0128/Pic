@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { Boxes, Check, CircleCheck, Clock3, Download, PanelsTopLeft, RefreshCw, Search, X } from '@lucide/vue'
 import OptionSelect from '../components/OptionSelect.vue'
 import { Button } from '../components/ui/button'
+import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
 import { useOrdersStore, loadOrders, toast } from '../stores/orders'
 import {
@@ -719,11 +720,11 @@ function orderProductions(orderNumber: string): Production[] {
             @mousemove="onItemMove($event)"
             @mouseleave="onItemLeave"
           >
-            <input v-if="uploadableOrders?.has(entry.summary.orderNumber)"
-              type="checkbox" class="uploadCheck"
-              :checked="uploadSelection?.includes(entry.summary.orderNumber)" :disabled="workflowBusy"
+            <Checkbox v-if="uploadableOrders?.has(entry.summary.orderNumber)"
+              class="mt-0.5"
+              :model-value="uploadSelection?.includes(entry.summary.orderNumber) ?? false" :disabled="workflowBusy"
               :aria-label="'勾选订单 ' + entry.summary.orderNumber + ' 上传'" @click.stop
-              @change="emit('toggleUpload', entry.summary.orderNumber, ($event.target as HTMLInputElement).checked)" />
+              @update:model-value="emit('toggleUpload', entry.summary.orderNumber, $event === true)" />
             <svg class="chevron" :class="{ open: expandedOrderId === entry.summary.id }" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             <div class="itemMain">
               <div class="orderHeading">
@@ -789,16 +790,16 @@ function orderProductions(orderNumber: string): Production[] {
                     </div>
                   </div>
                 </div>
-                <div class="imgInfo">
-                  <div v-if="qualityLabel(img) || syncLabel(img)" class="imageLabels" :title="img.syncError">
+                <div v-if="qualityLabel(img) || syncLabel(img)" class="imageLabels" :title="img.syncError">
                     <span v-if="qualityLabel(img)" class="caution">{{ qualityLabel(img) }}</span>
                     <span v-if="syncLabel(img)" class="syncLabel" :class="img.syncStatus">{{ syncLabel(img) }}</span>
-                  </div>
+                </div>
+                <div class="imgInfo">
                   <div class="specSection" role="group" aria-label="待制作规格">
-                    <div class="rules">
+                    <div class="selectedRules">
                       <span v-if="!img.templates.length" class="specEmpty">请在下方勾选规格</span>
                       <span v-for="spec in specificationsFor(img).filter(spec => spec.quantity !== null)" :key="spec.webId" class="ruleGroup">
-                        <span class="selectedSpec">{{ spec.code }} × {{ spec.quantity }}</span>
+                        <span class="selectedSpec" :title="spec.code + ' × ' + spec.quantity">{{ spec.code }} × {{ spec.quantity }}</span>
                         <Button
                           type="button"
                           size="xs"
@@ -812,7 +813,7 @@ function orderProductions(orderNumber: string): Production[] {
                   </div>
                   <div class="specSection" role="group" aria-label="全部模板规格">
                     <span class="specLabel">全部模板规格</span>
-                    <div class="rules">
+                    <div class="allRules">
                       <button
                         v-for="spec in specificationsFor(img)"
                         :key="spec.webId"
@@ -992,6 +993,8 @@ function orderProductions(orderNumber: string): Production[] {
   padding: var(--panel-gap);
 }
 .list {
+  --list-inset: 10px;
+  --list-scrollbar-width: 6px;
   width: clamp(304px, calc(100% - var(--editor-min-width) - var(--panel-gap)), 340px);
   flex-shrink: 0;
   display: flex;
@@ -1003,7 +1006,7 @@ function orderProductions(orderNumber: string): Production[] {
   justify-content: flex-end;
   align-items: center;
   gap: 6px;
-  padding: 8px 12px 6px 14px;
+  padding: 8px calc(var(--list-inset) + var(--list-scrollbar-width)) 6px var(--list-inset);
   font-size: 15px;
   font-weight: 700;
 }
@@ -1018,7 +1021,7 @@ function orderProductions(orderNumber: string): Production[] {
 .orderTools {
   display: flex;
   gap: 6px;
-  margin: 0 12px 9px;
+  margin: 0 calc(var(--list-inset) + var(--list-scrollbar-width)) 9px var(--list-inset);
 }
 .orderSearch {
   position: relative;
@@ -1027,8 +1030,12 @@ function orderProductions(orderNumber: string): Production[] {
 }
 .items {
   overflow-y: auto;
-  padding: 0 10px 10px;
+  scrollbar-gutter: stable;
+  padding: 0 var(--list-inset) 10px;
   flex: 1;
+}
+.items::-webkit-scrollbar {
+  width: var(--list-scrollbar-width);
 }
 .orderBlock {
   margin-bottom: 6px;
@@ -1041,13 +1048,6 @@ function orderProductions(orderNumber: string): Production[] {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-}
-.uploadCheck {
-  flex: 0 0 auto;
-  margin: 2px 0 0;
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent);
 }
 .chevron {
   flex-shrink: 0;
@@ -1163,9 +1163,10 @@ function orderProductions(orderNumber: string): Production[] {
   border-radius: var(--radius-sm);
 }
 .imgRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr) auto;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   padding: 7px 6px;
   border-radius: var(--radius-sm);
 }
@@ -1183,7 +1184,6 @@ function orderProductions(orderNumber: string): Production[] {
   background: var(--bg-input);
 }
 .materialTile {
-  flex: 0 0 68px;
   min-width: 0;
 }
 .thumbButton {
@@ -1224,10 +1224,11 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
 }
 .imgInfo {
-  flex: 1;
+  grid-area: 2 / 1 / auto / -1;
   min-width: 0;
 }
 .imageLabels {
+  grid-area: 1 / 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1257,10 +1258,16 @@ function orderProductions(orderNumber: string): Production[] {
   margin: 0 6px 4px;
   overflow-wrap: anywhere;
 }
-.rules {
-  display: flex;
-  flex-wrap: wrap;
+.selectedRules,
+.allRules {
+  display: grid;
   gap: 4px;
+}
+.selectedRules {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.allRules {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .specSection + .specSection {
   margin-top: 6px;
@@ -1274,8 +1281,9 @@ function orderProductions(orderNumber: string): Production[] {
   margin-bottom: 3px;
 }
 .ruleGroup {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   border-radius: var(--radius-sm);
   padding: 2px;
   border: 1px solid var(--accent-border);
@@ -1283,13 +1291,17 @@ function orderProductions(orderNumber: string): Production[] {
   color: var(--accent);
 }
 .selectedSpec {
-  padding: 2px 8px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 5px;
   font-size: 11px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ruleChip {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 3px;
   font-size: 11px;
   padding: 2px 4px;
@@ -1331,7 +1343,7 @@ function orderProductions(orderNumber: string): Production[] {
   outline-offset: 1px;
 }
 .imgDel {
-  flex-shrink: 0;
+  grid-area: 1 / 3;
   width: 22px;
   height: 22px;
   border: none;

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ClipboardList, CloudDownload, CloudUpload, LayoutTemplate, LoaderCircle, Settings } from '@lucide/vue'
+import { Toaster } from 'vue-sonner'
+import 'vue-sonner/style.css'
 import TitleBar from './components/TitleBar.vue'
 import { Button } from './components/ui/button'
 import OrdersView from './views/OrdersView.vue'
@@ -141,9 +143,9 @@ onBeforeUnmount(() => {
       :save-layout="saveLayout"
       :apply-shared-version="applySharedVersion"
     />
-    <div class="toasts">
-      <div v-for="t in store.toasts" :key="t.id" class="toast" :class="t.kind">{{ t.text }}</div>
-    </div>
+    <Toaster position="top-right" :offset="{ top: 54, right: 16 }" :duration="3200"
+      rich-colors close-button container-aria-label="消息提醒"
+      :toast-options="{ closeButtonAriaLabel: '关闭消息' }" />
   </div>
 </template>
 

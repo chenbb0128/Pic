@@ -262,6 +262,7 @@ function environment(t, overrides = {}) {
   const intervals = new Map()
   const mounted = [], unmounted = [], scopes = []
   const savedProductions = []
+  const notifications = []
   const subscribe = name => async callback => {
     handlers[name].add(callback)
     return () => handlers[name].delete(callback)
@@ -312,9 +313,15 @@ function environment(t, overrides = {}) {
     })
     return module.exports
   }
-  const store = evaluate(storeSource, { vue, '../lib/tauri': api })
+  const store = evaluate(storeSource, {
+    vue, '../lib/tauri': api,
+    'vue-sonner': { toast: {
+      success: text => notifications.push({ kind: 'ok', text }),
+      error: text => notifications.push({ kind: 'error', text }),
+    } },
+  })
   const env = {
-    store, handlers, intervals, savedProductions,
+    store, handlers, intervals, savedProductions, notifications,
     rows(value) { rows = value },
     productions(value) { productions = value },
     qiniuStatus(value) { qiniuStatus = value },
@@ -333,6 +340,7 @@ function environment(t, overrides = {}) {
         '@lucide/vue': icons,
         '../components/OptionSelect.vue': {},
         '../components/ui/button': {},
+        '../components/ui/checkbox': {},
         '../components/ui/input': {},
         vue: { ...vue, onMounted: callback => mounted.push(callback), onBeforeUnmount: callback => unmounted.push(callback) },
         '../stores/orders': store, '../lib/tauri': api,
@@ -367,8 +375,9 @@ test('repeated event binding produces one toast and one polling timer', async t 
   assert.equal(env.handlers.ingested.size, 1)
   assert.equal(env.intervals.size, 1)
   await env.emit({ kind: 'ingested', orderNumber: 'ORDER-one', imageId: 'photo', scaled: false })
-  assert.equal(env.store.useOrdersStore().toasts.length, 1)
-  assert.match(env.store.useOrdersStore().toasts[0].text, /ORDER-one/)
+  assert.equal(env.notifications.length, 1)
+  assert.equal(env.notifications[0].kind, 'ok')
+  assert.match(env.notifications[0].text, /ORDER-one/)
 })
 
 test('a newly captured order is selected after its refreshed list arrives', async t => {

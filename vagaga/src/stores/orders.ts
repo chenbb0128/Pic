@@ -1,19 +1,13 @@
 import { reactive } from 'vue'
+import { toast as notify } from 'vue-sonner'
 import * as api from '../lib/tauri'
 import type { AppInfo, OrderDetail, OrderSummary, PaidanEvent, QiniuStatus, WorkflowOrder, WorkflowSettings } from '../types'
-
-interface Toast {
-  id: number
-  kind: 'ok' | 'error'
-  text: string
-}
 
 interface State {
   orders: OrderSummary[]
   selectedId: string | null
   detail: OrderDetail | null
   info: AppInfo | null
-  toasts: Toast[]
   loading: boolean
   qiniu: QiniuStatus | null
   workflow: WorkflowSettings
@@ -26,7 +20,6 @@ const state = reactive<State>({
   selectedId: null,
   detail: null,
   info: null,
-  toasts: [],
   loading: false,
   qiniu: null,
   workflow: { role: 'both', target: null },
@@ -34,15 +27,9 @@ const state = reactive<State>({
   latestCapture: null,
 })
 
-let toastSeq = 0
-
 export function toast(kind: 'ok' | 'error', text: string) {
-  const id = ++toastSeq
-  state.toasts.push({ id, kind, text })
-  setTimeout(() => {
-    const index = state.toasts.findIndex(t => t.id === id)
-    if (index >= 0) state.toasts.splice(index, 1)
-  }, 3200)
+  if (kind === 'ok') notify.success(text)
+  else notify.error(text)
 }
 
 export async function loadInfo() {
