@@ -14,7 +14,6 @@ import {
   getOrder,
   listOrders,
   listProductions,
-  openPath,
   saveOrderImage,
   saveProduction,
   setImageTemplates,
@@ -514,22 +513,43 @@ function onFrameLoad() {
   updateEditorHeader()
 }
 
-function openImage(filePath: string) {
-  if (filePath) void openPath(filePath).catch(error => toast('error', `打开文件失败：${error}`))
+function productionName(production: Production) {
+  const fileName = production.filePath.split(/[\\/]/).pop() || '成品图片'
+  const archivePrefix = production.id + '_'
+  return fileName.startsWith(archivePrefix) ? fileName.slice(archivePrefix.length) : fileName
 }
 
 const materialDialog = ref<HTMLDialogElement | null>(null)
-const previewMaterial = ref<OrderImage | null>(null)
-const materialPath = computed(() => previewMaterial.value?.filePath || previewMaterial.value?.thumbnailPath || '')
+const previewMaterial = ref<OrderImage | Production | null>(null)
+const previewOrderImage = computed(() => {
+  const image = previewMaterial.value
+  return image && 'originalName' in image ? image : null
+})
+const materialPath = computed(() => previewMaterial.value?.filePath || previewOrderImage.value?.thumbnailPath || '')
+const materialName = computed(() => {
+  const image = previewMaterial.value
+  if (!image) return ''
+  return 'originalName' in image ? image.originalName : productionName(image)
+})
 const materialPreviewFailed = ref(false)
+const productionSize = ref('')
 
-async function showMaterial(img: OrderImage) {
-  if ((!img.filePath && !img.thumbnailPath) || !materialDialog.value) return
-  previewMaterial.value = img
+async function showMaterial(image: OrderImage | Production) {
+  if ((!image.filePath && !('thumbnailPath' in image && image.thumbnailPath)) || !materialDialog.value) return
+  previewMaterial.value = image
   materialPreviewFailed.value = false
+  productionSize.value = ''
   await nextTick()
   const dialog = materialDialog.value
   if (dialog && !dialog.open) dialog.showModal()
+}
+
+function updateProductionSize(event: Event) {
+  if (previewOrderImage.value) return
+  const image = event.currentTarget as HTMLImageElement
+  if (image.naturalWidth && image.naturalHeight) {
+    productionSize.value = `${image.naturalWidth} × ${image.naturalHeight} px`
+  }
 }
 
 function formatBytes(bytes: number): string {
@@ -832,9 +852,10 @@ function orderProductions(orderNumber: string): Production[] {
                   v-for="prod in orderProductions(entry.summary.orderNumber)"
                   :key="prod.id"
                   class="prodTile"
-                  :title="prod.syncError || prod.filePath.split(/[\\\\/]/).pop()"
+                  :title="prod.syncError || productionName(prod)"
                 >
-                  <button v-if="prod.filePath" class="prodThumb" aria-label="打开本地成品" @click="openImage(prod.filePath)">
+                  <button v-if="prod.filePath" class="prodThumb" type="button"
+                    :aria-label="'预览成品 ' + productionName(prod)" @click="showMaterial(prod)">
                     <img :src="assetUrl(prod.filePath)" alt="" />
                   </button>
                   <span v-else class="prodThumb placeholder" aria-hidden="true">成品</span>
@@ -905,25 +926,27 @@ function orderProductions(orderNumber: string): Production[] {
       @click.self="materialDialog?.close()" @close="previewMaterial = null">
       <div v-if="previewMaterial" class="materialView">
         <header class="materialViewBar">
-          <h2 id="material-preview-title">{{ previewMaterial.originalName }}</h2>
-          <Button variant="ghost" size="icon-sm" type="button" aria-label="关闭素材预览" title="关闭" autofocus @click="materialDialog?.close()">
+          <h2 id="material-preview-title">{{ materialName }}</h2>
+          <Button variant="ghost" size="icon-sm" type="button" aria-label="关闭图片预览" title="关闭" autofocus @click="materialDialog?.close()">
             <X aria-hidden="true" />
           </Button>
         </header>
         <div class="materialStage">
-          <img v-if="!materialPreviewFailed" :src="assetUrl(materialPath)" :alt="previewMaterial.originalName" @error="materialPreviewFailed = true" />
-          <p v-else class="dim" role="status">无法读取这张素材。</p>
+          <img v-if="!materialPreviewFailed" :key="materialPath" :src="assetUrl(materialPath)" :alt="materialName"
+            @load="updateProductionSize" @error="materialPreviewFailed = true" />
+          <p v-else class="dim" role="status">无法读取这张图片。</p>
         </div>
-        <footer class="materialViewBar materialViewFooter">
-          <div class="materialViewFacts">
-            <span v-if="previewMaterial.width > 0 && previewMaterial.height > 0">{{ previewMaterial.width }} × {{ previewMaterial.height }} px</span>
-            <span v-if="previewMaterial.byteLength > 0">{{ formatBytes(previewMaterial.byteLength) }}</span>
-            <span v-if="previewMaterial.sourceQuality === 'scaled' || !previewMaterial.filePath">缩略图</span>
+        <footer v-if="previewOrderImage || productionSize" class="materialViewBar materialViewFooter">
+          <div v-if="previewOrderImage" class="materialViewFacts">
+            <span v-if="previewOrderImage.width > 0 && previewOrderImage.height > 0">{{ previewOrderImage.width }} × {{ previewOrderImage.height }} px</span>
+            <span v-if="previewOrderImage.byteLength > 0">{{ formatBytes(previewOrderImage.byteLength) }}</span>
+            <span v-if="previewOrderImage.sourceQuality === 'scaled' || !previewOrderImage.filePath">缩略图</span>
           </div>
-          <Button variant="outline" size="icon-sm" class="border-primary/25 bg-primary/5 text-primary hover:bg-primary/10 hover:text-primary" type="button"
-            :title="previewMaterial.sourceQuality === 'scaled' ? '下载缩略图' : '下载素材'"
-            :aria-label="(previewMaterial.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + previewMaterial.originalName"
-            :disabled="!!savingImageId || !previewMaterial.filePath || previewMaterial.syncStatus === 'downloading'" @click="saveImage(previewMaterial)">
+          <div v-else class="materialViewFacts">{{ productionSize }}</div>
+          <Button v-if="previewOrderImage" variant="outline" size="icon-sm" class="border-primary/25 bg-primary/5 text-primary hover:bg-primary/10 hover:text-primary" type="button"
+            :title="previewOrderImage.sourceQuality === 'scaled' ? '下载缩略图' : '下载素材'"
+            :aria-label="(previewOrderImage.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + materialName"
+            :disabled="!!savingImageId || !previewOrderImage.filePath || previewOrderImage.syncStatus === 'downloading'" @click="saveImage(previewOrderImage)">
             <Download aria-hidden="true" />
           </Button>
         </footer>
@@ -1342,20 +1365,19 @@ function orderProductions(orderNumber: string): Production[] {
   margin-bottom: 6px;
 }
 .prodList {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
 .prodTile {
   display: flex;
   flex-direction: column;
   align-items: center;
-  flex: 0 0 84px;
   text-align: center;
 }
 .prodThumb {
-  width: 56px;
-  height: 56px;
+  width: min(100%, 56px);
+  aspect-ratio: 1;
   overflow: hidden;
   border-radius: 8px;
   padding: 0;

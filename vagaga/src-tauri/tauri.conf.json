@@ -20,14 +20,9 @@
         "minHeight": 640,
         "dragDropEnabled": false,
         "decorations": false,
-        "transparent": true,
-        "windowEffects": {
-          "effects": [
-            "acrylic",
-            "mica"
-          ],
-          "state": "active"
-        }
+        "transparent": false,
+        "shadow": false,
+        "backgroundColor": "#eef1f6"
       }
     ],
     "security": {

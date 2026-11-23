@@ -34,7 +34,7 @@
 }
 .editor-order:has(strong:empty) { display: none; }
 .editor-toolbar .footer-text-row {
-  flex: 0 1 226px;
+  flex: none;
   flex-wrap: nowrap;
   gap: 5px;
   min-width: 0;
@@ -45,15 +45,19 @@
   height: 30px;
   font-size: 12px;
 }
-.editor-toolbar .footer-text-row input { width: 100%; }
+.editor-toolbar #footerText {
+  width: 82px;
+  flex: none;
+  padding-inline: 7px;
+}
 .editor-toolbar #download {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
   flex: none;
-  height: 28px;
-  margin-left: auto;
+  height: 30px;
+  margin-inline-start: auto;
   padding: 0 8px;
   border-radius: 7px;
   font-size: 12px;
@@ -156,7 +160,6 @@
   margin: 0;
   text-align: left;
 }
-.editor-options .preview-tools,
 .editor-options .watermark-downloads {
   display: flex;
   flex-wrap: wrap;
@@ -165,7 +168,6 @@
   padding: 0;
 }
 .editor-options .preview-tool { width: 30px; height: 30px; }
-.editor-options .preview-zoom { width: 66px; height: 30px; font-size: 12px; }
 .editor-options .btn {
   height: 30px;
   padding: 0 8px;
@@ -186,10 +188,46 @@
 .editor-options .footer-filename { margin: 0; }
 .editor-toolbar-actions[hidden] { display: none; }
 .app > .preview { padding: 8px; }
+.editor-toolbar > .preview-tools {
+  gap: 5px;
+  flex-wrap: nowrap;
+  padding: 0;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid #e3e8f0;
+}
+.editor-toolbar .preview-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-color: var(--line);
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: 0 1px 2px #1723410a;
+  transition: background-color .15s, border-color .15s, color .15s;
+}
+.editor-toolbar .preview-tool:hover:not(:disabled) {
+  border-color: var(--control-border);
+  background: var(--control-tint);
+  color: var(--control-blue);
+}
+.editor-toolbar .preview-tool svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+.editor-toolbar .picture-preview-button {
+  width: auto;
+  gap: 6px;
+  padding-inline: 9px;
+  font-size: 12px;
+  font-weight: 500;
+}
 .editor-options-body > .hint { margin: 0; }
 .editor-help > summary { color: #536782; font-weight: 500; }
 @media (max-width: 500px) {
-  .editor-toolbar { gap: 6px; padding: 6px 8px; }
+  .editor-toolbar { flex-wrap: wrap; gap: 6px; padding: 6px 8px; }
   .editor-toolbar #download { padding: 0 8px; }
 }
 
@@ -230,25 +268,44 @@
 }
 .editor-photo-input > .upload {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 34px;
-  padding: 4px 8px;
+  place-content: center;
+  gap: 5px;
+  min-height: 72px;
+  padding: 8px;
+  border-width: 1px;
   border-color: var(--control-border);
   border-radius: 8px;
   background: var(--control-tint);
   color: var(--control-blue);
 }
 .editor-photo-input > .upload:hover,
-.editor-photo-input > .upload.drag { background: var(--control-hover); }
-.editor-photo-input > .upload > strong { margin: 0; font-size: 12px; }
+.editor-photo-input > .upload.drag {
+  border-color: var(--control-blue);
+  background: var(--control-hover);
+}
+.editor-photo-input > .upload > svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.editor-photo-input > .upload > strong {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  pointer-events: none;
+}
 .editor-photo-input #files {
   display: block;
   position: absolute;
   width: 1px;
   height: 1px;
   opacity: 0;
+  pointer-events: none;
 }
 .editor-photo-input > .upload:has(#files:focus-visible) {
   outline: 2px solid var(--control-ring);
@@ -342,8 +399,10 @@ select#template {
 .editor-toolbar select#footerPrefix {
   min-width: 58px;
 }
-.editor-options select#previewZoom {
+.editor-toolbar select#previewZoom {
   width: 80px;
+  height: 30px;
+  font-size: 12px;
 }
 
 @supports (appearance: base-select) and selector(::picker(select)) {

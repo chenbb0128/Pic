@@ -172,13 +172,19 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <body>
 <link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
 <link rel="stylesheet" href="./product-preview.css?v=product-1">
-<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-6">
+<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-10">
 <header class="editor-toolbar" aria-label="排版工具栏">
  <div class="editor-order"><span>订单编号</span><strong id="desktopOrderNumber"></strong></div>
  <label class="label" for="footerText">排版编号</label>
  <div class="footer-text-row">
   <select id="footerPrefix" aria-label="编号前缀"><option value="ch" selected>ch</option><option value="yy">yy</option><option value="x">x</option></select>
-  <input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入本次编号" aria-label="本次排版编号" required>
+  <input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入编号" aria-label="本次排版编号" required>
+ </div>
+ <div class="preview-tools" role="group" aria-label="画布预览操作">
+  <button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button>
+  <button type="button" class="preview-tool" id="zoomIn" title="放大预览" aria-label="放大预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg></button>
+  <select class="preview-zoom" id="previewZoom" aria-label="预览缩放比例"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select>
+  <button type="button" class="preview-tool picture-preview-button" id="picturePreview" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览图</button>
  </div>
  <button type="button" class="btn primary" id="download" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>下载 PNG</button>
 </header>
@@ -204,7 +210,11 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <summary>照片与头像</summary>
   <div class="editor-options-body">
    <div class="field editor-photo-input">
-   <label class="upload" id="drop"><strong>选择图片</strong><input id="files" type="file" accept="image/*" multiple></label>
+   <label class="upload" id="drop">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-4-4L7 21"/></svg>
+    <strong>拖入图片，或点击选择</strong>
+    <input id="files" type="file" accept="image/*" multiple>
+   </label>
    <div class="thumbs" id="thumbs"></div>
     <div class="editor-cutout-actions" id="editorCutoutActions"></div>
    <details class="editor-suboptions"><summary>人像补光</summary>
@@ -227,7 +237,6 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <summary>预览与导出设置</summary>
   <div class="editor-options-body">
    <div class="editor-preview-info"><strong id="previewTitle">♡ 爱心星星排版</strong><span id="dimensions">正在载入模板…</span></div>
-   <div class="preview-tools"><button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button><button type="button" class="preview-tool" id="zoomIn" title="放大预览" aria-label="放大预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg></button><select class="preview-zoom" id="previewZoom" aria-label="预览缩放比例"><option value="1">100%</option><option value="1.25">125%</option><option value="1.5">150%</option><option value="2">200%</option><option value="3">300%</option><option value="4">400%</option></select><button type="button" class="btn picture-preview-button" id="picturePreview" aria-haspopup="dialog" aria-expanded="false">预览图</button></div>
    <div class="editor-numbering-options">
     <label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label>
     <div class="footer-text-row"><label class="sheet-field" title="本订单总张数">共<input id="sheetTotal" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="总张数">张</label><label class="sheet-field" title="当前是第几张">第<input id="sheetIndex" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="当前张数">张</label><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>

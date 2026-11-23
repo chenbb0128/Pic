@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ArrowLeft, ClipboardList, Cloud, Database, FlaskConical, FolderNetwork, HardDrive, Layers, Package, Scissors, Server, Settings2, User, Workflow } from '@lucide/vue'
+import mysqlIcon from '../assets/mysql.svg'
 import OptionSelect from '../components/OptionSelect.vue'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -460,7 +461,7 @@ async function openCutoutLogs() {
             <div class="row">
               <span class="label">数据库类型</span>
               <span class="inline-flex h-9 items-center gap-2 rounded-md border border-primary/25 bg-primary/5 px-2.5 font-medium text-primary">
-                <Database class="size-4" aria-hidden="true" /> MySQL
+                <img :src="mysqlIcon" alt="" class="size-5" /> MySQL
               </span>
             </div>
             <div class="formGrid">
