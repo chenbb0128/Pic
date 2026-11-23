@@ -5,6 +5,7 @@ pub fn configure(scope: &tauri::scope::fs::Scope, data_root: &Path) -> tauri::Re
     // data root as storage, including directories created after startup.
     scope.allow_directory(data_root.join("images"), true)?;
     scope.allow_directory(data_root.join("productions"), true)?;
+    scope.allow_directory(data_root.join("templates"), true)?;
     Ok(())
 }
 
@@ -46,9 +47,11 @@ mod tests {
         let original = write_file(&data, "images/2026-11-19/order-one/photo.jpg");
         let thumbnail = write_file(&data, "images/2026-11-19/order-one/photo.thumb.jpg");
         let production = write_file(&data, "productions/order-one/result.png");
+        let template = write_file(&data, "templates/fixture/background.png");
         assert!(scope.is_allowed(&original), "EXE-local original image must be readable");
         assert!(scope.is_allowed(&thumbnail), "EXE-local thumbnail must be readable");
         assert!(scope.is_allowed(&production), "newly exported production must be readable");
+        assert!(scope.is_allowed(&template), "saved template background must be readable");
         assert!(!scope.is_allowed(write_file(&data, "mysql.json")));
         assert!(!scope.is_allowed(write_file(&root, "other-app/photo.jpg")));
     }

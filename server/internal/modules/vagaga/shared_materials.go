@@ -31,6 +31,23 @@ func sharedMaterialKey(r *http.Request, d Device) (string, string, bool) {
 	return prefix + kind + "/" + name, mime, true
 }
 
+func sharedTemplateKey(r *http.Request, d Device) (string, string, bool) {
+	id, name := r.PathValue("id"), r.PathValue("name")
+	if !validHex(id, 32) {
+		return "", "", false
+	}
+	var mime string
+	switch name {
+	case "background.png":
+		mime = "image/png"
+	case "preview.webp":
+		mime = "image/webp"
+	default:
+		return "", "", false
+	}
+	return "vagaga/" + d.Workspace + "/templates/" + id + "/" + name, mime, true
+}
+
 func (h handler) sharedMaterialUpload(w http.ResponseWriter, r *http.Request, d Device) {
 	key, mime, ok := sharedMaterialKey(r, d)
 	if !ok {
@@ -41,6 +58,19 @@ func (h handler) sharedMaterialUpload(w http.ResponseWriter, r *http.Request, d 
 		fail(w, http.StatusForbidden, "forbidden", "device role cannot upload this image")
 		return
 	}
+	h.sharedImageUpload(w, r, key, mime)
+}
+
+func (h handler) sharedTemplateUpload(w http.ResponseWriter, r *http.Request, d Device) {
+	key, mime, ok := sharedTemplateKey(r, d)
+	if !ok {
+		respondError(w, errInvalid)
+		return
+	}
+	h.sharedImageUpload(w, r, key, mime)
+}
+
+func (h handler) sharedImageUpload(w http.ResponseWriter, r *http.Request, key, mime string) {
 	var in struct {
 		Bytes int64 `json:"bytes"`
 	}
@@ -61,6 +91,19 @@ func (h handler) sharedMaterialDownload(w http.ResponseWriter, r *http.Request, 
 		respondError(w, errInvalid)
 		return
 	}
+	h.sharedImageDownload(w, r, key)
+}
+
+func (h handler) sharedTemplateDownload(w http.ResponseWriter, r *http.Request, d Device) {
+	key, _, ok := sharedTemplateKey(r, d)
+	if !ok {
+		respondError(w, errInvalid)
+		return
+	}
+	h.sharedImageDownload(w, r, key)
+}
+
+func (h handler) sharedImageDownload(w http.ResponseWriter, r *http.Request, key string) {
 	stat, err := h.objects.stat(r.Context(), key)
 	if errors.Is(err, errObjectMissing) {
 		respondError(w, errNotFound)

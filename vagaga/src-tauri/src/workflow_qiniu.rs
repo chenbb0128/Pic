@@ -5,7 +5,7 @@ use crate::{
 };
 use reqwest::{
     multipart::{Form, Part},
-    Method, RequestBuilder,
+    Method,
 };
 use serde::Deserialize;
 
@@ -29,6 +29,7 @@ struct ImageLocation {
 }
 
 const API: &str = "shared-materials";
+const TEMPLATE_API: &str = "shared-templates";
 const NETWORK: &str = "连接七牛素材接口失败";
 
 pub(crate) fn image_mime(extension: &str) -> Option<&'static str> {
@@ -43,6 +44,13 @@ pub(crate) fn image_mime(extension: &str) -> Option<&'static str> {
         "avif" => "image/avif",
         _ => return None,
     })
+}
+
+fn image_path<'a>(kind: &'a str, reference: &'a str) -> Vec<&'a str> {
+    match reference.split_once('/') {
+        Some((order, name)) => vec![API, order, kind, name],
+        None => vec![API, kind, reference],
+    }
 }
 
 impl Qiniu {
@@ -69,20 +77,9 @@ impl Qiniu {
     pub(crate) async fn check_connection(&self) -> Result<(), String> {
         // The gateway stats the object in Kodo before returning a missing-object response.
         let reference = format!("{}.png", crate::store::random_hex_pub(16));
-        self.location("original", &reference).await.map(|_| ())
-    }
-
-    fn image_request(
-        &self,
-        method: Method,
-        kind: &str,
-        reference: &str,
-    ) -> Result<RequestBuilder, String> {
-        let request = match reference.split_once('/') {
-            Some((order, name)) => self.api.api(method, &[API, order, kind, name]),
-            None => self.api.api(method, &[API, kind, reference]),
-        };
-        request.map_err(|e| e.to_string())
+        self.location(&[API, "original", &reference])
+            .await
+            .map(|_| ())
     }
 
     pub(crate) async fn put_image(
@@ -91,15 +88,29 @@ impl Qiniu {
         reference: &str,
         bytes: Vec<u8>,
     ) -> Result<(), String> {
-        let size = bytes.len();
         let name = reference
             .split_once('/')
             .map_or(reference, |(_, name)| name);
+        self.put_file(&image_path(kind, reference), name, bytes)
+            .await
+    }
+
+    pub(crate) async fn put_template_image(
+        &self,
+        id: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
+        self.put_file(&[TEMPLATE_API, id, name], name, bytes).await
+    }
+
+    async fn put_file(&self, path: &[&str], name: &str, bytes: Vec<u8>) -> Result<(), String> {
+        let size = bytes.len();
         let mime = name
             .rsplit_once('.')
             .and_then(|(_, ext)| image_mime(ext))
             .ok_or("七牛素材文件类型无效。")?;
-        let request = self.image_request(Method::POST, kind, reference)?;
+        let request = self.api.api(Method::POST, path).map_err(|e| e.to_string())?;
         let ticket: Ticket = self
             .api
             .api_json(request.json(&serde_json::json!({"bytes": size})), NETWORK)
@@ -126,14 +137,14 @@ impl Qiniu {
         if !response.status().is_success() && response.status().as_u16() != 614 {
             return Err(format!("七牛文件上传失败（HTTP {}）", response.status()));
         }
-        if self.location(kind, reference).await?.map(|file| file.bytes) != Some(size) {
+        if self.location(path).await?.map(|file| file.bytes) != Some(size) {
             return Err("七牛素材上传后大小不一致。".into());
         }
         Ok(())
     }
 
-    async fn location(&self, kind: &str, reference: &str) -> Result<Option<ImageLocation>, String> {
-        let request = self.image_request(Method::GET, kind, reference)?;
+    async fn location(&self, path: &[&str]) -> Result<Option<ImageLocation>, String> {
+        let request = self.api.api(Method::GET, path).map_err(|e| e.to_string())?;
         match self.api.api_json(request, NETWORK).await {
             Ok(value) => Ok(Some(value)),
             Err(e) if e.status() == Some(404) => Ok(None),
@@ -146,7 +157,19 @@ impl Qiniu {
         kind: &str,
         name: &str,
     ) -> Result<Option<Vec<u8>>, String> {
-        let Some(file) = self.location(kind, name).await? else {
+        self.get_file(&image_path(kind, name)).await
+    }
+
+    pub(crate) async fn get_template_image(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        self.get_file(&[TEMPLATE_API, id, name]).await
+    }
+
+    async fn get_file(&self, path: &[&str]) -> Result<Option<Vec<u8>>, String> {
+        let Some(file) = self.location(path).await? else {
             return Ok(None);
         };
         let url = checked_url(&file.url, "七牛下载地址无效").map_err(|e| e.to_string())?;
@@ -181,6 +204,48 @@ impl Qiniu {
 mod tests {
     use super::*;
     use crate::qiniu_transport::tests::{local_server, receive, reply};
+
+    #[tokio::test]
+    async fn template_images_reuse_qiniu_upload_and_download() {
+        let (listener, origin) = local_server();
+        let endpoint = origin.clone();
+        let id = "aabbccddeeff00112233aabbccddeeff";
+        let server = std::thread::spawn(move || {
+            let path = format!("/api/v1/paidan/shared-templates/{id}/preview.webp");
+            let (socket, request) = receive(&listener, &format!("POST {path}"));
+            assert_eq!(request.headers["authorization"], "Bearer fixture-token");
+            let ticket = serde_json::json!({
+                "key": format!("vagaga/space-a/templates/{id}/preview.webp"),
+                "uploadUrl": format!("{endpoint}/upload"),
+                "token": "upload-token",
+            });
+            reply(socket, 200, &[], ticket.to_string().as_bytes());
+            let (socket, request) = receive(&listener, "POST /upload");
+            assert!(request.body.windows(10).any(|part| part == b"image/webp"));
+            reply(socket, 200, &[], b"{}");
+            for _ in 0..2 {
+                let (socket, _) = receive(&listener, &format!("GET {path}"));
+                let location = serde_json::json!({"bytes": 4, "url": format!("{endpoint}/image")});
+                reply(socket, 200, &[], location.to_string().as_bytes());
+            }
+            let (socket, download) = receive(&listener, "GET /image");
+            assert!(!download.headers.contains_key("authorization"));
+            reply(socket, 200, &[], b"data");
+        });
+        let client = Qiniu {
+            api: Client::new(&origin, "fixture-token").unwrap(),
+            target: String::new(),
+        };
+        client
+            .put_template_image(id, "preview.webp", b"data".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            client.get_template_image(id, "preview.webp").await.unwrap(),
+            Some(b"data".to_vec()),
+        );
+        server.join().unwrap();
+    }
 
     #[tokio::test]
     async fn shared_material_uses_an_image_ticket_and_rejects_short_downloads() {

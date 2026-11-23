@@ -98,6 +98,9 @@ func newHandler(devices authDevices, repo repository, objects objectStore, maxBy
 	}
 	route("/shared-materials/{kind}/{name}", materials)
 	route("/shared-materials/{order}/{kind}/{name}", materials)
+	route("/shared-templates/{id}/{name}", map[string]endpoint{
+		"GET": h.sharedTemplateDownload, "POST": h.sharedTemplateUpload,
+	})
 	route("/device", map[string]endpoint{"GET": h.device})
 	route("/upload-sessions", map[string]endpoint{"POST": h.createSession})
 	route("/upload-sessions/{id}/complete", map[string]endpoint{"POST": h.completeSession})

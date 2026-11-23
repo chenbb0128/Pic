@@ -10,6 +10,7 @@ const props = defineProps<{
   options: readonly { id: Value; label: string; detail?: string; icon: Component }[]
   disabled?: boolean
   compact?: boolean
+  portalTo?: HTMLElement | string
 }>()
 const model = defineModel<Value>({ required: true })
 const selected = computed(() => props.options.find(option => option.id === model.value))
@@ -34,7 +35,7 @@ function choose(value: unknown) {
         <SelectValue>{{ selected?.label }}</SelectValue>
       </span>
     </SelectTrigger>
-    <SelectContent :side-offset="5" class="rounded-xl border-border p-1 shadow-lg" :class="compact ? 'min-w-52' : ''">
+    <SelectContent :side-offset="5" :portal-to="portalTo" class="rounded-xl border-border p-1 shadow-lg" :class="compact ? 'min-w-52' : ''">
       <SelectItem
         v-for="option in options"
         :key="option.id"

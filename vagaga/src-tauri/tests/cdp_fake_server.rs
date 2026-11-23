@@ -11,10 +11,12 @@ use tokio_tungstenite::tungstenite::Message;
 
 struct FakeCdp {
     port: u16,
+    catalog_replies: mpsc::Receiver<serde_json::Value>,
 }
 
 impl FakeCdp {
     async fn start(capture_payload: String) -> Self {
+        let (catalog_tx, catalog_replies) = mpsc::channel(4);
         let ws_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind ws");
@@ -61,6 +63,7 @@ impl FakeCdp {
                     return;
                 };
                 let payload = capture_payload.clone();
+                let catalog_tx = catalog_tx.clone();
                 tokio::spawn(async move {
                     let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
                         return;
@@ -94,8 +97,20 @@ impl FakeCdp {
                                 ))
                                 .await;
                         }
-                        if method == "Runtime.evaluate" {
+                        if method != "Runtime.evaluate" {
+                            continue;
+                        }
+                        if message["params"]["expression"] == "window.__test = true;" {
                             assert_eq!(message["params"]["contextId"], 37);
+                            for (context, request) in [(3, 8), (37, 9)] {
+                                let request = serde_json::json!({
+                                    "type":"paidan.listTemplates", "requestId":request
+                                }).to_string();
+                                let _ = ws.send(Message::Text(serde_json::json!({
+                                    "method":"Runtime.bindingCalled",
+                                    "params":{"name":"qianfanBridge","executionContextId":context,"payload":request},
+                                }).to_string())).await;
+                            }
                             let unrelated = capture_payload_for_test("UNTRUSTED");
                             let _ = ws.send(Message::Text(serde_json::json!({
                                 "method": "Runtime.bindingCalled",
@@ -110,6 +125,8 @@ impl FakeCdp {
                                     .to_string(),
                                 ))
                                 .await;
+                        } else {
+                            let _ = catalog_tx.send(message).await;
                         }
                     }
                 });
@@ -121,7 +138,7 @@ impl FakeCdp {
             let _ = ws_task.await;
         });
 
-        Self { port: http_port }
+        Self { port: http_port, catalog_replies }
     }
 }
 
@@ -168,7 +185,7 @@ async fn 捕获经fake_cdp回流后入库() {
         serde_json::from_str(&capture_payload_for_test("610")).unwrap();
     // A single CDP frame above the upstream library's 16 MiB default must still arrive.
     payload["padding"] = "x".repeat(17 * 1024 * 1024).into();
-    let server = FakeCdp::start(payload.to_string()).await;
+    let mut server = FakeCdp::start(payload.to_string()).await;
     let data_root = std::env::temp_dir().join(format!(
         "paidan-cdp-test-{}-{}",
         std::process::id(),
@@ -187,6 +204,22 @@ async fn 捕获经fake_cdp回流后入库() {
         scan_interval: Duration::from_millis(100),
     };
     tokio::spawn(injector.run());
+
+    let reply = tokio::time::timeout(Duration::from_secs(5), server.catalog_replies.recv())
+        .await
+        .expect("等待模板目录超时")
+        .expect("目录回传通道关闭");
+    assert_eq!(reply["params"]["contextId"], 37);
+    let expression = reply["params"]["expression"].as_str().unwrap();
+    let args = expression
+        .strip_prefix("window.__qfReceiveTemplateCatalog?.(")
+        .and_then(|expression| expression.strip_suffix(')'))
+        .expect("模板目录的回调");
+    let args: serde_json::Value = serde_json::from_str(&format!("[{args}]")).unwrap();
+    assert_eq!(args[0], 9);
+    assert_eq!(args[1][0], serde_json::json!({
+        "id": "模板爱心.png", "code": "A01", "name": "爱心款"
+    }));
 
     // 等待入库事件
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);

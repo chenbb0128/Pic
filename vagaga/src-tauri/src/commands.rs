@@ -61,18 +61,10 @@ pub struct OrderDetailDto {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TemplateDto {
-    pub code: String,
-    pub name: String,
-    pub web_id: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AppInfo {
     pub data_root: String,
     pub cdp_port: u16,
-    pub templates: Vec<TemplateDto>,
+    pub templates: Vec<crate::templates::TemplateDto>,
 }
 
 fn order_to_dto(order: &OrderSummary) -> OrderDto {
@@ -174,19 +166,12 @@ pub async fn delete_order(state: State<'_, AppState>, id: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub fn get_app_info(state: State<'_, AppState>) -> AppInfo {
-    AppInfo {
+pub fn get_app_info(state: State<'_, AppState>) -> Result<AppInfo, String> {
+    Ok(AppInfo {
         data_root: state.data_root.to_string_lossy().to_string(),
         cdp_port: state.port,
-        templates: crate::templates::TEMPLATES
-            .iter()
-            .map(|t| TemplateDto {
-                code: t.code.to_string(),
-                name: t.name.to_string(),
-                web_id: t.web_id.to_string(),
-            })
-            .collect(),
-    }
+        templates: crate::templates::catalog(&state.store, &state.data_root)?,
+    })
 }
 
 /// 把素材图写入系统剪贴板（RGBA 位图），供在 web 上传区 Ctrl+V。

@@ -208,6 +208,41 @@ impl Backend {
             Self::Qiniu(client) => client.get_image(kind, name).await,
         }
     }
+
+    pub(crate) async fn put_template_image(
+        &self,
+        id: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), String> {
+        let key = template_image_key(id, name)?;
+        match self {
+            Self::Nas(_, client) => client.put_object(&key, bytes).await,
+            Self::Qiniu(client) => client.put_template_image(id, name, bytes).await,
+        }
+    }
+
+    pub(crate) async fn get_template_image(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let key = template_image_key(id, name)?;
+        match self {
+            Self::Nas(_, client) => client.get_object(&key).await,
+            Self::Qiniu(client) => client.get_template_image(id, name).await,
+        }
+    }
+}
+
+fn template_image_key(id: &str, name: &str) -> Result<String, String> {
+    if id.len() != 32
+        || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || !matches!(name, "background.png" | "preview.webp")
+    {
+        return Err("模板图片路径无效。".into());
+    }
+    Ok(format!("templates/{id}/{name}"))
 }
 
 fn image_key(kind: &str, reference: &str) -> String {
@@ -269,6 +304,42 @@ mod tests {
         let error = backend.check_connection().await.unwrap_err();
         assert!(error.contains("共享存储（MinIO）可连接并可用"), "{error}");
         assert!(error.contains("403"), "{error}");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn template_images_use_the_templates_directory() {
+        let (listener, endpoint) = local_server();
+        let id = "aabbccddeeff00112233aabbccddeeff";
+        let server = std::thread::spawn(move || {
+            let path = format!("/fixture/templates/{id}/background.png");
+            let (socket, request) = receive(&listener, &format!("PUT {path}"));
+            assert_eq!(request.body, b"image");
+            reply(socket, 200, &[], b"");
+            let (socket, _) = receive(&listener, &format!("GET {path}"));
+            reply(socket, 200, &[], b"image");
+        });
+
+        let backend = Backend::nas(minio_config(endpoint)).unwrap();
+        assert!(backend
+            .get_template_image("../orders", "background.png")
+            .await
+            .is_err());
+        assert!(backend
+            .get_template_image(id, "manifest.json")
+            .await
+            .is_err());
+        backend
+            .put_template_image(id, "background.png", b"image".to_vec())
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .get_template_image(id, "background.png")
+                .await
+                .unwrap(),
+            Some(b"image".to_vec()),
+        );
         server.join().unwrap();
     }
 }

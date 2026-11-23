@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import type { SavedTemplate, TemplateDraft, TemplateInfo } from '../types'
 import type {
   AppInfo,
   CloudConfig,
@@ -198,4 +199,24 @@ export function workflowResolveConflict(
 
 export function workflowSetLayout(orderNumber: string, number: string): Promise<void> {
   return invoke('workflow_set_layout', { orderNumber, number })
+}
+
+export function saveTemplate(input: TemplateDraft & { code: string; name: string }): Promise<TemplateInfo> {
+  return invoke('save_template', { input })
+}
+
+export function getTemplate(id: string): Promise<SavedTemplate | null> {
+  return invoke('get_template', { id })
+}
+
+export function updateTemplate(id: string, name: string, enabled: boolean): Promise<TemplateInfo> {
+  return invoke('update_template', { id, name, enabled })
+}
+
+export function publishTemplate(id: string): Promise<void> {
+  return invoke('publish_template', { id })
+}
+
+export function syncTemplates(): Promise<{ updated: number; errors: string[] }> {
+  return invoke('sync_templates')
 }

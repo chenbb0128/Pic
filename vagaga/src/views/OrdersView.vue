@@ -2,11 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { Boxes, Check, CircleCheck, Clock3, Download, PanelsTopLeft, RefreshCw, Search, X } from '@lucide/vue'
 import OptionSelect from '../components/OptionSelect.vue'
+import TemplateSaveDialog from '../components/TemplateSaveDialog.vue'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
 import { useOrdersStore, loadOrders, toast } from '../stores/orders'
 import { mountEditorExportControls } from '../lib/editor-export-controls'
+import { connectTemplateEditor } from '../lib/template-editor'
 import {
   assetUrl,
   cutoutImageBytes,
@@ -176,7 +178,8 @@ function webIdOf(code: string): string {
 
 function specificationsFor(img: OrderImage) {
   const assigned = new Map(img.templates.map(t => [webIdOf(t.templateId), t.quantity]))
-  const specs = (store.info?.templates ?? []).map(({ code, name, webId }) => {
+  const available = (store.info?.templates ?? []).filter(item => item.enabled !== false || assigned.has(item.webId))
+  const specs = available.map(({ code, name, webId }) => {
     const quantity = assigned.get(webId) ?? null
     assigned.delete(webId)
     return { code, name, webId, quantity }
@@ -209,6 +212,7 @@ async function toggleTemplate(img: OrderImage, webId: string) {
 
 /* ---------- 右栏：常驻编辑器 ---------- */
 const frame = ref<HTMLIFrameElement | null>(null)
+const templateSaveDialog = ref<InstanceType<typeof TemplateSaveDialog> | null>(null)
 const editorReady = ref(false)
 const editorSrc = ref('') // 惰性加载：首次制作时才设置
 const status = ref('')
@@ -410,6 +414,10 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
 
     const fw = frame.value?.contentWindow
     if (typeof fw?.__picDoInject !== 'function') throw new Error('编辑器尚未就绪，请重试。')
+    if (store.info?.templates.some(item => item.custom && item.webId === template)) {
+      if (!fw.__picOpenTemplate) throw new Error('编辑器无法载入本机模板。')
+      await fw.__picOpenTemplate(template, lastInjectedOrder.value !== orderNumber)
+    }
     await fw.__picDoInject({
       b64,
       name: img.originalName || 'order-image.png',
@@ -508,6 +516,17 @@ async function onMessage(event: MessageEvent) {
 
 let unmountExportControls: (() => void) | undefined
 
+function saveCurrentTemplate() {
+  const capture = frame.value?.contentWindow?.__picCaptureTemplate
+  if (capture) templateSaveDialog.value?.open(capture)
+}
+
+function refreshFrameCatalog() {
+  connectTemplateEditor(frame.value?.contentWindow, store.info?.templates ?? [], saveCurrentTemplate)
+}
+
+watch(() => store.info?.templates, refreshFrameCatalog)
+
 function onFrameLoad() {
   removeNumberingListeners()
   unmountExportControls?.()
@@ -515,6 +534,7 @@ function onFrameLoad() {
   unmountExportControls = numberingDocument ? mountEditorExportControls(numberingDocument) : undefined
   numberingDocument?.addEventListener('input', onNumberingEdit)
   numberingDocument?.addEventListener('change', onNumberingEdit)
+  refreshFrameCatalog()
   editorReady.value = true
   updateEditorHeader()
 }
@@ -902,6 +922,8 @@ function orderProductions(orderNumber: string): Production[] {
         ></iframe>
       </div>
     </section>
+
+    <TemplateSaveDialog ref="templateSaveDialog" />
 
     <!-- 订单悬浮详情卡 -->
     <div

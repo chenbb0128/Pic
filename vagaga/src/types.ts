@@ -43,6 +43,27 @@ export interface TemplateInfo {
   code: string
   name: string
   webId: string
+  custom?: boolean
+  enabled?: boolean
+  width?: number
+  height?: number
+  dpi?: number
+  previewPath?: string
+}
+
+export interface TemplateDraft {
+  width: number
+  height: number
+  dpi: number
+  layout: unknown
+  backgroundB64: string
+  previewB64: string
+}
+
+export interface SavedTemplate {
+  template: TemplateInfo
+  layout: unknown
+  backgroundPath: string
 }
 
 export interface AppInfo {

@@ -8,6 +8,7 @@
 //! 多 target 自动接入、失败 30s 退避、断线清理重连、无订单号跳过。
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,6 +28,10 @@ const MAX_IMAGE_BYTES: usize = 512 * 1024 * 1024;
 const MAX_CAPTURE_MESSAGE: usize = MAX_IMAGE_BYTES.div_ceil(3) * 4 + 1024 * 1024;
 const ATTACH_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 type Attached = HashMap<String, tokio::task::JoinHandle<()>>;
+type CdpSink = futures_util::stream::SplitSink<
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
+>;
 
 #[derive(Default)]
 struct Frames {
@@ -334,7 +339,7 @@ async fn scan_once(
     Ok(())
 }
 
-/// 读循环先于请求启动：响应按 id 配对，binding 回流交 handle_capture。
+/// 读循环先于请求启动，接收握手响应、目录请求和图片回流。
 async fn attach_target(
     store: Arc<Store>,
     events_tx: mpsc::Sender<PaidanEvent>,
@@ -353,13 +358,17 @@ async fn attach_target(
     .await
     .map_err(|_| "连接工作台超时".to_string())?
     .map_err(|error| error.to_string())?;
-    let (mut sink, mut stream) = socket.split();
+    let (sink, mut stream) = socket.split();
+    let sink = Arc::new(Mutex::new(sink));
+    let next_id = Arc::new(AtomicU64::new(0));
     let pending: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Value>>>> =
         Arc::new(Mutex::new(HashMap::new()));
 
     let reader_store = store.clone();
     let reader_events = events_tx.clone();
     let reader_pending = pending.clone();
+    let reader_sink = sink.clone();
+    let reader_next_id = next_id.clone();
     let frames = Arc::new(Mutex::new(Frames::default()));
     let reader_frames = frames.clone();
     let connection = tokio::spawn(async move {
@@ -379,12 +388,54 @@ async fn attach_target(
                 continue;
             }
             if message["method"] == "Runtime.bindingCalled" {
-                let accepted = reader_frames.lock().await.accepts(&message["params"]);
-                if !accepted {
+                let params = &message["params"];
+                if !reader_frames.lock().await.accepts(params)
+                    || crate::workflow_db::role(&reader_store) == "production"
+                {
                     continue;
                 }
-                if let Some(payload) = message["params"]["payload"].as_str() {
-                    handle_capture(&reader_store, &reader_events, payload).await;
+                let Some(payload) = params["payload"].as_str() else {
+                    continue;
+                };
+                let parsed: Value = match serde_json::from_str(payload) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        eprintln!("[paidan-cdp] payload 解析失败: {error}");
+                        continue;
+                    }
+                };
+                match parsed["type"].as_str() {
+                    Some("paidan.listTemplates") => {
+                        let (Some(request_id), Some(context_id)) = (
+                            parsed["requestId"].as_u64(),
+                            params["executionContextId"].as_i64(),
+                        ) else {
+                            continue;
+                        };
+                        let catalog = crate::templates::capture_catalog(&reader_store)
+                            .unwrap_or_else(|error| {
+                                eprintln!("[paidan-cdp] 模板目录读取失败: {error}");
+                                Value::Null
+                            });
+                        let expression =
+                            format!("window.__qfReceiveTemplateCatalog?.({request_id},{catalog})");
+                        let id = reader_next_id.fetch_add(1, Ordering::Relaxed) + 1;
+                        if send_command(
+                            &reader_sink,
+                            id,
+                            "Runtime.evaluate",
+                            json!({"expression": expression, "contextId": context_id}),
+                        )
+                        .await
+                        .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Some("paidan.capture") => {
+                        handle_capture(&reader_store, &reader_events, &parsed).await;
+                    }
+                    _ => {}
                 }
             } else {
                 reader_frames.lock().await.observe(&message);
@@ -394,33 +445,32 @@ async fn attach_target(
     });
 
     let setup = async {
-        let mut id = 0;
-        handshake_request(&mut sink, &mut id, &pending, "Runtime.enable", json!({})).await?;
-        handshake_request(&mut sink, &mut id, &pending, "Page.enable", json!({})).await?;
+        handshake_request(&sink, &next_id, &pending, "Runtime.enable", json!({})).await?;
+        handshake_request(&sink, &next_id, &pending, "Page.enable", json!({})).await?;
         let tree =
-            handshake_request(&mut sink, &mut id, &pending, "Page.getFrameTree", json!({})).await?;
+            handshake_request(&sink, &next_id, &pending, "Page.getFrameTree", json!({})).await?;
         let frame = &tree["frameTree"]["frame"];
         let frame_id = frame["id"].as_str().ok_or("未找到工作台主页面")?;
         frames.lock().await.set_main(frame);
         handshake_request(
-            &mut sink,
-            &mut id,
+            &sink,
+            &next_id,
             &pending,
             "Runtime.addBinding",
             json!({ "name": BINDING_NAME, "executionContextName": CAPTURE_WORLD }),
         )
         .await?;
         handshake_request(
-            &mut sink,
-            &mut id,
+            &sink,
+            &next_id,
             &pending,
             "Page.addScriptToEvaluateOnNewDocument",
             json!({ "source": core_script, "worldName": CAPTURE_WORLD }),
         )
         .await?;
         let context = handshake_request(
-            &mut sink,
-            &mut id,
+            &sink,
+            &next_id,
             &pending,
             "Page.createIsolatedWorld",
             json!({ "frameId": frame_id, "worldName": CAPTURE_WORLD }),
@@ -435,8 +485,8 @@ async fn attach_target(
             .worlds
             .insert(context_id, frame_id.to_owned());
         handshake_request(
-            &mut sink,
-            &mut id,
+            &sink,
+            &next_id,
             &pending,
             "Runtime.evaluate",
             json!({ "expression": core_script, "contextId": context_id }),
@@ -452,28 +502,33 @@ async fn attach_target(
     Ok(connection)
 }
 
+async fn send_command(
+    sink: &Mutex<CdpSink>,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
+    sink.lock()
+        .await
+        .send(Message::Text(
+            json!({ "id": id, "method": method, "params": params }).to_string(),
+        ))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 /// 握手期请求：发送后等待按 id 配对的响应（binding 回流由读循环分发）。
 async fn handshake_request(
-    sink: &mut futures_util::stream::SplitSink<
-        tokio_tungstenite::WebSocketStream<
-            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
-        >,
-        Message,
-    >,
-    next_id: &mut u64,
+    sink: &Mutex<CdpSink>,
+    next_id: &AtomicU64,
     pending: &Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Value>>>>,
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    *next_id += 1;
-    let id = *next_id;
+    let id = next_id.fetch_add(1, Ordering::Relaxed) + 1;
     let (tx, rx) = tokio::sync::oneshot::channel();
     pending.lock().await.insert(id, tx);
-    sink.send(Message::Text(
-        json!({ "id": id, "method": method, "params": params }).to_string(),
-    ))
-    .await
-    .map_err(|error| error.to_string())?;
+    send_command(sink, id, method, params).await?;
     let result = tokio::time::timeout(Duration::from_secs(6), rx)
         .await
         .map_err(|_| format!("{method} 等待响应超时"))?
@@ -509,20 +564,7 @@ fn capture_metadata(payload: &Value) -> Option<String> {
     (!fields.is_empty()).then(|| Value::Object(fields).to_string())
 }
 
-async fn handle_capture(store: &Arc<Store>, events_tx: &mpsc::Sender<PaidanEvent>, payload: &str) {
-    if crate::workflow_db::role(store) == "production" {
-        return;
-    }
-    let parsed: Value = match serde_json::from_str(payload) {
-        Ok(value) => value,
-        Err(error) => {
-            eprintln!("[paidan-cdp] payload 解析失败: {error}");
-            return;
-        }
-    };
-    if parsed["type"] != "paidan.capture" {
-        return;
-    }
+async fn handle_capture(store: &Store, events_tx: &mpsc::Sender<PaidanEvent>, parsed: &Value) {
     let order_number = parsed["context"]["orderNo"]
         .as_str()
         .unwrap_or_default()
@@ -532,7 +574,7 @@ async fn handle_capture(store: &Arc<Store>, events_tx: &mpsc::Sender<PaidanEvent
         eprintln!("[paidan-cdp] 未识别到订单号，跳过入库");
         return;
     }
-    let metadata = capture_metadata(&parsed);
+    let metadata = capture_metadata(parsed);
     let Some(encoded) = parsed["b64"].as_str() else {
         eprintln!("[paidan-cdp] payload 缺少图片数据");
         return;

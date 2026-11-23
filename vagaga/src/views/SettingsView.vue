@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { useOrdersStore, toast, loadOrders, refreshQiniuStatus, refreshWorkflowSettings } from '../stores/orders'
+import { useOrdersStore, toast, loadInfo, loadOrders, refreshQiniuStatus, refreshWorkflowSettings } from '../stores/orders'
 import {
   cloudSyncNow,
   cloudTest,
@@ -303,7 +303,7 @@ async function syncMysql() {
     const result = await mysqlSyncNow(props.activeOrder)
     const conflicts = result.conflicts.length ? '有本机修改的订单，请在订单页点击「同步」查看。' : ''
     mysqlMessage.value = [result.errors[0] || '同步完成。', conflicts].filter(Boolean).join(' ')
-    await loadOrders()
+    await Promise.all([loadOrders(), loadInfo()])
   } catch (error) {
     mysqlMessage.value = String(error)
   } finally {

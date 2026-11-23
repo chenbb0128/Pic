@@ -308,6 +308,7 @@ impl Store {
             );",
         )?;
         crate::workflow_db::init(&conn)?;
+        crate::templates::init(&conn)?;
         // 旧库迁移：images 表补 thumb_path 列（缩略图路径）
         let has_thumb_column: i64 = conn
             .query_row(

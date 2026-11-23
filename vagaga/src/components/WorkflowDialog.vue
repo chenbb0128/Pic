@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { ArrowRight, GitCompareArrows, X } from '@lucide/vue'
 import { Button } from './ui/button'
 import { workflowFinish, workflowSync, workflowUpload } from '../lib/tauri'
-import { loadOrders, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
+import { loadInfo, loadOrders, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
 import type { WorkflowPreview } from '../types'
 
 const props = defineProps<{
@@ -68,7 +68,7 @@ async function sync() {
   await run('sync', async () => {
     const result = await workflowSync(props.activeOrder)
     showConflicts(result.conflicts)
-    await refresh()
+    await Promise.all([refresh(), loadInfo().catch(error => toast('error', '刷新模板目录失败：' + error))])
     reportErrors(result.errors)
     if (!result.errors.length || result.updated || result.completed) {
       toast('ok', result.updated || result.completed
@@ -97,7 +97,7 @@ async function replace() {
     await props.applySharedVersion(target)
     dismiss(target)
     toast('ok', '订单已同步。')
-    await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
+    await Promise.all([refresh(), loadInfo()]).catch(error => toast('error', `刷新订单失败：${error}`))
   })
 }
 

@@ -14,7 +14,7 @@
       && !location.pathname.startsWith('/cstools/login')
   }
   if (!onWorkbench()) return
-  var VER = 'v14'
+  var VER = 'v15'
   // 已打开的旧版页面需刷新。旧脚本没有注销入口，重复注入会同时触发两套菜单。
   if (window.__QF_CORE__ === true) return
   window.__QF_CORE__ = true
@@ -27,7 +27,7 @@
   const ORDER_NUMBER_PATTERN = /P\d{15,22}(?!\d)/g
   let ctxImg = null
 
-  // 模板目录（由 tool/sync_templates.mjs 从 web 端模板下拉框同步）
+  // 内置目录供没有桌面桥接的页面使用。
   const TEMPLATES = [
     { code: 'A01', name: '爱心款', id: '模板爱心.png' },
     { code: 'A02', name: '爱心横版', id: '爱心横版.png' },
@@ -42,6 +42,31 @@
     { code: 'A11', name: '焦糖秋枫混合豹纹', id: '经典豹纹混合.png' },
     { code: 'A12', name: '奶油黑粉混合豹纹', id: '黑粉奶油混合豹纹.png' },
   ]
+
+  let nextCatalogRequest = 0
+  const catalogRequests = new Map()
+  window.__qfReceiveTemplateCatalog = (requestId, templates) => {
+    catalogRequests.get(requestId)?.(Array.isArray(templates) ? templates : TEMPLATES)
+  }
+
+  function requestTemplateCatalog() {
+    if (typeof window.qianfanBridge !== 'function') return Promise.resolve(TEMPLATES)
+    const requestId = ++nextCatalogRequest
+    return new Promise(resolve => {
+      const timeout = setTimeout(() => complete(TEMPLATES), 1000)
+      const complete = (templates) => {
+        clearTimeout(timeout)
+        catalogRequests.delete(requestId)
+        resolve(templates)
+      }
+      catalogRequests.set(requestId, complete)
+      try {
+        send({ type: 'paidan.listTemplates', requestId })
+      } catch (_) {
+        complete(TEMPLATES)
+      }
+    })
+  }
 
   // SF-Symbols 风格内联图标（shadow DOM 内可用，无外部依赖）
   const ICONS = {
@@ -89,7 +114,7 @@
   //   待发货P<订单号>下单<时间>支付<时间> <商品名> <规格文本> 规格/尺寸: <规格> 发送
   //   ...¥<单价>x<N>商品总价...共 <包裹件数> 件...
   // 注意：xN 是购买数量（ASCII x）；"共 N 件" 是包裹件数，不要混用。
-  function parseOrderPanel() {
+  function parseOrderPanel(templates) {
     const panel = document.querySelector('.farmer-chat__right')
     if (!panel) return []
     const text = (panel.textContent || '').replace(/\s+/g, ' ')
@@ -107,12 +132,12 @@
       const qtyMatches = [...segment.matchAll(/¥[\d.]+x(\d+)/g)]
       for (let s = 0; s < specMatches.length; s++) {
         const specText = specMatches[s][1]
-        const codeMatch = specText.match(/A\d{2}/)
-        if (!codeMatch) continue
-        const template = TEMPLATES.find(t => t.code === codeMatch[0])
+        const code = specText.match(/A\d{2,}/i)?.[0].toUpperCase()
+        if (!code) continue
+        const template = templates.find(t => t.code === code)
         if (!template) continue
         const qty = s < qtyMatches.length ? parseInt(qtyMatches[s][1], 10) : 1
-        specs.push({ code: codeMatch[0], webId: template.id, qty: qty > 0 ? qty : 1 })
+        specs.push({ code, webId: template.id, qty: qty > 0 ? qty : 1 })
       }
       // 订单元数据：状态词 / 金额（首个单价×数量）/ 规格文本（制作端悬浮卡展示）
       const statusMatch = segment.match(/(待发货|待付款|待收货|已完成|已发货|交易成功|退款中)/)
@@ -153,6 +178,7 @@
   let pollToken = 0
   function waitForPlatformMenu(img, x, y) {
     const token = ++pollToken
+    const catalog = requestTemplateCatalog()
     if (pollTimer) clearInterval(pollTimer)
     let tries = 0
     pollTimer = setInterval(() => {
@@ -161,17 +187,20 @@
       if (menu) {
         clearInterval(pollTimer)
         pollTimer = null
-        if (token !== pollToken) return
-        embedSection(menu, img)
-        log('排单区块已嵌入平台菜单')
+        void catalog.then(templates => {
+          if (token !== pollToken || findVisiblePlatformMenu(x, y) !== menu) return
+          embedSection(menu, img, templates)
+        })
         return
       }
       if (tries >= 100) {
         clearInterval(pollTimer)
         pollTimer = null
-        if (token !== pollToken) return
-        openStandalone(img, x, y)
-        log('平台菜单未出现，降级独立面板')
+        void catalog.then(templates => {
+          if (token !== pollToken) return
+          openStandalone(img, x, y, templates)
+          log('平台菜单未出现，降级独立面板')
+        })
       }
     }, 50)
   }
@@ -189,11 +218,11 @@
   }
 
   /* ---------- 嵌入 + 溢出校正 ---------- */
-  function embedSection(container, img) {
+  function embedSection(container, img, templates) {
     try {
       const existing = container.querySelector('#' + SECTION_ID)
       if (existing) existing.remove()
-      const section = buildSection(img, false)
+      const section = buildSection(img, false, templates)
       // 平台菜单容器加宽到区块宽度（原宽度装不下排单区块）
       container.style.width = '392px'
       container.style.boxSizing = 'border-box'
@@ -218,7 +247,7 @@
       log('排单区块已嵌入平台菜单')
     } catch (err) {
       log('嵌入失败，降级独立面板', err)
-      openStandalone(120, 120, img)
+      openStandalone(img, 120, 120, templates)
     }
   }
 
@@ -228,13 +257,13 @@
     if (p) p.remove()
   }
 
-  function openStandalone(img, x, y) {
+  function openStandalone(img, x, y, templates) {
     hideStandalone()
     const host = document.createElement('div')
     host.id = PANEL_ID
     host.style.cssText = 'position:fixed;z-index:2147483647;left:0;top:0;'
     const shadow = host.attachShadow({ mode: 'open' })
-    const section = buildSection(img, true)
+    const section = buildSection(img, true, templates)
     shadow.appendChild(section)
     document.body.appendChild(host)
     requestAnimationFrame(() => {
@@ -259,7 +288,7 @@
   /* ---------- 排单区块构建（dark=独立面板配色） ----------
      结构：头部（订单号和备注编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
      嵌入模式：区块透明融入平台菜单容器，行风格与平台菜单项一致 */
-  function buildSection(img, dark) {
+  function buildSection(img, dark, templates) {
     const section = document.createElement('div')
     section.id = SECTION_ID
     section.style.cssText =
@@ -271,7 +300,7 @@
         : 'background:transparent;color:#2a2f3a;padding:2px 0 4px;') +
       'font:12px/1.5 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;user-select:none;'
 
-    const panelOrders = parseOrderPanel()
+    const panelOrders = parseOrderPanel(templates)
     const selected = new Map() // webId → qty
     const cellSyncs = new Map() // webId → 行视图同步函数
 
@@ -340,7 +369,7 @@
     // 模板清单行（菜单项风格：勾选框 + 编号 + 名称 + 份数）
     const list = document.createElement('div')
     list.style.cssText = 'display:flex;flex-direction:column;'
-    for (const t of TEMPLATES) {
+    for (const t of templates) {
       const row = document.createElement('div')
       row.style.cssText =
         'display:flex;align-items:center;gap:8px;padding:5px 12px;cursor:pointer;' +
@@ -355,7 +384,7 @@
       const checkSvg = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
       const code = document.createElement('span')
       code.textContent = t.code
-      code.style.cssText = 'font-weight:700;color:#5b8cff;font-size:11px;width:28px;flex-shrink:0;'
+      code.style.cssText = 'font-weight:700;color:#5b8cff;font-size:11px;min-width:28px;flex-shrink:0;'
       const name = document.createElement('span')
       name.textContent = t.name
       name.style.cssText = 'flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;'
@@ -448,7 +477,7 @@
       if (!order) return
       selected.clear()
       for (const spec of order.specs) selected.set(spec.webId, spec.qty)
-      for (const t of TEMPLATES) cellSyncs.get(t.id)?.()
+      for (const t of templates) cellSyncs.get(t.id)?.()
     }
 
     confirmBtn.addEventListener('click', ev => {
@@ -462,16 +491,14 @@
         layoutInput.reportValidity()
         return
       }
-      // 已解析订单：模板与份数按订单规格；未解析：用当前勾选
-      const templates = order
-        ? order.specs.filter(s => selected.has(s.webId)).map(s => ({ id: s.webId, qty: selected.get(s.webId) }))
-        : Array.from(selected.entries()).map(([id, qty]) => ({ id, qty }))
+      // 订单规格决定初始勾选，入库使用最终选择。
+      const picked = Array.from(selected, ([id, qty]) => ({ id, qty }))
       if (dark) hideStandalone()
       else {
         const menu = document.querySelector(PLATFORM_MENU_SEL)
         if (menu) menu.style.display = 'none'
       }
-      capture(img, orderNumber, templates, { ...order, layoutNumber })
+      capture(img, orderNumber, picked, { ...order, layoutNumber })
     })
 
     // 初始：按第一个订单的规格预选

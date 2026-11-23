@@ -94,6 +94,10 @@ struct OrderData {
 }
 
 impl OrderData {
+    fn template_ids(&self) -> impl Iterator<Item = &str> {
+        self.assets.iter().flat_map(|asset| asset.templates.iter().map(|template| template.template_id.as_str()))
+    }
+
     fn record(&self, payload: String) -> SharedOrder {
         SharedOrder {
             number: self.order_number.clone(),
@@ -506,7 +510,7 @@ fn shared_conflict(
     preview(store, current, reference)
 }
 
-fn selected(state: &AppState) -> Result<Backend, String> {
+pub(crate) fn selected(state: &AppState) -> Result<Backend, String> {
     Backend::current(&state.store, &state.data_root)?
         .ok_or_else(|| "请先在设置 → 共享存储中选择服务并保存配置。".into())
 }
@@ -763,10 +767,11 @@ async fn upload_one(
         .map_err(display)?
         .ok_or("订单不存在。")?;
     if let Some(task) = db::task(&state.store, number, kind).map_err(display)? {
-        if OrderData::parse(task.payload.as_bytes()).is_ok() {
+        if let Ok(order) = OrderData::parse(task.payload.as_bytes()) {
             verify_provider_role(&state.store, &task.target, kind)?;
             let backend = Backend::bound(&state.store, &state.data_root, &task.target)?;
             check_upload_storage(&backend, checks).await?;
+            crate::templates::require_shared(state, &backend, order.template_ids()).await?;
             return run_task(state, &backend, index, &task).await;
         }
         // Rebuild an old queued upload from its local originals.
@@ -806,6 +811,7 @@ async fn upload_one(
         backend.uses_order_directory(),
         &operation,
     )?;
+    crate::templates::require_shared(state, &backend, order.template_ids()).await?;
     let task = Task {
         number: number.into(),
         target,
@@ -934,6 +940,7 @@ async fn download(
     backend: &Backend,
     order: &OrderData,
 ) -> Result<Download, String> {
+    crate::templates::fetch_missing(state, backend, order.template_ids()).await?;
     let directory = download_directory(&state.data_root)?;
     let mut assets = Vec::new();
     for asset in &order.assets {

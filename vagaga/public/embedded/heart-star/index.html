@@ -172,7 +172,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <body>
 <link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
 <link rel="stylesheet" href="./product-preview.css?v=product-1">
-<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-11">
+<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-12">
 <header class="editor-toolbar" aria-label="排版工具栏">
  <div class="editor-order"><span>订单编号</span><strong id="desktopOrderNumber"></strong></div>
  <label class="label" for="footerText">排版编号</label>
@@ -186,6 +186,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
   <button type="button" class="preview-tool" id="zoomOut" title="缩小预览" aria-label="缩小预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M8 11h6"/></svg></button>
   <button type="button" class="preview-tool picture-preview-button" id="picturePreview" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>预览图</button>
  </div>
+ <button type="button" class="preview-tool picture-preview-button" id="saveLocalTemplate" hidden>另存为模板</button>
  <button type="button" class="btn primary" id="download" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></svg>下载 PNG</button>
 </header>
 <main class="app">
@@ -577,6 +578,7 @@ function normalizeSheetCount(value){const n=Math.floor(Number(value));return Num
 function composeFooterNumber(){const text=footerText.value;if(!text.trim())return'';const prefix=['ch','yy','x'].includes(footerPrefix.value)?footerPrefix.value:'ch',total=normalizeSheetCount(sheetTotal.value),index=normalizeSheetCount(sheetIndex.value);return`${prefix}-${localDateLabel()}-${text}${total===''||index===''?'':` 共${total}张·第${index}张`}`}
 function pngFilename(name=sel.value,label=numberingEnabled.checked?composeFooterNumber():'',d=outputConfig()){
  d=portraitConfig(d);
+ name=templates[name]?.savedTemplateCode||name;
  const cleaned=label.trim().replace(/[<>:"/\\|?*\x00-\x1f\x7f]/g,'_'),encoder=new TextEncoder(),dimensions=d?`_${Number(d.totalW.toFixed(3))}x${Number(d.totalH.toFixed(3))}mm_${d.dpi}dpi`:'',suffix=`_${name.replace(/\.png$/i,'')}${dimensions}.png`,limit=Math.min(180,240-encoder.encode(suffix).length);let safe='',bytes=0;
  for(const char of cleaned){const size=encoder.encode(char).length;if(bytes+size>limit)break;safe+=char;bytes+=size}
  safe=safe.replace(/[. ]+$/g,'')||localDateLabel();return `${safe}${suffix}`;
@@ -618,7 +620,17 @@ function markTemplateReady(){
  window.__picTemplateLoaded=true;
  window.dispatchEvent(new Event('pic-template-ready'));
 }
+const desktopTemplates = new Map();
+let desktopTemplateRequest = 0, activeTemplateName = sel.value;
+let beforeSavedTemplateSize;
 function loadTemplate(){
+ if(desktopTemplates.has(sel.value)){
+  const selected=sel.value;
+  sel.value=activeTemplateName;
+  loadDesktopTemplate(selected,{keepPhotos:true}).catch(error=>say(error.message,true));
+  return;
+ }
+ desktopTemplateRequest++;activeTemplateName=sel.value;
  window.__picTemplateLoaded=false;
  customRequest++;clearTimeout(customTimer);customBusy=false;preserveTemplatePhotos();replacePhoto.disabled=true;finishPhotoDrag();ignorePhotoClick=false;photoDragMode.checked=false;
  const name=sel.value,cfg=templates[name];
@@ -660,7 +672,7 @@ function roundRectPath(c,x,y,w,h,r){r=Math.max(0,Math.min(r,w/2,h/2));c.beginPat
 function polygonPath(c,x,y,w,h,n,offset=0){c.beginPath();for(let i=0;i<n;i++){const a=offset+i*Math.PI*2/n,px=x+Math.cos(a)*w/2,py=y+Math.sin(a)*h/2;i?c.lineTo(px,py):c.moveTo(px,py)}c.closePath()}
 function slotShape(p,i){const s=states[i]?.shape||'template';return s==='template'?(states[i]?.motif?.type||p.type):s}
 function clipPath(c,type,x,y,w,h){if(type==='heart')return heartPath(c,x,y,w,h);if(type==='star')return starPath(c,x,y,w,h);if(type==='rect')return roundRectPath(c,x-w/2,y-h/2,w,h,0);if(type==='circle')return circlePath(c,x,y,Math.min(w,h),Math.min(w,h));if(type==='oval')return circlePath(c,x,y,w,h);if(type==='roundRect')return roundRectPath(c,x-w/2,y-h/2,w,h,Math.min(w,h)*.18);if(type==='square'){const s=Math.min(w,h);return roundRectPath(c,x-s/2,y-s/2,s,s,0)}if(type==='diamond')return polygonPath(c,x,y,w,h,4,-Math.PI/2);if(type==='hexagon')return polygonPath(c,x,y,w,h,6,-Math.PI/6);return circlePath(c,x,y,w,h)}
-function draw(showSelection=true,fullResolution=false,includePhotos=true){
+function draw(showSelection=true,fullResolution=false,includePhotos=true,includeFooter=true){
  if(photoFrameRequest){cancelAnimationFrame(photoFrameRequest);photoFrameRequest=0}
  const cfg=templates[sel.value];
  slotBackgrounds.update();
@@ -681,7 +693,7 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true){
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
  });
- ctx.restore();drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoLightingEditor?.update();photoThumbnails?.update();if(typeof updateAutoLightingCancelButton==='function')updateAutoLightingCancelButton();
+ ctx.restore();if(includeFooter)drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoLightingEditor?.update();photoThumbnails?.update();if(typeof updateAutoLightingCancelButton==='function')updateAutoLightingCancelButton();
  download.disabled=exportBusy||photoLightingEditor?.busy()||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
  watermarkDownload.disabled=download.disabled;
  sharedLibrary?.changed();
@@ -705,7 +717,7 @@ async function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
  if(request!==replacementRequest||target.template!==sel.value||target.states!==states){discard();return false}
  replacementBusy=false;
  if(loaded.includes(false)){discard();say('图片读取失败，原图片已保留，请重新选择。',true);draw();return false}
- ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;delete states[id].photoLight;if(!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
+ ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;delete states[id].photoLight;if(!templates[sel.value].savedTemplate&&!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
  releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。默认不补光，可手动调节。`);draw();
  return true;
 }
@@ -825,7 +837,14 @@ templates[HeartStarStrawberry.name]=HeartStarStrawberry.build();
 templateSources[HeartStarStrawberry.name]=HeartStarStrawberry.source;
 templates[HeartStarChristmas.name]=HeartStarChristmas.build();
 templateSources[HeartStarChristmas.name]=HeartStarChristmas.source;
-sel.addEventListener('change',()=>HeartStarPreset.selectSize(templates[sel.value],widthInput,heightInput));
+sel.addEventListener('change',()=>{
+ if(desktopTemplates.has(sel.value))return;
+ if(beforeSavedTemplateSize){
+  [widthInput.value,heightInput.value,dpiInput.value]=beforeSavedTemplateSize;
+  beforeSavedTemplateSize=undefined;
+ }
+ HeartStarPreset.selectSize(templates[sel.value],widthInput,heightInput);
+});
 const CUSTOM_TEMPLATE='自定义排版.png',customRowBox=document.getElementById('customRows'),customSummary=document.getElementById('customSummary'),customPicker=document.getElementById('customPicker'),originalPhotoHint=document.querySelector('.hint').textContent;
 let customId=0,customRows=[],customDirty=true,customBusy=false,customRequest=0,customTimer,customPickerTarget=null;
 const customImageCache=new Map();
@@ -842,6 +861,7 @@ customRows=[
  customRow([['polka-heart',2],['polka-circle',2]]),
  customRow([['ime-purple',2],['ime-spiral',2]])
 ];
+let scratchCustomRows=customRows;
 templates[CUSTOM_TEMPLATE]={w:1440,h:2100,custom:true,slots:[],placements:[],background:null,savedStates:[]};
 function customAssetOptions(select,value){
  let label='',group;
@@ -853,7 +873,7 @@ function nativeSizeLabel(asset){return `原尺寸 ${asset.nativeW.toFixed(2)} ×
 function editCustomRows(action){action();renderCustomRows();markCustomDirty()}
 function markCustomDirty(){
  customRequest++;customBusy=false;customDirty=true;document.getElementById('applyCustom').disabled=false;customSummary.classList.remove('error');customSummary.textContent='配置已更新，正在预览…';clearTimeout(customTimer);draw();
- if(sel.value===CUSTOM_TEMPLATE)customTimer=setTimeout(applyCustomLayout,400);
+ if(templates[sel.value].custom)customTimer=setTimeout(applyCustomLayout,400);
 }
 function renderCustomRows(){
  customRowBox.replaceChildren();
@@ -923,26 +943,27 @@ function loadCustomImage(id){
 }
 function customInitialState(){return{size:.62,dx:0,dy:0,shape:'template',imageScale:1,imageDx:0,imageDy:0}}
 async function applyCustomLayout(selectAll=false){
- clearTimeout(customTimer);if(sel.value!==CUSTOM_TEMPLATE)return;const request=++customRequest;let layout;
+ clearTimeout(customTimer);const name=sel.value;if(!templates[name].custom)return;const request=++customRequest;let layout;
  window.__picTemplateLoaded=false;
  try{layout=buildCustomLayout(customRows,customAssets,widthInput.value,heightInput.value)}catch(error){customBusy=false;customDirty=true;customSummary.classList.add('error');customSummary.textContent=error.message;document.getElementById('applyCustom').disabled=false;draw();return}
  customBusy=true;download.disabled=true;document.getElementById('applyCustom').disabled=true;customSummary.classList.remove('error');customSummary.textContent='正在生成排版…';draw();
  try{
-  const ids=[...new Set(layout.placements.map(p=>p.assetId))],images=await Promise.all(ids.map(loadCustomImage));if(request!==customRequest||sel.value!==CUSTOM_TEMPLATE)return;
+  const ids=[...new Set(layout.placements.map(p=>p.assetId))],images=await Promise.all(ids.map(loadCustomImage));if(request!==customRequest||sel.value!==name)return;
   const loaded=new Map(ids.map((id,i)=>[id,images[i]])),background=document.createElement('canvas');background.width=layout.w;background.height=layout.h;const context=background.getContext('2d');layout.placements.forEach(p=>context.drawImage(loaded.get(p.assetId),p.x,p.y,p.w,p.h));
-  const cfg=templates[CUSTOM_TEMPLATE],previous=new Map(cfg.slots.map((p,i)=>[p.key,{state:states[i],replacement:replacedPhotos.get(i)}])),selectionKeys=new Set([...selectedSlots].map(i=>cfg.slots[i]?.key));finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementBusy=false;replacementTarget=null;replacePhotoFile.value='';replacedPhotos.clear();
+  const cfg=templates[name],previous=new Map(cfg.slots.map((p,i)=>[p.key,{state:states[i],replacement:replacedPhotos.get(i)}])),selectionKeys=new Set([...selectedSlots].map(i=>cfg.slots[i]?.key));finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementBusy=false;replacementTarget=null;replacePhotoFile.value='';replacedPhotos.clear();
   states=layout.slots.map((p,i)=>{const old=previous.get(p.key);if(old?.replacement)replacedPhotos.set(i,old.replacement);return old?.state||customInitialState()});releaseUnusedReplacementUrls();
   Object.assign(cfg,layout,{background,savedStates:states});motifEditor.reflow();selectedSlots=new Set(layout.slots.flatMap((p,i)=>selectAll===true||selectionKeys.has(p.key)?[i]:[]));if(!selectedSlots.size)selectedSlots.add(0);selectedSlot=[...selectedSlots][0];multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;
   customDirty=false;customBusy=false;document.getElementById('empty').hidden=true;canvas.hidden=false;customSummary.textContent=`已排好 ${customRows.length} 排 · ${layout.slots.length} 个图案 · ${Number(widthInput.value)} × ${Number(heightInput.value)} mm`;buildSlotSelect();updateControls();draw();markTemplateReady();
- }catch(error){if(request===customRequest&&sel.value===CUSTOM_TEMPLATE){customBusy=false;customDirty=true;customSummary.classList.add('error');customSummary.textContent=error.message;draw()}}
+ }catch(error){if(request===customRequest&&sel.value===name){customBusy=false;customDirty=true;customSummary.classList.add('error');customSummary.textContent=error.message;draw()}}
  finally{if(request===customRequest)document.getElementById('applyCustom').disabled=false}
 }
 function loadCustomTemplate(){
+ customRows=scratchCustomRows;
  const cfg=templates[CUSTOM_TEMPLATE];states=cfg.savedStates;selectedSlot=0;selectedSlots=new Set(states.map((_,i)=>i));multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;renderCustomRows();canvas.hidden=!cfg.background;document.getElementById('empty').hidden=!!cfg.background;if(cfg.background){buildSlotSelect();updateControls()}else document.getElementById('empty').textContent='请设置逐排图案，生成自定义预览。';applyCustomLayout(true);
 }
 document.getElementById('addCustomRow').addEventListener('click',()=>{if(customRows.length<20)editCustomRows(()=>customRows.push(customRow([['spiral-heart-small',6]])))});
 document.getElementById('applyCustom').addEventListener('click',applyCustomLayout);
-[widthInput,heightInput].forEach(input=>input.addEventListener('input',()=>{if(sel.value===CUSTOM_TEMPLATE)markCustomDirty()}));
+[widthInput,heightInput].forEach(input=>input.addEventListener('input',()=>{if(templates[sel.value].custom)markCustomDirty()}));
 prepareCustomPicker();renderCustomRows();
 const slotBackgrounds=HeartStarBackground.create({getStates:()=>states,getSelection:()=>selectedSlots,getTemplate:()=>templates[sel.value],redraw:requestPhotoDraw,report:say});
 const motifEditor=HeartStarMotifs.create({getName:()=>sel.value,getTemplate:()=>templates[sel.value],getStates:()=>states,getSelection:()=>selectedSlots,getSource:()=>templates[sel.value].custom?templates[sel.value].background:base,measureRegions:HeartStarBackground.measureRegions,assets:customAssets,slots:HeartStarMotifCatalog.slots,loadImage:loadCustomImage,redraw:requestPhotoDraw,report:say,
@@ -1007,30 +1028,37 @@ function getCloudSnapshot(){
    watermarkEnabled:document.getElementById('watermarkEnabled').checked,watermarkText:document.getElementById('watermarkText').value,
    watermarkOpacity:Number(document.getElementById('watermarkOpacity').value),selected:[...selectedSlots]}});
 }
-function applyCloudSnapshot(data){
+function applyCloudSnapshot(data, desktop){
  HeartStarCloudEditor.validate(data,customAssets);
  // Commit only after every image and layout parameter has been validated.
  const source=data.template.image,cfg={...data.template},settings=data.settings;
  delete cfg.image;delete cfg.name;
- const key=cfg.text?copyTextTemplate:cfg.custom?CUSTOM_TEMPLATE:'共享排版.png';
+ const key=desktop?.id??(cfg.text?copyTextTemplate:cfg.custom?CUSTOM_TEMPLATE:'共享排版.png');
  customRequest++;clearTimeout(customTimer);customBusy=false;customDirty=false;clearTimeout(fontInputTimer);fontRequest++;fontBusy=false;
  finishPhotoDrag();photoDragMode.checked=false;backgroundDragMode.checked=false;ignorePhotoClick=false;
- photoUploadRequest++;photoUploadBusy=false;photoUploadTarget=null;clearReplacedPhotos();
- urls.forEach(URL.revokeObjectURL);urls=[];photos=[];thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];
- states=HeartStarCloudEditor.restorePhotoClips(data.states,settings.clip);data.photos.forEach((image,i)=>replacedPhotos.set(i,{image,url:image?.src||null}));
+ photoUploadRequest++;photoUploadBusy=false;photoUploadTarget=null;
+ if(desktop?.keepPhotos)preserveTemplatePhotos();
+ else{clearReplacedPhotos();urls.forEach(URL.revokeObjectURL);urls=[];photos=[]}
+ thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];
+ states=HeartStarCloudEditor.restorePhotoClips(data.states,settings.clip);
+ if(!desktop)data.photos.forEach((image,i)=>replacedPhotos.set(i,{image,url:image?.src||null}));
+ if(desktop){cfg.savedTemplate=true;cfg.savedTemplateCode=desktop.code}
  if(cfg.custom){cfg.background=source;cfg.savedStates=states;customRows=data.customRows;
+  if(key===CUSTOM_TEMPLATE)scratchCustomRows=customRows;
   const ids=customRows.flatMap(row=>[row.id,...row.groups.map(g=>g.id)]).map(id=>Number(String(id).replace(/^c/,''))).filter(Number.isFinite);
   customId=Math.max(customId,...ids);renderCustomRows();
  }
  templates[key]=cfg;
- if(![...sel.options].some(option=>option.value===key)){const option=document.createElement('option');option.value=key;option.textContent='共享排版（已恢复）';sel.append(option)}
- sel.value=key;if(!cfg.text){base=source;if(!cfg.custom)templateSources[key]=source.src}
+ if(![...sel.options].some(option=>option.value===key)){const option=document.createElement('option');option.value=key;option.textContent=desktop?.title??'共享排版（已恢复）';if(desktop)option.dataset.localTemplate='';sel.append(option)}
+ sel.value=key;activeTemplateName=key;if(!cfg.text){base=source;if(!cfg.custom)templateSources[key]=source.src}
  widthInput.value=String(settings.width);heightInput.value=String(settings.height);dpiInput.value=String(settings.dpi);
+ if(!desktop){
  numberingEnabled.checked=!!settings.numberingEnabled;footerText.value=settings.footerText||'';
  footerPrefix.value=['ch','yy','x'].includes(settings.footerPrefix)?settings.footerPrefix:'ch';{const total=normalizeSheetCount(settings.sheetTotal),index=normalizeSheetCount(settings.sheetIndex);sheetTotal.value=total===''?1:total;sheetIndex.value=index===''?1:index}
  footerText.disabled=!numberingEnabled.checked;footerText.required=numberingEnabled.checked;footerPrefix.disabled=!numberingEnabled.checked;sheetTotal.disabled=!numberingEnabled.checked;sheetIndex.disabled=!numberingEnabled.checked;document.getElementById('copyFooterText').disabled=!numberingEnabled.checked;
  for(const [id,value] of [['watermarkEnabled',settings.watermarkEnabled],['watermarkText',settings.watermarkText],['watermarkOpacity',settings.watermarkOpacity]]){
   const control=document.getElementById(id);if(value!==undefined){if(control.type==='checkbox')control.checked=value;else control.value=String(value);control.dispatchEvent(new Event('input'))}
+ }
  }
  selectedSlots=new Set((settings.selected||states.map((_,i)=>i)).filter(i=>Number.isInteger(i)&&i>=0&&i<states.length));selectedSlot=[...selectedSlots][0]||0;
  multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;
@@ -1038,6 +1066,7 @@ function applyCloudSnapshot(data){
  document.getElementById('empty').hidden=true;canvas.hidden=false;
  if(cfg.text){copyUndoStack.length=0;copyRedoStack.length=0;restoreCopySnapshot({...data.copy,states,selected:[...selectedSlots],selectedSlot,multiMode})}
  buildSlotSelect();updateControls();updateCanvasSize();draw();
+ if(desktop)markTemplateReady();
 }
 function getCloudPreview(kind){
  try{
@@ -1046,6 +1075,91 @@ function getCloudPreview(kind){
   preview.width=Math.max(1,Math.round(proof.width*ratio));preview.height=Math.max(1,Math.round(proof.height*ratio));
   preview.getContext('2d').drawImage(proof,0,0,preview.width,preview.height);return preview;
  }finally{draw()}
+}
+function captureDesktopTemplate(){
+ const cfg=templates[sel.value],dimensions=outputConfig();
+ if(cfg.text)throw new Error('请选择可以填入照片的排版。');
+ if(!selectionBoard().ready||!dimensions)throw new Error('请等当前版式生成完成后再保存。');
+ const source=motifEditor.source(cfg.custom?cfg.background:base);
+ const canvasBackground=document.createElement('canvas');
+ canvasBackground.width=cfg.w;canvasBackground.height=cfg.h;
+ const paint=canvasBackground.getContext('2d');
+ // Bake replaced artwork and imported backgrounds into the one template PNG.
+ const baking=states.map(state=>state.background?.type==='image'&&state.background.image?state:{motif:state.motif});
+ HeartStarBackground.drawTemplate(paint,cfg,source,baking);
+ const regions=HeartStarBackground.regions(cfg,source,states);
+ baking.forEach((state,index)=>{
+  const area=regions[index];
+  if(state.background&&area)HeartStarBackground.draw(paint,state,area.x,area.y,area.w,area.h,source);
+ });
+ const areas=states.some((state,i)=>state.motif||baking[i].background)?HeartStarBackground.photoAreas(cfg,source,states):[];
+ const slots=cfg.slots.map((slot,i)=>{
+  const state=states[i],motif=state.motif;
+  const saved={...slot};
+  if(motif){
+   Object.assign(saved,motif.frame,{type:motif.type,backgroundPart:motif.backgroundPart,bottom:motif.backgroundPart==='heart'});
+   delete saved.photoArea;
+  }
+  if((motif||baking[i].background)&&!state.clip&&!HeartStarBackground.photoOnly(state)&&areas[i]){
+   const {x,y,w,h}=areas[i];saved.photoArea={x,y,w,h};
+  }
+  return saved;
+ });
+ const template={w:cfg.w,h:cfg.h,slots,placements:cfg.placements,contentOffsetX:cfg.contentOffsetX,
+  motifSlots:motifEditor.catalog(),photoTypes:cfg.photoTypes,custom:!!cfg.custom,notice:cfg.notice};
+ const layout={template,states:states.map((state,i)=>{
+  const {size,dx,dy,shape,clip,imageScale,imageDx,imageDy}=state;
+  const background=!baking[i].background&&state.background?
+   {type:state.background.type,color:state.background.color,keepLetters:state.background.keepLetters,photoBaseSize:state.background.photoBaseSize}:undefined;
+  return {size,dx,dy,shape,clip,imageScale,imageDx,imageDy,background};
+ }),...(cfg.custom?{customRows}:{})};
+ HeartStarCloudEditor.validate({...layout,template:{...layout.template,image:{naturalWidth:cfg.w,naturalHeight:cfg.h}},
+  settings:{width:dimensions.w,height:dimensions.h,dpi:dimensions.dpi},photos:states.map(()=>null)},customAssets);
+ // Capture the artwork only. The content rectangle excludes the order-number strip.
+ const preview=document.createElement('canvas'),d=renderConfig();
+ const ratio=Math.min(1,480/Math.max(d.contentPxW,d.contentPxH));
+ preview.width=Math.max(1,Math.round(d.contentPxW*ratio));preview.height=Math.max(1,Math.round(d.contentPxH*ratio));
+ try{
+  draw(false,false,false,false);
+  preview.getContext('2d').drawImage(canvas,0,0,d.contentPxW,d.contentPxH,0,0,preview.width,preview.height);
+ }finally{draw()}
+ return {width:dimensions.w,height:dimensions.h,dpi:dimensions.dpi,layout:JSON.parse(JSON.stringify(layout)),
+  backgroundB64:canvasBackground.toDataURL('image/png').split(',')[1],previewB64:preview.toDataURL('image/webp',.88).split(',')[1]};
+}
+async function loadDesktopTemplate(id,{keepPhotos=false,reset=false}={}){
+ if(!reset&&activeTemplateName===id&&window.__picTemplateLoaded)return;
+ if(!window.__picFetchSavedTemplate)throw new Error('无法读取本机模板。');
+ if(exportBusy)throw new Error('成品正在导出，请稍后切换模板。');
+ const request=++desktopTemplateRequest;
+ const saved=await window.__picFetchSavedTemplate(id);
+ const {template:info,layout}=saved,image=new Image(),url=URL.createObjectURL(saved.background);
+ try{
+  image.src=url;await image.decode();
+  if(request!==desktopTemplateRequest)throw new Error('模板选择已更改。');
+  if(exportBusy)throw new Error('成品正在导出，请稍后切换模板。');
+  const previousSize=[widthInput.value,heightInput.value,dpiInput.value];
+  applyCloudSnapshot({...layout,template:{...layout.template,image,widthMm:info.width,heightMm:info.height},
+   settings:{width:info.width,height:info.height,dpi:info.dpi},photos:layout.states.map(()=>null)},
+   {id,code:info.code,title:info.code+' '+info.name,keepPhotos});
+  beforeSavedTemplateSize??=previousSize;
+ }finally{URL.revokeObjectURL(url)}
+}
+function setDesktopTemplateCatalog(catalog){
+ desktopTemplates.clear();
+ for(const template of catalog){if(template.custom)desktopTemplates.set(template.webId,template)}
+ for(const option of [...sel.options]){
+  if(!Object.hasOwn(option.dataset,'localTemplate'))continue;
+  const item=desktopTemplates.get(option.value);
+  if(option.value!==sel.value&&(!item||item.enabled===false))option.remove();
+  else if(item)option.textContent=item.code+' '+item.name;
+ }
+ for(const item of desktopTemplates.values()){
+  if(item.enabled===false||[...sel.options].some(option=>option.value===item.webId))continue;
+  const option=document.createElement('option');
+  option.value=item.webId;option.textContent=item.code+' '+item.name;option.dataset.localTemplate='';
+  sel.append(option);
+ }
+ document.getElementById('saveLocalTemplate').hidden=!window.__picSaveLocalTemplate;
 }
 async function getCloudResult(){
  const d=outputConfig();
@@ -1063,6 +1177,16 @@ async function getCloudResult(){
 }
 // 订单制作中心内嵌模式：云端共享空间（共享模板/作品/保存状态）与制作无关，不再挂载
 var isTauriEmbed=!!(window.parent&&window.parent!==window&&window.parent.__TAURI_INTERNALS__);
+if(isTauriEmbed){
+ window.__picSetTemplateCatalog=setDesktopTemplateCatalog;
+ window.__picCaptureTemplate=captureDesktopTemplate;
+ window.__picOpenTemplate=(id,reset)=>desktopTemplates.has(id)?loadDesktopTemplate(id,{reset}):waitForOrderTemplate(id);
+ document.getElementById('saveLocalTemplate').addEventListener('click',()=>window.__picSaveLocalTemplate?.());
+ if(new URLSearchParams(window.location.search).has('template-builder')){
+  document.body.classList.add('template-builder');
+  numberingEnabled.checked=false;numberingEnabled.dispatchEvent(new Event('change'));
+ }
+}
 var sharedLibrary=isTauriEmbed?null:HeartStarCloud.mount({getSnapshot:getCloudSnapshot,applySnapshot:applyCloudSnapshot,getPreview:getCloudPreview,getResult:getCloudResult,canSave:()=>selectionBoard().ready&&!fontBusy,
  pendingEdit:()=>templates[sel.value].text&&copyDraftDirty?'文案尚未应用，请先点击“应用”再保存。':'',
  setBusy:busy=>{document.querySelector('.app').inert=busy;document.querySelector('.editor-toolbar').inert=busy},report:say});
@@ -1092,7 +1216,6 @@ async function waitForOrderTemplate(template) {
     if (!HeartStarTemplateLink.selectInitial(sel, templates, `?template=${encodeURIComponent(name)}`)) {
       throw new Error('找不到订单指定的模板。');
     }
-    HeartStarPreset.selectSize(templates[sel.value], widthInput, heightInput);
     sel.dispatchEvent(new Event('change'));
   }
   if (window.__picTemplateLoaded === true) return;

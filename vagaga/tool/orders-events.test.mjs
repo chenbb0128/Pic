@@ -48,6 +48,11 @@ function editorFixture() {
   template.options = ['preset.png', 'next.png'].map(value => ({ value }))
   const widthInput = field('144')
   const heightInput = field('210')
+  template.addEventListener('change', () => {
+    if (template.value !== 'next.png') return
+    widthInput.value = '210'
+    heightInput.value = '144'
+  })
   const controls = {
     footerPrefix: prefix, footerText: input, exportFilename: output, template,
     numberingEnabled: { checked: true }, sheetTotal: { value: '1' }, sheetIndex: { value: '1' },
@@ -280,6 +285,7 @@ function environment(t, overrides = {}) {
       return snapshot
     },
     getQiniuStatus: async () => qiniuStatus,
+    getAppInfo: async () => ({ templates: [] }),
     workflowOrders: async () => [],
     listProductions: async orderNumber => structuredClone(productions.filter(p => p.orderNumber === orderNumber)),
     saveProduction: async (orderNumber, dataB64, fileName, imageId) => {
@@ -339,10 +345,12 @@ function environment(t, overrides = {}) {
       const component = evaluate(viewSource, {
         '@lucide/vue': icons,
         '../components/OptionSelect.vue': {},
+        '../components/TemplateSaveDialog.vue': {},
         '../components/ui/button': {},
         '../components/ui/checkbox': {},
         '../components/ui/input': {},
         '../lib/editor-export-controls': { mountEditorExportControls() {} },
+        '../lib/template-editor': { connectTemplateEditor() {} },
         vue: { ...vue, onMounted: callback => mounted.push(callback), onBeforeUnmount: callback => unmounted.push(callback) },
         '../stores/orders': store, '../lib/tauri': api,
       }).default

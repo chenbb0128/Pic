@@ -152,6 +152,29 @@ func TestLegacySharedOrderRoutesAreReadOnly(t *testing.T) {
 	apiRequest(t, handler, "PUT", "/workflow-v2/orders/"+testSHA, testToken, `{}`, 405)
 }
 
+func TestSharedTemplatesUseFixedWorkspaceImageKeys(t *testing.T) {
+	objects := &fakeObjectStore{object: objectInfo{Size: 7}}
+	handler := testHandler(t, roleCustomer, &fakeRepository{}, objects)
+	path := "/shared-templates/" + originalID + "/"
+	apiRequest(t, handler, "GET", path+"background.png", "", "", 401)
+	for _, name := range []string{"background.png", "preview.webp"} {
+		key := "vagaga/space-a/templates/" + originalID + "/" + name
+		upload := apiRequest(t, handler, "POST", path+name, testToken, `{"bytes":7}`, 200)
+		if upload["key"] != key || upload["token"] != "test-upload-token" {
+			t.Fatalf("unexpected template upload ticket: %+v", upload)
+		}
+		download := apiRequest(t, handler, "GET", path+name, testToken, "", 200)
+		if objects.statKey != key || download["bytes"] != float64(7) {
+			t.Fatalf("unexpected template download: %q, %+v", objects.statKey, download)
+		}
+	}
+	apiRequest(t, handler, "GET", path+"manifest.json", testToken, "", 400)
+	apiRequest(t, handler, "GET", "/shared-templates/not-an-id/background.png", testToken, "", 400)
+	apiRequest(t, handler, "POST", path+"background.png", testToken, `{"bytes":0}`, 400)
+	objects.statErr = errObjectMissing
+	apiRequest(t, handler, "GET", path+"preview.webp", testToken, "", 404)
+}
+
 func TestSharedMaterialsUseOrderNumberInObjectKeys(t *testing.T) {
 	objects := &fakeObjectStore{object: objectInfo{Size: 7}}
 	handler := testHandler(t, roleBoth, &fakeRepository{}, objects)

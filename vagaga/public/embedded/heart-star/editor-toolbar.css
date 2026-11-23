@@ -452,3 +452,8 @@ select#template {
     color: var(--control-blue);
   }
 }
+.editor-toolbar #saveLocalTemplate[hidden] { display: none; }
+.editor-toolbar #saveLocalTemplate { padding: 0 9px; }
+.template-builder .editor-toolbar > label,
+.template-builder .editor-toolbar > .footer-text-row,
+.template-builder .editor-toolbar #download { display: none; }

@@ -70,6 +70,99 @@ pub struct SharedOrder {
 
 pub struct OrderIndex(Conn);
 
+pub(crate) struct TemplateIndex(Conn);
+
+pub(crate) async fn connect_template_index(root: &Path) -> Result<TemplateIndex, String> {
+    let config = load_config(root);
+    if !config.valid() {
+        return Err("请先在设置 → 共享数据库中保存完整的 MySQL 配置。".into());
+    }
+    let client = MyClient::new(&config);
+    let mut conn = client.conn().await?;
+    conn.query_drop(
+        "CREATE TABLE IF NOT EXISTS templates (
+            storage_id VARBINARY(1024) NOT NULL,
+            id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            code VARCHAR(12) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            name VARCHAR(80) NOT NULL,
+            width DOUBLE NOT NULL, height DOUBLE NOT NULL, dpi INT UNSIGNED NOT NULL,
+            layout JSON NOT NULL, enabled BOOLEAN NOT NULL, updated_at BIGINT NOT NULL,
+            background_key VARCHAR(128) CHARACTER SET ascii NOT NULL,
+            preview_key VARCHAR(128) CHARACTER SET ascii NOT NULL,
+            PRIMARY KEY (storage_id,id), UNIQUE KEY template_code (storage_id,code)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    ).await.map_err(mysql_error)?;
+    Ok(TemplateIndex(conn))
+}
+
+type TemplateRow = (String, String, String, f64, f64, u32, String, bool, i64, String, String);
+const TEMPLATE_COLUMNS: &str = "id,code,name,width,height,dpi,layout,enabled,updated_at,background_key,preview_key";
+
+impl TemplateIndex {
+    pub(crate) async fn get(&mut self, storage: &str, id: &str) -> Result<Option<crate::templates::SavedTemplate>, String> {
+        let row: Option<TemplateRow> = self.0.exec_first(
+            format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE storage_id=? AND id=?"),
+            (storage, id),
+        ).await.map_err(mysql_error)?;
+        row.map(shared_template).transpose()
+    }
+
+    pub(crate) async fn find_by_code(&mut self, storage: &str, code: &str) -> Result<Option<crate::templates::SavedTemplate>, String> {
+        let row: Option<TemplateRow> = self.0.exec_first(
+            format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE storage_id=? AND code=?"),
+            (storage, code),
+        ).await.map_err(mysql_error)?;
+        row.map(shared_template).transpose()
+    }
+
+    pub(crate) async fn list(&mut self, storage: &str) -> Result<Vec<crate::templates::SavedTemplate>, String> {
+        let rows: Vec<TemplateRow> = self.0.exec(
+            format!("SELECT {TEMPLATE_COLUMNS} FROM templates WHERE storage_id=? ORDER BY code"),
+            (storage,),
+        ).await.map_err(mysql_error)?;
+        rows.into_iter().map(shared_template).collect()
+    }
+
+    pub(crate) async fn write(
+        &mut self, storage: &str, template: &crate::templates::SavedTemplate, exists: bool,
+    ) -> Result<(), String> {
+        if exists {
+            self.0.exec_drop(
+                "UPDATE templates SET name=?,enabled=?,updated_at=? WHERE storage_id=? AND id=? AND updated_at<=?",
+                (&template.name, template.enabled, template.updated_at, storage, &template.id, template.updated_at),
+            ).await.map_err(mysql_error)?;
+            if self.0.affected_rows() == 0
+                && self.get(storage, &template.id).await?.is_none_or(|current| current.updated_at > template.updated_at)
+            {
+                return Err(format!("共享模板 {} 已变化，请先同步模板。", template.code));
+            }
+            return Ok(());
+        }
+        match self.0.exec_drop(
+            "INSERT INTO templates(storage_id,id,code,name,width,height,dpi,layout,enabled,updated_at,background_key,preview_key)
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (storage, &template.id, &template.code, &template.name, template.width, template.height, template.dpi,
+                &template.layout, template.enabled, template.updated_at, template.background_key(), template.preview_key()),
+        ).await {
+            Ok(()) => Ok(()),
+            Err(mysql_async::Error::Server(error)) if error.code == 1062 => {
+                Err(format!("共享目录已有规格 {}，请同步后重试。", template.code))
+            }
+            Err(error) => Err(mysql_error(error)),
+        }
+    }
+}
+
+fn shared_template(
+    (id, code, name, width, height, dpi, layout, enabled, updated_at, background, preview): TemplateRow,
+) -> Result<crate::templates::SavedTemplate, String> {
+    let template = crate::templates::SavedTemplate { id, code, name, width, height, dpi, layout, enabled, updated_at };
+    if background != template.background_key() || preview != template.preview_key() {
+        return Err(format!("共享模板 {} 的图片路径无效。", template.code));
+    }
+    Ok(template)
+}
+
 impl MyClient {
     pub fn new(config: &MysqlConfig) -> Self {
         let options = OptsBuilder::default()
