@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const name = '草莓.png';
-  const source = './assets/strawberry-template.png?v=4';
+  const source = './assets/strawberry-template.png?v=5';
   function build() {
     // Each entry: artwork [left, top, width, height], photo [cx, cy, width, height].
     // Centers use the filled artwork silhouette, rounded to half a pixel.
