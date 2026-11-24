@@ -7,6 +7,7 @@ import type {
   CloudConfig,
   CloudNotice,
   OrderDetail,
+  OrderSort,
   OrderSummary,
   PaidanEvent,
   MysqlConfig,
@@ -26,12 +27,24 @@ export function listOrders(): Promise<OrderSummary[]> {
   return invoke('list_orders')
 }
 
+export function getOrderSort(): Promise<OrderSort> {
+  return invoke('get_order_sort')
+}
+
+export function saveOrderSort(sort: OrderSort): Promise<void> {
+  return invoke('save_order_sort', { sort })
+}
+
 export function getOrder(id: string): Promise<OrderDetail | null> {
   return invoke('get_order', { id })
 }
 
 export function setImageTemplates(imageId: string, templates: { templateId: string; quantity: number }[]): Promise<void> {
   return invoke('set_image_templates', { imageId, templates })
+}
+
+export function setImageRemark(imageId: string, remark: string): Promise<void> {
+  return invoke('set_image_remark', { imageId, remark })
 }
 
 export function deleteImage(imageId: string): Promise<void> {

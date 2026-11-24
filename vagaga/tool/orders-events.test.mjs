@@ -19,7 +19,7 @@ const templateLinkSource = readFileSync(new URL('../public/embedded/heart-star/t
 const flush = () => new Promise(resolve => setImmediate(resolve))
 const image = id => ({ id, filePath: `D:/app/data/images/${id}.png`, thumbnailPath: null,
   originalName: `${id}.png`, byteLength: 100, width: 10, height: 10,
-  source: '千帆', createdAt: '2026-11-19T12:00:00', templates: [] })
+  source: '千帆', createdAt: '2026-11-19T12:00:00', remark: '', templates: [] })
 const order = (id, images = []) => ({ id, orderNumber: `ORDER-${id}`, images,
   imageCount: images.length, createdAt: '2026-11-19T12:00:00',
   updatedAt: '2026-11-19T12:00:00', metadata: null })
@@ -35,6 +35,9 @@ test('the embedded editor offers the latest presets, lighting and direct photo c
   assert.match(editorSource, /id="photoLightingCompact"/)
   assert.match(editorSource, /id="photoScaleNumber"[^>]*type="number"/)
   assert.ok(editorSource.includes("previewPanel.addEventListener('drop',onPreviewDrop)"))
+  const toolbar = editorSource.match(/<header class="editor-toolbar"[^>]*>([\s\S]*?)<\/header>/)?.[1]
+  assert.ok(toolbar?.includes('id="sheetTotal"'))
+  assert.ok(toolbar?.includes('id="sheetIndex"'))
 })
 
 function editorFixture() {
@@ -80,6 +83,7 @@ function editorFixture() {
       getElementById: id => controls[id],
       createElement: () => ({ click() { downloads.push(this.download) } }),
       addEventListener() {},
+      dispatchEvent() {},
     },
     Image: class { set src(value) { images.push(this) } },
     URL: { createObjectURL: () => 'blob:fixture', revokeObjectURL() {} },
@@ -115,6 +119,7 @@ function editorFixture() {
   ].join('\n'), context)
   return {
     frame, photos, images, prefix, input, output, downloads, posted, template, widthInput, heightInput,
+    sheetTotal: controls.sheetTotal, sheetIndex: controls.sheetIndex,
     previewPanel, previewDropStyles,
     useSlots(count, ids) { context.states = Array.from({ length: count }, () => ({})); selectedIds = ids },
     exportPng: context.exportPng,
@@ -234,8 +239,8 @@ test('making another order replaces all slots even when the previous order had o
   assert.equal(photos.get(1).image, nextImage)
 })
 
-test('formal PNG download clears the saved draft after the watermarked preview preserves it', async () => {
-  const { frame, images, input, downloads, posted, exportPng } = editorFixture()
+test('both PNG downloads include the sheet counts, and only the formal download clears the numbering draft', async () => {
+  const { frame, images, input, downloads, posted, exportPng, sheetTotal, sheetIndex } = editorFixture()
   const pending = frame.__picDoInject({
     b64: 'AA==', name: 'fixture.png', mime: 'image/png',
     template: 'preset.png', orderNumber: 'ORDER-one', imageId: 'photo-one', layoutNumber: 'ch-001',
@@ -245,12 +250,14 @@ test('formal PNG download clears the saved draft after the watermarked preview p
   await pending
   input.value = '0009'
   input.dispatchEvent(new Event('input'))
+  sheetTotal.value = '4'
+  sheetIndex.value = '2'
   await exportPng(true)
-  assert.match(downloads[0], /^ch-\d{8}-0009 .*_水印预览\.png$/)
+  assert.match(downloads[0], /^ch-\d{8}-0009 共4张·第2张_.*_水印预览\.png$/)
   assert.equal(posted.length, 0)
   assert.equal(frame.__picReadOrderNumbering().value, '0009')
   await exportPng()
-  assert.match(downloads[1], /^ch-\d{8}-0009 .*_preset_100x100mm_300dpi\.png$/)
+  assert.match(downloads[1], /^ch-\d{8}-0009 共4张·第2张_preset_100x100mm_300dpi\.png$/)
   assert.equal(posted[0].orderNumber, 'ORDER-one')
   assert.equal(posted[0].imageId, 'photo-one')
   assert.equal(frame.__picHasPendingExport(), true)
@@ -258,6 +265,21 @@ test('formal PNG download clears the saved draft after the watermarked preview p
   assert.equal(frame.__picHasPendingExport(), false)
   assert.equal(input.value, '')
   assert.equal(frame.__picReadOrderNumbering(), null)
+})
+
+test('the editor fills order sheet counts and ignores updates for orders that are no longer open', async () => {
+  const { frame, images, sheetTotal, sheetIndex } = editorFixture()
+  const pending = frame.__picDoInject({
+    b64: 'AA==', template: 'preset.png', orderNumber: 'ORDER-one', sheets: { total: 5, index: 2 },
+  })
+  await flush()
+  images.shift().onload()
+  await pending
+  assert.deepEqual([Number(sheetTotal.value), Number(sheetIndex.value)], [5, 2])
+  frame.__picUpdateOrderSheets('ORDER-other', { total: 3, index: 1 })
+  assert.deepEqual([Number(sheetTotal.value), Number(sheetIndex.value)], [5, 2])
+  frame.__picUpdateOrderSheets('ORDER-one', { total: 5, index: 3 })
+  assert.deepEqual([Number(sheetTotal.value), Number(sheetIndex.value)], [5, 3])
 })
 
 function environment(t, overrides = {}) {
@@ -275,6 +297,8 @@ function environment(t, overrides = {}) {
   const api = {
     onIngested: subscribe('ingested'), onFailed: subscribe('failed'), onCloudImported: subscribe('cloud'),
     listOrders: async () => structuredClone(rows.map(({ images, ...summary }) => summary)),
+    getOrderSort: async () => ({ mode: 'time-desc', manual: [] }),
+    saveOrderSort: async () => {},
     getOrder: async id => {
       const snapshot = structuredClone(rows.find(row => row.id === id) ?? null)
       if (delayedDetail) {
@@ -531,6 +555,47 @@ test('the order status filter can search across pending and completed orders', a
   assert.equal(ids(), 'finished')
 })
 
+test('sorts by placed time or numeric price and uses the local creation time when needed', async t => {
+  const env = environment(t)
+  env.rows([
+    { ...order('cheap'), metadata: '{"orderedAt":"2026-11-21T12:00:00+08:00","amount":"9.50"}' },
+    { ...order('expensive'), metadata: '{"orderedAt":"2026-11-20T12:00:00+08:00","amount":"1,299.00"}' },
+    { ...order('legacy'), createdAt: '2026-11-22T12:00:00+08:00' },
+    { ...order('free'), metadata: '{"orderedAt":"2026-11-23T12:00:00+08:00","amount":"0.00"}' },
+  ])
+  await env.store.loadOrders()
+  const view = await env.mountView()
+  const ids = () => view.visibleEntries.value.map(entry => entry.summary.id).join(',')
+  assert.equal(ids(), 'free,legacy,cheap,expensive')
+  view.changeOrderSort('time-asc')
+  assert.equal(ids(), 'expensive,cheap,legacy,free')
+  view.changeOrderSort('amount-asc')
+  assert.equal(ids(), 'free,cheap,expensive,legacy')
+  view.changeOrderSort('amount-desc')
+  assert.equal(ids(), 'expensive,cheap,free,legacy')
+})
+
+test('manual sorting saves the global order and keeps hidden rows in place', async t => {
+  let saved = { mode: 'time-desc', manual: [] }
+  const env = environment(t, {
+    getOrderSort: async () => saved,
+    saveOrderSort: async next => { saved = structuredClone(next) },
+  })
+  env.rows([order('a1'), order('b'), order('a2')])
+  await env.store.loadOrders()
+  const view = await env.mountView()
+  view.changeOrderSort('manual')
+  view.orderSearch.value = 'ORDER-a'
+  view.moveOrderStep('ORDER-a2', -1)
+  await flush()
+  assert.deepEqual(saved, { mode: 'manual', manual: ['ORDER-a2', 'ORDER-b', 'ORDER-a1'] })
+  env.rows([order('new'), order('a1'), order('a2'), order('b')])
+  await env.store.loadOrders()
+  const reopened = await env.mountView()
+  assert.equal(reopened.orderSort.value.mode, 'manual')
+  assert.equal(reopened.visibleEntries.value.map(row => row.summary.id).join(','), 'a2,b,a1,new')
+})
+
 test('capturing material for a completed order reveals its images without reopening the order', async t => {
   const finished = { orderNumber: 'ORDER-finished', localCompleted: true }
   const env = environment(t, { workflowOrders: async () => [finished] })
@@ -632,6 +697,59 @@ test('making with different templates reuses the already loaded editor', async t
   assert.deepEqual(Array.from(received, data => data.template), ['模板爱心.png', '爱心横版.png', '爱心横版.png'])
 })
 
+test('order sheet defaults count assigned copies and advance only when a sheet is successfully saved', async t => {
+  const first = { ...image('first'), templates: [{ templateId: 'heart.png', quantity: 2 }] }
+  const second = { ...image('second'), templates: [{ templateId: 'star.png', quantity: 3 }] }
+  const incoming = order('one', [first, second])
+  const file = page => `ch-20261123-1493 共5张·第${page}张_heart.png`
+  const productions = [1, 1, 3].map((page, i) => ({
+    id: `saved-${i}`, filePath: file(page), orderNumber: incoming.orderNumber,
+  }))
+  let fail = false
+  const env = environment(t, {
+    listProductions: async number => productions.filter(row => row.orderNumber === number),
+    saveProduction: async (orderNumber, _bytes, filePath) => {
+      if (fail) throw new Error('save failed')
+      const production = { id: `saved-${productions.length}`, orderNumber, filePath }
+      productions.push(production)
+      return production
+    },
+  })
+  env.rows([incoming])
+  env.fetchImage(async () => ({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }))
+  const view = await env.mountView()
+  const fills = [], advanced = []
+  let acknowledgements = 0
+  const frame = {
+    async __picDoInject({ sheets }) { fills.push([sheets.total, sheets.index]) },
+    __picUpdateOrderSheets(_orderNumber, sheets) { advanced.push([sheets.total, sheets.index]) },
+    __picAcknowledgeOrderExport() { acknowledgements++ },
+  }
+  view.frame.value = vue.markRaw({ contentWindow: frame })
+  view.onFrameLoad()
+  await view.injectImage(first, incoming, 'heart.png')
+  assert.deepEqual(fills.at(-1), [5, 2])
+
+  view.onNumberingEdit({ target: { id: 'sheetTotal', valueAsNumber: 6, value: '6' } })
+  view.onNumberingEdit({ target: { id: 'sheetIndex', valueAsNumber: 4, value: '4' } })
+  await view.injectImage(second, incoming, 'star.png')
+  assert.deepEqual(fills.at(-1), [6, 4])
+
+  const exportSheet = sheetIndex => view.onMessage({ source: frame, data: {
+    type: 'pic-make-exported', orderNumber: incoming.orderNumber, fileName: file(sheetIndex), sheetIndex,
+  } })
+  fail = true
+  await exportSheet(4)
+  assert.deepEqual(advanced, [])
+  assert.equal(acknowledgements, 1)
+  fail = false
+  await exportSheet(4)
+  assert.deepEqual(advanced.at(-1), [6, 2])
+  await exportSheet(2)
+  assert.deepEqual(advanced.at(-1), [6, 5])
+  assert.equal(acknowledgements, 3)
+})
+
 test('the full specification list preselects saved assignments and keeps their quantities when adding a spec', async t => {
   const catalog = [
     { code: 'A01', name: '爱心款', webId: '模板爱心.png' },
@@ -651,6 +769,65 @@ test('the full specification list preselects saved assignments and keeps their q
   assert.deepEqual(Array.from(edits[0].templates, spec => [spec.templateId, spec.quantity]), [
     ['A01', 3], ['爱心横版.png', 1],
   ])
+})
+
+test('editing one template quantity preserves every other assignment and rejects invalid quantities', async t => {
+  const updates = []
+  const env = environment(t, {
+    setImageTemplates: async (id, templates) => { updates.push({ id, templates }) },
+  })
+  const view = await env.mountView()
+  const material = { ...image('photo'), templates: [
+    { templateId: '甜心派对.png', quantity: 2 },
+    { templateId: '爱心心动马卡龙.png', quantity: 3 },
+  ] }
+  const input = { value: '5', valueAsNumber: 5 }
+  await view.changeTemplateQuantity(material, '甜心派对.png', { currentTarget: input })
+  assert.equal(updates[0].id, material.id)
+  assert.deepEqual(Array.from(updates[0].templates, t => [t.templateId, t.quantity]), [
+    ['甜心派对.png', 5], ['爱心心动马卡龙.png', 3],
+  ])
+
+  await view.changeTemplateQuantity(material, '甜心派对.png', { currentTarget: { ...input, valueAsNumber: 0 } })
+  assert.equal(updates.length, 1)
+  assert.equal(material.templates[0].quantity, 5)
+})
+
+test('an image remark is shown after saving and can be cleared without editing other images', async t => {
+  const edits = []
+  const env = environment(t, {
+    setImageRemark: async (id, remark) => { edits.push({ id, remark }) },
+  })
+  const view = await env.mountView()
+  const first = image('first'), second = image('second')
+  view.remarkDrafts[first.id] = ' 请保留耳朵\n偏暖一点 '
+  view.remarkDrafts[second.id] = '另一张的草稿'
+  await view.saveRemark(first)
+  assert.equal(first.remark, '请保留耳朵\n偏暖一点')
+  assert.equal(view.remarkDrafts[first.id], undefined)
+  assert.equal(second.remark, '')
+  assert.equal(view.remarkDrafts[second.id], '另一张的草稿')
+
+  view.remarkDrafts[first.id] = ' '
+  await view.saveRemark(first)
+  assert.deepEqual(edits, [{ id: first.id, remark: '请保留耳朵\n偏暖一点' }, { id: first.id, remark: '' }])
+  assert.equal(first.remark, '')
+})
+
+test('historical A05 orders still use blue after new A05 orders switch to Strawberry Sweetheart', async t => {
+  const env = environment(t, {
+    getAppInfo: async () => ({ templates: [
+      { code: 'A05', name: '草莓甜心', webId: '草莓.png', legacyWebId: '模板蓝色.png' },
+    ] }),
+  })
+  await env.store.loadInfo()
+  const view = await env.mountView()
+  const material = image('photo')
+  const assignments = templateId => Array.from(view.specificationsFor({
+    ...material, templates: [{ templateId, quantity: 2 }],
+  }), spec => [spec.webId, spec.quantity])
+  assert.deepEqual(assignments('A05'), [['草莓.png', null], ['模板蓝色.png', 2]])
+  assert.deepEqual(assignments('草莓.png'), [['草莓.png', 2]])
 })
 
 test('selecting the shared version replaces an open order only after the replacement succeeds', async t => {

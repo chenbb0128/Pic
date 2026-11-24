@@ -2,6 +2,7 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -15,75 +16,24 @@ const BACKGROUND: &str = "background.png";
 const PREVIEW: &str = "preview.webp";
 const IMAGE_LIMIT: usize = crate::workflow::MAX_ASSET_BYTES as usize;
 
+#[derive(serde::Deserialize)]
 pub struct Template {
-    pub code: &'static str,
-    pub name: &'static str,
+    /// 商品规格编号。可手动勾选的无编号模板使用名称。
+    pub code: String,
+    pub name: String,
     /// web 端模板 id（下拉框 option value，中文文件名格式）
-    pub web_id: &'static str,
+    #[serde(rename = "id")]
+    pub web_id: String,
+    /// 商品编号被重新分配前，历史订单中该编号对应的模板。
+    #[serde(rename = "legacyWebId")]
+    pub legacy_web_id: Option<String>,
 }
 
-pub const TEMPLATES: &[Template] = &[
-    Template {
-        code: "A01",
-        name: "爱心款",
-        web_id: "模板爱心.png",
-    },
-    Template {
-        code: "A02",
-        name: "爱心横版",
-        web_id: "爱心横版.png",
-    },
-    Template {
-        code: "A03",
-        name: "爱心+星星混合版",
-        web_id: "模板混合.png",
-    },
-    Template {
-        code: "A04",
-        name: "粉色款",
-        web_id: "模板粉色.png",
-    },
-    Template {
-        code: "A05",
-        name: "蓝色款",
-        web_id: "模板蓝色.png",
-    },
-    Template {
-        code: "A06",
-        name: "黄色款",
-        web_id: "模板黄色.png",
-    },
-    Template {
-        code: "A07",
-        name: "混合竖版",
-        web_id: "甜心派对.png",
-    },
-    Template {
-        code: "A08",
-        name: "缤纷糖果版",
-        web_id: "缤纷糖果.png",
-    },
-    Template {
-        code: "A09",
-        name: "大头混合横版",
-        web_id: "I-ME横版大头.png",
-    },
-    Template {
-        code: "A10",
-        name: "心动马卡龙款",
-        web_id: "爱心心动马卡龙.png",
-    },
-    Template {
-        code: "A11",
-        name: "焦糖秋枫混合豹纹",
-        web_id: "经典豹纹混合.png",
-    },
-    Template {
-        code: "A12",
-        name: "奶油黑粉混合豹纹",
-        web_id: "黑粉奶油混合豹纹.png",
-    },
-];
+const CATALOG_JSON: &str = include_str!("../assets/templates.json");
+
+pub static TEMPLATES: LazyLock<Vec<Template>> = LazyLock::new(|| {
+    serde_json::from_str(CATALOG_JSON).expect("invalid embedded template catalog")
+});
 
 /// 按商品编号（如 "A01"）查找模板。
 pub fn find_by_code(code: &str) -> Option<&'static Template> {
@@ -95,15 +45,8 @@ pub fn find_by_web_id(web_id: &str) -> Option<&'static Template> {
     TEMPLATES.iter().find(|t| t.web_id == web_id)
 }
 
-/// 注入脚本内嵌用的模板目录 JSON（[{code, name, id}]）。
-pub fn catalog_json() -> String {
-    serde_json::to_string(
-        &TEMPLATES
-            .iter()
-            .map(|t| serde_json::json!({ "code": t.code, "name": t.name, "id": t.web_id }))
-            .collect::<Vec<_>>(),
-    )
-    .unwrap_or_else(|_| "[]".to_string())
+pub(crate) fn capture_script() -> String {
+    include_str!("../assets/vagaga_capture.js").replace("/* VAGAGA_TEMPLATES */ []", CATALOG_JSON)
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -112,6 +55,8 @@ pub struct TemplateDto {
     pub code: String,
     pub name: String,
     pub web_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy_web_id: Option<String>,
     pub custom: bool,
     pub enabled: bool,
     pub width: f64,
@@ -140,6 +85,7 @@ impl SavedTemplate {
             code: self.code.clone(),
             name: self.name.clone(),
             web_id: self.id.clone(),
+            legacy_web_id: None,
             custom: true,
             enabled: self.enabled,
             width: self.width,
@@ -278,33 +224,25 @@ fn save_record(store: &Store, template: &SavedTemplate) -> Result<(), String> {
 }
 
 pub(crate) fn catalog(store: &Store, root: &Path) -> Result<Vec<TemplateDto>, String> {
-    let sizes = [
-        (144., 210.),
-        (210., 144.),
-        (144., 210.),
-        (144., 210.),
-        (144., 210.),
-        (144., 210.),
-        (144., 210.),
-        (144., 210.),
-        (210., 144.),
-        (144., 210.),
-        (144., 210.),
-        (144., 210.),
-    ];
     let mut entries = TEMPLATES
         .iter()
-        .zip(sizes)
-        .map(|(item, (width, height))| TemplateDto {
-            code: item.code.into(),
-            name: item.name.into(),
-            web_id: item.web_id.into(),
-            custom: false,
-            enabled: true,
-            width,
-            height,
-            dpi: 600,
-            preview_path: None,
+        .map(|item| {
+            let (width, height) = match item.web_id.as_str() {
+                "爱心横版.png" | "I-ME横版大头.png" => (210., 144.),
+                _ => (144., 210.),
+            };
+            TemplateDto {
+                code: item.code.clone(),
+                name: item.name.clone(),
+                web_id: item.web_id.clone(),
+                legacy_web_id: item.legacy_web_id.clone(),
+                custom: false,
+                enabled: true,
+                width,
+                height,
+                dpi: 600,
+                preview_path: None,
+            }
         })
         .collect::<Vec<_>>();
     entries.extend(local_list(store)?.iter().map(|item| item.dto(root)));
@@ -332,10 +270,7 @@ fn normalize_code(code: &str) -> Result<String, String> {
         || !code.starts_with('A')
         || !code[1..].bytes().all(|byte| byte.is_ascii_digit())
     {
-        return Err("请输入 A13 这样的规格编号。".into());
-    }
-    if find_by_code(&code).is_some() {
-        return Err(format!("规格 {code} 已用于内置模板。"));
+        return Err("请输入 A14 这样的规格编号。".into());
     }
     Ok(code)
 }
@@ -449,9 +384,14 @@ pub(crate) async fn save_template(
 }
 
 fn save_local(store: &Store, root: &Path, input: TemplateInput) -> Result<TemplateDto, String> {
+    let code = normalize_code(&input.code)?;
+    // Reserve built-in codes for new templates while keeping older saved IDs usable.
+    if find_by_code(&code).is_some() {
+        return Err(format!("规格 {code} 已用于内置模板。"));
+    }
     let template = SavedTemplate {
         id: crate::store::random_hex_pub(16),
-        code: normalize_code(&input.code)?,
+        code,
         name: normalize_name(&input.name)?,
         width: input.width,
         height: input.height,
@@ -697,22 +637,23 @@ mod tests {
     fn saved_template_appears_in_capture_catalog_and_disabled_id_remains_available() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        let saved = save_local(&store, dir.path(), template_input("a13")).unwrap();
-        assert_eq!(saved.code, "A13");
+        let saved = save_local(&store, dir.path(), template_input("a14")).unwrap();
+        assert_eq!(saved.code, "A14");
         assert!(has_images(dir.path(), &saved.web_id));
+        assert!(save_local(&store, dir.path(), template_input("A14")).is_err());
         assert!(save_local(&store, dir.path(), template_input("A13")).is_err());
         assert!(save_local(&store, dir.path(), template_input("A01")).is_err());
         drop(store);
 
         let store = Store::open(dir.path()).unwrap();
         let catalog = capture_catalog(&store).unwrap();
-        assert_eq!(catalog[12]["id"], saved.web_id);
+        assert_eq!(catalog[TEMPLATES.len()]["id"], saved.web_id);
         let mut record = local(&store, &saved.web_id).unwrap().unwrap();
         record.enabled = false;
         save_record(&store, &record).unwrap();
         assert_eq!(
             capture_catalog(&store).unwrap().as_array().unwrap().len(),
-            12
+            TEMPLATES.len()
         );
         assert!(!local(&store, &saved.web_id).unwrap().unwrap().enabled);
         assert_eq!(record.validate().unwrap(), layout());
@@ -722,10 +663,10 @@ mod tests {
     fn invalid_preview_or_order_data_does_not_publish_a_local_template() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        let mut input = template_input("A13");
+        let mut input = template_input("A14");
         input.preview_b64 = STANDARD.encode(make_image(ImageFormat::Png));
         assert!(save_local(&store, dir.path(), input).is_err());
-        let mut input = template_input("A13");
+        let mut input = template_input("A14");
         input.layout["photos"] = serde_json::json!([null]);
         assert!(save_local(&store, dir.path(), input).is_err());
         assert!(local_list(&store).unwrap().is_empty());
@@ -799,7 +740,7 @@ mod tests {
         for root in [&sender.data_root, &receiver.data_root] {
             mysql::save_config(root, &config).unwrap();
         }
-        let saved = save_local(&sender.store, &sender.data_root, template_input("A13")).unwrap();
+        let saved = save_local(&sender.store, &sender.data_root, template_input("A14")).unwrap();
         let id = saved.web_id;
         let (listener, endpoint) = local_server();
         let object_root = format!("/fixture/templates/{id}");
@@ -833,7 +774,7 @@ mod tests {
             .await
             .unwrap();
         assert!(has_images(&receiver.data_root, &id));
-        assert_eq!(local(&receiver.store, &id).unwrap().unwrap().code, "A13");
+        assert_eq!(local(&receiver.store, &id).unwrap().unwrap().code, "A14");
         let mut index = mysql::connect_template_index(&sender.data_root)
             .await
             .unwrap();

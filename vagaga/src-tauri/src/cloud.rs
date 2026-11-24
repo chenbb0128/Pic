@@ -110,6 +110,10 @@ pub fn config_path(data_root: &Path) -> PathBuf {
 pub fn load_config(data_root: &Path) -> CloudConfig {
     match std::fs::read_to_string(config_path(data_root)) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/cloud-defaults.json")))
+                .unwrap_or_default()
+        }
         Err(_) => CloudConfig::default(),
     }
 }

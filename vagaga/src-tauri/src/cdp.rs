@@ -142,18 +142,19 @@ mod event_tests {
         let captured_at = 1_800_000_000_123_i64;
         let payload = json!({
             "ts": captured_at,
-            "context": { "layoutNumber": "ch-000Ab", "status": "待发货" }
+            "context": { "layoutNumber": "ch-000Ab", "status": "待发货", "orderedAt": "2027-01-15T09:10:00+08:00" }
         });
         assert_eq!(
             capture_metadata(&payload),
             Some(json!({
                 "layoutNumber": "ch-000Ab",
                 "layoutNumberCapturedAt": "2027-01-15T08:00:00.123Z",
+                "orderedAt": "2027-01-15T09:10:00+08:00",
                 "status": "待发货"
             }).to_string())
         );
         assert_eq!(
-            capture_metadata(&json!({"context": {"layoutNumber": "ch-"}})),
+            capture_metadata(&json!({"context": {"layoutNumber": "ch-", "orderedAt": "unknown"}})),
             None
         );
     }
@@ -546,6 +547,12 @@ fn capture_metadata(payload: &Value) -> Option<String> {
         if let Some(value) = context[key].as_str().filter(|value| !value.is_empty()) {
             fields.insert(key.into(), Value::String(value.into()));
         }
+    }
+    if let Some(ordered_at) = context["orderedAt"]
+        .as_str()
+        .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+    {
+        fields.insert("orderedAt".into(), Value::String(ordered_at.into()));
     }
     if let Some(number) = context["layoutNumber"]
         .as_str()

@@ -172,13 +172,17 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <body>
 <link rel="stylesheet" href="./cloud-library.css?v=cloud-3">
 <link rel="stylesheet" href="./product-preview.css?v=product-1">
-<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-12">
+<link rel="stylesheet" href="./editor-toolbar.css?v=toolbar-13">
 <header class="editor-toolbar" aria-label="排版工具栏">
  <div class="editor-order"><span>订单编号</span><strong id="desktopOrderNumber"></strong></div>
  <label class="label" for="footerText">排版编号</label>
  <div class="footer-text-row">
   <select id="footerPrefix" aria-label="编号前缀"><option value="ch" selected>ch</option><option value="yy">yy</option><option value="x">x</option></select>
   <input id="footerText" type="text" maxlength="200" autocomplete="off" spellcheck="false" placeholder="输入编号" aria-label="本次排版编号" required>
+ </div>
+ <div class="footer-text-row editor-sheet-counts" role="group" aria-label="排版张数">
+  <label class="sheet-field" title="本订单总张数">共<input id="sheetTotal" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="总张数">张</label>
+  <label class="sheet-field" title="当前是第几张">第<input id="sheetIndex" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="当前张数">张</label>
  </div>
  <div class="preview-tools" role="group" aria-label="画布预览操作">
   <button type="button" class="preview-tool" id="zoomIn" title="放大预览" aria-label="放大预览"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></svg></button>
@@ -193,7 +197,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 <section class="panel" aria-label="制作设置">
  <div class="editor-template">
   <label class="label" for="template">选择模板</label>
-  <select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="甜心派对.png">甜心派对 · A5 竖版</option><option value="缤纷糖果.png">缤纷糖果 · A5 竖版</option><option value="草莓.png">草莓款 · A5 竖版</option><option value="圣诞.png">圣诞款 · A5 竖版</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select>
+  <select class="select" id="template"><option value="模板爱心.png">爱心款</option><option value="爱心横版.png">爱心横版 · 210×144 mm</option><option value="I-ME横版大头.png">I/ME 横版大头 · 210×144 mm</option><option value="爱心心动马卡龙.png">爱心心动马卡龙 · 144×210 mm</option><option value="甜心派对.png">甜心派对 · A5 竖版</option><option value="缤纷糖果.png">缤纷糖果 · A5 竖版</option><option value="草莓.png">草莓款 · A5 竖版</option><option value="圣诞.png">A13 欢乐圣诞 · A5 竖版</option><option value="模板混合.png">爱心＋星星混合款</option><option value="经典豹纹混合.png">经典豹纹款 · 爱心＋星星</option><option value="黑粉奶油混合豹纹.png">黑粉奶油混合豹纹</option><option value="模板粉色.png">粉色款</option><option value="模板蓝色.png">蓝色款</option><option value="模板黄色.png">黄色款</option><option value="豹纹星星.png">豹纹星星款</option><option value="波点爱心.png">波点爱心款</option><option value="波点圆形.png">波点圆形款</option><option value="文案模板.png">文案款</option><option value="自定义排版.png">自定义排版 · 逐排组合</option></select>
   <div id="desktopEditorFeedback" class="editor-feedback" role="status"></div>
   <div id="status" class="status" role="status"></div>
  </div>
@@ -242,7 +246,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
    <div id="exportControlsFallback">
    <div class="editor-numbering-options">
     <label class="check"><input id="numberingEnabled" type="checkbox" checked><span>启用编号</span></label>
-    <div class="footer-text-row"><label class="sheet-field" title="本订单总张数">共<input id="sheetTotal" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="总张数">张</label><label class="sheet-field" title="当前是第几张">第<input id="sheetIndex" type="number" min="1" max="999" step="1" inputmode="numeric" value="1" aria-label="当前张数">张</label><button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button></div>
+    <button type="button" class="preview-tool" id="copyFooterText" title="复制编号" aria-label="复制编号"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
    </div>
    <div class="watermark-controls">
     <label><input id="watermarkEnabled" type="checkbox" checked>预览水印</label>
@@ -540,7 +544,20 @@ const footerHeightMm=3,footerText=document.getElementById('footerText'),numberin
 let orderNumberingOrder = null, orderNumberingEdited = false, orderImageId = null;
 let pendingOrderExports = 0;
 window.__picHasPendingExport = () => exportBusy || pendingOrderExports > 0;
-window.__picAcknowledgeOrderExport = () => { if (pendingOrderExports) pendingOrderExports--; };
+window.__picAcknowledgeOrderExport = () => { if (pendingOrderExports) { pendingOrderExports--; draw(); } };
+
+function fillOrderSheets(sheets) {
+  if (!sheets) return;
+  sheetTotal.value = normalizeSheetCount(sheets.total) || 1;
+  sheetIndex.value = normalizeSheetCount(sheets.index) || 1;
+  document.dispatchEvent(new Event('pic-order-sheets'));
+}
+
+window.__picUpdateOrderSheets = (orderNumber, sheets) => {
+  if (orderNumber !== orderNumberingOrder) return;
+  fillOrderSheets(sheets);
+  draw();
+};
 
 function applyOrderNumbering(data) {
   if (typeof data.orderNumber !== 'string' || !data.orderNumber) return;
@@ -561,6 +578,7 @@ function applyOrderNumbering(data) {
   }
   orderNumberingOrder = data.orderNumber;
   orderNumberingEdited = !!validDraft;
+  fillOrderSheets(data.sheets);
   document.getElementById('exportFilename').textContent = pngFilename();
   draw();
 }
@@ -694,7 +712,7 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true,include
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
  });
  ctx.restore();if(includeFooter)drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoLightingEditor?.update();photoThumbnails?.update();if(typeof updateAutoLightingCancelButton==='function')updateAutoLightingCancelButton();
- download.disabled=exportBusy||photoLightingEditor?.busy()||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
+ download.disabled=exportBusy||pendingOrderExports>0||photoLightingEditor?.busy()||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
  watermarkDownload.disabled=download.disabled;
  sharedLibrary?.changed();
 }
@@ -730,14 +748,14 @@ function renderThumbs(){thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];phot
 function crc32(bytes){let c=0xffffffff;for(const b of bytes){c^=b;for(let k=0;k<8;k++)c=(c&1)?(c>>>1)^0xedb88320:c>>>1}return(c^0xffffffff)>>>0}
 async function addDpiMetadata(blob,dpi){const input=new Uint8Array(await blob.arrayBuffer()),view=new DataView(input.buffer,input.byteOffset,input.byteLength);let pos=8,insertAt=-1;while(pos+12<=input.length){const len=view.getUint32(pos),type=String.fromCharCode(...input.subarray(pos+4,pos+8));if(type==='IHDR'){insertAt=pos+12+len;break}pos+=12+len}if(insertAt<0)throw new Error('找不到 PNG 图像头');const chunk=new Uint8Array(21),v=new DataView(chunk.buffer),ppm=Math.round(dpi/0.0254);v.setUint32(0,9);chunk.set([112,72,89,115],4);v.setUint32(8,ppm);v.setUint32(12,ppm);chunk[16]=1;v.setUint32(17,crc32(chunk.subarray(4,17)));const output=new Uint8Array(input.length+chunk.length);output.set(input.subarray(0,insertAt),0);output.set(chunk,insertAt);output.set(input.subarray(insertAt),insertAt+chunk.length);return new Blob([output],{type:'image/png'})}
 async function exportPng(withWatermark=false){
- if(exportBusy)return;
+ if(exportBusy||pendingOrderExports)return;
  if(photoLightingEditor?.busy()){say('请等待人像补光完成后再导出。',true);return}
  if(motifEditor.busy()){say('请等待图案更换完成。',true);return}
  if(slotBackgrounds.busy()){say('请等待背景图片读取完成。',true);return}
  if(templates[sel.value].custom&&(customBusy||customDirty)){say('请先完成自定义排版。',true);return}
  const proof=withWatermark===true,name=sel.value,numbered=numberingEnabled.checked,label=numbered?composeFooterNumber():'';
  if(!proof&&numbered&&!label.trim()){footerText.focus();say('请先输入本次编号后再下载。',true);return}
- const orderNumber=orderNumberingOrder,imageId=orderImageId;
+ const orderNumber=orderNumberingOrder,imageId=orderImageId,currentSheetIndex=normalizeSheetCount(sheetIndex.value)||undefined;
  exportBusy=true;draw();
  try{
   if(templates[name].text){clearTimeout(fontInputTimer);const copySnapshot=JSON.stringify([states,copyStyle,copyLayout]);await prepareCopyFont();if(copySnapshot!==JSON.stringify([states,copyStyle,copyLayout]))throw new Error('文案或字体已更新，请重新下载。')}
@@ -755,7 +773,7 @@ async function exportPng(withWatermark=false){
     const bin=new Uint8Array(await finalBlob.arrayBuffer());
     let binary='';
     for(let i=0;i<bin.length;i+=0x8000)binary+=String.fromCharCode(...bin.subarray(i,i+0x8000));
-    window.parent.postMessage({type:'pic-make-exported',b64:btoa(binary),fileName:a.download,orderNumber,imageId},'*');
+    window.parent.postMessage({type:'pic-make-exported',b64:btoa(binary),fileName:a.download,orderNumber,imageId,sheetIndex:currentSheetIndex},'*');
     pendingOrderExports++;
    }catch(error){console.error('[pic-make] export bridge failed',error)}
   }

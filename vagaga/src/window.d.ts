@@ -1,3 +1,8 @@
+interface OrderSheets {
+  total: number
+  index: number
+}
+
 interface Window {
   __picDoInject?: (data: {
     b64: string
@@ -8,7 +13,9 @@ interface Window {
     imageId?: string
     layoutNumber?: string | null
     numberingDraft?: { prefix: string; value: string }
+    sheets?: OrderSheets
   }) => Promise<void>
+  __picUpdateOrderSheets?: (orderNumber: string, sheets: OrderSheets) => void
   __picReadOrderNumbering?: () => { orderNumber: string; prefix: string; value: string } | null
   __picHasPendingExport?: () => boolean
   __picAcknowledgeOrderExport?: () => void

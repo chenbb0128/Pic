@@ -21,6 +21,42 @@ pub struct OrderDto {
     pub metadata: Option<String>,
 }
 
+#[derive(Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum OrderSortMode {
+    #[default]
+    TimeDesc,
+    TimeAsc,
+    AmountDesc,
+    AmountAsc,
+    Manual,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+pub(crate) struct OrderSort {
+    mode: OrderSortMode,
+    manual: Vec<String>,
+}
+
+const ORDER_SORT_SETTING: &str = "order-sort";
+
+#[tauri::command]
+pub(crate) fn get_order_sort(state: State<'_, AppState>) -> Result<OrderSort, String> {
+    let saved = crate::workflow_db::setting(&state.store, ORDER_SORT_SETTING)
+        .map_err(|error| error.to_string())?;
+    saved.map(|value| serde_json::from_str(&value))
+        .transpose()
+        .map(Option::unwrap_or_default)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn save_order_sort(state: State<'_, AppState>, sort: OrderSort) -> Result<(), String> {
+    let text = serde_json::to_string(&sort).map_err(|error| error.to_string())?;
+    crate::workflow_db::put_setting(&state.store, ORDER_SORT_SETTING, &text)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TemplateQtyDto {
@@ -40,6 +76,7 @@ pub struct ImageDto {
     pub height: i64,
     pub source: String,
     pub created_at: String,
+    pub remark: String,
     pub templates: Vec<TemplateQtyDto>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_quality: Option<String>,
@@ -89,6 +126,7 @@ fn image_to_dto(image: &crate::store::OrderImage) -> ImageDto {
         height: image.height,
         source: image.source.clone(),
         created_at: image.created_at.clone(),
+        remark: image.remark.clone(),
         source_quality: None,
         sync_status: None,
         sync_error: None,
@@ -146,6 +184,11 @@ pub fn set_image_templates(
 ) -> Result<(), String> {
     let mapped: Vec<_> = templates.into_iter().map(|entry| (entry.template_id, entry.quantity)).collect();
     state.store.set_image_templates(&image_id, &mapped).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub fn set_image_remark(state: State<'_, AppState>, image_id: String, remark: String) -> Result<(), String> {
+    state.store.set_image_remark(&image_id, &remark).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

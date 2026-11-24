@@ -1,0 +1,15 @@
+[
+  { "code": "A01", "name": "爱心款", "id": "模板爱心.png" },
+  { "code": "A02", "name": "爱心横版", "id": "爱心横版.png" },
+  { "code": "A03", "name": "爱心+星星混合版", "id": "模板混合.png" },
+  { "code": "A04", "name": "粉色款", "id": "模板粉色.png" },
+  { "code": "A05", "name": "草莓甜心", "id": "草莓.png", "legacyWebId": "模板蓝色.png" },
+  { "code": "A06", "name": "黄色款", "id": "模板黄色.png" },
+  { "code": "A07", "name": "混合竖版", "id": "甜心派对.png" },
+  { "code": "A08", "name": "缤纷糖果版", "id": "缤纷糖果.png" },
+  { "code": "A09", "name": "大头混合横版", "id": "I-ME横版大头.png" },
+  { "code": "A10", "name": "心动马卡龙款", "id": "爱心心动马卡龙.png" },
+  { "code": "A11", "name": "焦糖秋枫混合豹纹", "id": "经典豹纹混合.png" },
+  { "code": "A12", "name": "奶油黑粉混合豹纹", "id": "黑粉奶油混合豹纹.png" },
+  { "code": "A13", "name": "欢乐圣诞", "id": "圣诞.png" }
+]

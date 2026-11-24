@@ -16,6 +16,7 @@ export interface OrderImage {
   height: number
   source: string
   createdAt: string
+  remark: string
   templates: TemplateQty[]
   sourceQuality?: SourceQuality
   syncStatus?: SyncStatus
@@ -39,10 +40,18 @@ export interface OrderDetail {
   images: OrderImage[]
 }
 
+export type OrderSortMode = 'time-desc' | 'time-asc' | 'amount-desc' | 'amount-asc' | 'manual'
+
+export interface OrderSort {
+  mode: OrderSortMode
+  manual: string[]
+}
+
 export interface TemplateInfo {
   code: string
   name: string
   webId: string
+  legacyWebId?: string
   custom?: boolean
   enabled?: boolean
   width?: number

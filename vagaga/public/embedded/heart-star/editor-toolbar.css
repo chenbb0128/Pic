@@ -1,6 +1,7 @@
 .editor-toolbar {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -49,6 +50,14 @@
   width: 82px;
   flex: none;
   padding-inline: 7px;
+}
+.editor-toolbar .editor-sheet-counts {
+  flex: none;
+  gap: 8px;
+}
+.editor-toolbar .editor-sheet-counts input {
+  width: 44px;
+  padding: 0 4px;
 }
 .editor-toolbar #download {
   display: inline-flex;
@@ -182,7 +191,11 @@
   padding: 8px 0 0;
   border-top: 1px solid var(--line);
 }
-.editor-numbering-options .sheet-field input { height: 30px; }
+.editor-numbering-options {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
 .editor-options .watermark-controls input[type=text] {
   width: 100%;
 }

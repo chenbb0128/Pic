@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
@@ -447,6 +447,7 @@ pub(crate) struct ImportedAsset {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) quality: Option<String>,
+    pub(crate) remark: Option<String>,
     pub(crate) templates: Vec<(String, i64)>,
 }
 
@@ -503,6 +504,7 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
         return Err("这笔订单有尚未确认的上传，请先处理待上传操作。".into());
     }
     let number = request.number.to_owned();
+    let mut previous_remarks = HashMap::new();
     let copy = |number: &str| format!("{number}~副本-{}", random_hex_pub(6));
     match request.action {
         ImportAction::Replace => {
@@ -547,6 +549,15 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
         }
         ImportAction::Sync => {
             if let Some(current) = &current {
+                // Older publishers omit the field. Keep matching notes when refreshing from them.
+                let mut query = tx.prepare(
+                    "SELECT COALESCE(m.remote_id, i.id), i.remark FROM images i
+                     LEFT JOIN workflow_remote_ids m ON m.local_id=i.id
+                     WHERE i.order_id=?1 AND i.remark<>''",
+                ).map_err(error)?;
+                previous_remarks = query.query_map([&current.id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                }).map_err(error)?.collect::<rusqlite::Result<_>>().map_err(error)?;
                 remove_current_files(&tx, &number, &current.id).map_err(error)?;
             }
         }
@@ -559,11 +570,14 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
     .map_err(error)?;
     for asset in request.assets.iter().filter(|asset| !asset.production) {
         let id = random_hex_pub(16);
+        let remark = asset.remark.as_deref()
+            .or_else(|| previous_remarks.get(&asset.remote_id).map(String::as_str))
+            .unwrap_or_default();
         tx.execute(
-            "INSERT INTO images(id,order_id,file_path,original_name,byte_length,width,height,source,created_at,thumb_path)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,'共享存储',?8,?9)",
+            "INSERT INTO images(id,order_id,file_path,original_name,byte_length,width,height,source,created_at,thumb_path,remark)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,'共享存储',?8,?9,?10)",
             params![id, order_id, asset.path.to_string_lossy(), asset.name, asset.bytes, asset.width,
-                asset.height, now(), asset.thumb.as_deref().map(|p| p.to_string_lossy())],
+                asset.height, now(), asset.thumb.as_deref().map(|p| p.to_string_lossy()), remark],
         ).map_err(error)?;
         tx.execute(
             "INSERT INTO workflow_remote_ids(local_id,remote_id) VALUES (?1,?2)",

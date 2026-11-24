@@ -34,7 +34,7 @@
   globalThis.HeartStarChristmas = { name, source, build };
   const select = document.getElementById('template');
   if (select && ![...select.options].some(option => option.value === name)) {
-    const option = document.createElement('option'); option.value = name; option.textContent = '圣诞款 · A5 竖版';
+    const option = document.createElement('option'); option.value = name; option.textContent = 'A13 欢乐圣诞 · A5 竖版';
     select.insertBefore(option, select.querySelector('option[value="模板混合.png"]'));
   }
 })();

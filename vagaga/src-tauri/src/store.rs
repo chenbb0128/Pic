@@ -83,18 +83,27 @@ fn layout_metadata(value: &Value) -> Option<(&str, Option<chrono::DateTime<chron
     Some((number, captured_at))
 }
 
-/// Replace the existing order details while keeping the most recent layout number.
-fn merge_order_layout_metadata(current: Option<&str>, incoming: &str) -> String {
-    let previous = current.and_then(|text| serde_json::from_str::<Value>(text).ok());
-    let Some((number, captured_at)) = previous.as_ref().and_then(layout_metadata) else {
+/// Keep earlier order facts when the latest capture omits them.
+fn merge_order_metadata(current: Option<&str>, incoming: &str) -> String {
+    let Some(previous) = current.and_then(|text| serde_json::from_str::<Value>(text).ok()) else {
         return incoming.to_owned();
     };
     let replacement = serde_json::from_str::<Value>(incoming).ok();
-    if replacement
-        .as_ref()
-        .and_then(layout_metadata)
-        .is_some_and(|(_, timestamp)| captured_at.is_none() || timestamp > captured_at)
-    {
+    let retained_layout = layout_metadata(&previous).filter(|(_, saved_at)| {
+        !replacement
+            .as_ref()
+            .and_then(layout_metadata)
+            .is_some_and(|(_, incoming_at)| saved_at.is_none() || incoming_at > *saved_at)
+    });
+    let retained_facts = ["orderedAt", "amount"]
+        .into_iter()
+        .filter_map(|key| {
+            let value = previous.get(key)?;
+            replacement.as_ref().and_then(|next| next.get(key)).is_none()
+                .then(|| (key.to_owned(), value.clone()))
+        })
+        .collect::<Vec<_>>();
+    if retained_layout.is_none() && retained_facts.is_empty() {
         return incoming.to_owned();
     }
     let mut fields = match replacement {
@@ -107,11 +116,14 @@ fn merge_order_layout_metadata(current: Option<&str>, incoming: &str) -> String 
             fields
         }
     };
-    fields.insert("layoutNumber".into(), Value::String(number.to_owned()));
-    if let Some(timestamp) = captured_at {
-        fields.insert("layoutNumberCapturedAt".into(), Value::String(timestamp.to_rfc3339()));
-    } else {
-        fields.remove("layoutNumberCapturedAt");
+    fields.extend(retained_facts);
+    if let Some((number, captured_at)) = retained_layout {
+        fields.insert("layoutNumber".into(), Value::String(number.to_owned()));
+        if let Some(timestamp) = captured_at {
+            fields.insert("layoutNumberCapturedAt".into(), Value::String(timestamp.to_rfc3339()));
+        } else {
+            fields.remove("layoutNumberCapturedAt");
+        }
     }
     Value::Object(fields).to_string()
 }
@@ -129,7 +141,7 @@ pub(crate) fn merge_order_metadata_for_id(
         params![order_id],
         |row| row.get(0),
     )?;
-    Ok(Some(merge_order_layout_metadata(current.as_deref(), incoming)))
+    Ok(Some(merge_order_metadata(current.as_deref(), incoming)))
 }
 
 pub struct OrderSummary {
@@ -157,6 +169,7 @@ pub struct OrderImage {
     pub height: i64,
     pub source: String,
     pub created_at: String,
+    pub remark: String,
     pub templates: Vec<TemplateQty>,
 }
 
@@ -319,6 +332,14 @@ impl Store {
             .unwrap_or(0);
         if has_thumb_column == 0 {
             conn.execute("ALTER TABLE images ADD COLUMN thumb_path TEXT", [])?;
+        }
+        let has_remark_column: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('images') WHERE name = 'remark')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_remark_column {
+            conn.execute("ALTER TABLE images ADD COLUMN remark TEXT NOT NULL DEFAULT ''", [])?;
         }
         // 旧库迁移：orders 表补 cloud_hash 列（云同步清单指纹，多机协同）
         let has_cloud_column: i64 = conn
@@ -638,7 +659,7 @@ impl Store {
         };
 
         let mut statement = conn.prepare(
-            "SELECT id, order_id, file_path, original_name, byte_length, width, height, source, created_at, thumb_path
+            "SELECT id, order_id, file_path, original_name, byte_length, width, height, source, created_at, thumb_path, remark
              FROM images WHERE order_id = ?1 ORDER BY created_at ASC",
         )?;
         let mut images: Vec<OrderImage> = statement
@@ -654,6 +675,7 @@ impl Store {
                     height: row.get(6)?,
                     source: row.get(7)?,
                     created_at: row.get(8)?,
+                    remark: row.get(10)?,
                     templates: Vec::new(),
                 })
             })?
@@ -683,6 +705,22 @@ impl Store {
         templates: &[(String, i64)],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.set_image_templates_and_queue(image_id, templates, None).map(|_| ())
+    }
+
+    pub fn set_image_remark(&self, image_id: &str, remark: &str) -> rusqlite::Result<()> {
+        let mut conn = self.conn.lock().expect("store mutex poisoned");
+        let tx = conn.transaction()?;
+        let (order_id, previous): (String, String) = tx.query_row(
+            "SELECT order_id, remark FROM images WHERE id = ?1",
+            [image_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let remark = remark.trim();
+        if previous != remark {
+            tx.execute("UPDATE images SET remark = ?2 WHERE id = ?1", params![image_id, remark])?;
+            tx.execute("UPDATE orders SET updated_at = ?2 WHERE id = ?1", params![order_id, now()])?;
+        }
+        tx.commit()
     }
 
     pub(crate) fn set_image_templates_and_queue(
@@ -1057,7 +1095,7 @@ impl Store {
             )
             .optional()?
             .flatten();
-        let metadata = merge_order_layout_metadata(current.as_deref(), metadata);
+        let metadata = merge_order_metadata(current.as_deref(), metadata);
         conn.execute(
             "UPDATE orders SET metadata = ?2 WHERE order_number = ?1",
             params![order_number, metadata],

@@ -62,6 +62,8 @@ struct Asset {
     height: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     quality: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    remark: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     templates: Vec<Template>,
 }
@@ -331,6 +333,7 @@ fn snapshot(
             width: u32::try_from(image.width).ok(),
             height: u32::try_from(image.height).ok(),
             quality,
+            remark: Some(image.remark),
             templates: image
                 .templates
                 .into_iter()
@@ -386,6 +389,7 @@ fn snapshot(
                 width: None,
                 height: None,
                 quality: None,
+                remark: None,
                 templates: Vec::new(),
             };
             if asset.image_id.as_ref().is_some_and(|id| {
@@ -466,6 +470,7 @@ fn preview(store: &Store, order: &OrderData, reference: String) -> Result<Previe
         ("merchantRemark", "商家备注"),
         ("status", "订单状态"),
         ("amount", "金额"),
+        ("orderedAt", "下单时间"),
         ("specText", "规格"),
     ] {
         if current.get(key) != incoming.get(key) {
@@ -1004,6 +1009,7 @@ fn write_import_file(
         width,
         height,
         quality: asset.quality.clone(),
+        remark: asset.remark.clone(),
         templates: asset
             .templates
             .iter()

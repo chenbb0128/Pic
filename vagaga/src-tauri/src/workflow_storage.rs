@@ -32,7 +32,7 @@ impl Configuration {
             None => {
                 // Preserve the previous choice and reuse complete profiles saved before this setting.
                 let (qiniu, _) = qiniu_settings::load(store)?;
-                if qiniu.enabled {
+                if qiniu.enabled || (qiniu.has_token && !cloud::config_path(root).is_file()) {
                     return Ok(Some(Self::Qiniu(qiniu)));
                 }
                 let nas = cloud::load_config(root);

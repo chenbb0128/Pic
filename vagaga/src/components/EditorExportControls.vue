@@ -7,10 +7,11 @@ import { Input } from './ui/input'
 import { Switch } from './ui/switch'
 
 const props = defineProps<{ source: HTMLElement; filename: HTMLOutputElement }>()
+const editor = props.source.ownerDocument
 const inputs = {
   numberingEnabled: props.source.querySelector<HTMLInputElement>('#numberingEnabled')!,
-  sheetTotal: props.source.querySelector<HTMLInputElement>('#sheetTotal')!,
-  sheetIndex: props.source.querySelector<HTMLInputElement>('#sheetIndex')!,
+  sheetTotal: editor.querySelector<HTMLInputElement>('#sheetTotal')!,
+  sheetIndex: editor.querySelector<HTMLInputElement>('#sheetIndex')!,
   watermarkEnabled: props.source.querySelector<HTMLInputElement>('#watermarkEnabled')!,
   watermarkText: props.source.querySelector<HTMLInputElement>('#watermarkText')!,
   watermarkOpacity: props.source.querySelector<HTMLInputElement>('#watermarkOpacity')!,
@@ -55,15 +56,26 @@ function commitCount(field: 'sheetTotal' | 'sheetIndex', event: Event) {
 
 sync()
 const observer = new MutationObserver(sync)
+const sheetControls = [inputs.sheetTotal, inputs.sheetIndex]
 onMounted(() => {
   props.source.addEventListener('input', sync)
   props.source.addEventListener('change', sync)
+  editor.addEventListener('pic-order-sheets', sync)
+  for (const field of sheetControls) {
+    field.addEventListener('input', sync)
+    field.addEventListener('change', sync)
+  }
   observer.observe(props.source, { subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-expanded'] })
   observer.observe(props.filename, { childList: true, characterData: true, subtree: true })
 })
 onBeforeUnmount(() => {
   props.source.removeEventListener('input', sync)
   props.source.removeEventListener('change', sync)
+  editor.removeEventListener('pic-order-sheets', sync)
+  for (const field of sheetControls) {
+    field.removeEventListener('input', sync)
+    field.removeEventListener('change', sync)
+  }
   observer.disconnect()
 })
 </script>

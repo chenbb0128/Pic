@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { Boxes, Check, CircleCheck, Clock3, Download, PanelsTopLeft, RefreshCw, Search, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, Boxes, Check, CircleCheck, Clock3, Download, GripVertical, PanelsTopLeft, RefreshCw, Search, X } from '@lucide/vue'
 import OptionSelect from '../components/OptionSelect.vue'
 import TemplateSaveDialog from '../components/TemplateSaveDialog.vue'
 import { Button } from '../components/ui/button'
@@ -16,15 +16,18 @@ import {
   deleteOrder,
   getCutoutConfig,
   getOrder,
+  getOrderSort,
   listOrders,
   listProductions,
   saveOrderImage,
+  saveOrderSort,
   saveProduction,
+  setImageRemark,
   setImageTemplates,
   workflowResolveConflict,
   workflowSetLayout,
 } from '../lib/tauri'
-import type { OrderImage, OrderSummary, Production, SyncStatus, WorkflowPreview } from '../types'
+import type { OrderImage, OrderSort, OrderSortMode, OrderSummary, Production, SyncStatus, TemplateQty, WorkflowPreview } from '../types'
 
 const props = defineProps<{
   visible?: boolean
@@ -76,6 +79,18 @@ const orderFilters = [
   { id: 'completed', label: '已完成', detail: '查看已标记完成的订单', icon: CircleCheck },
   { id: 'all', label: '全部订单', detail: '查看所有制作状态', icon: Boxes },
 ] as const
+const orderSort = ref<OrderSort>({ mode: 'time-desc', manual: [] })
+const sortReady = ref(false)
+const sortOptions = [
+  { id: 'time-desc', label: '下单时间 · 新到旧', icon: Clock3 },
+  { id: 'time-asc', label: '下单时间 · 旧到新', icon: Clock3 },
+  { id: 'amount-desc', label: '价格 · 高到低', icon: ArrowDown },
+  { id: 'amount-asc', label: '价格 · 低到高', icon: ArrowUp },
+  { id: 'manual', label: '手动排序', icon: GripVertical },
+] as const
+const draggedOrder = ref<string | null>(null)
+const dropTarget = ref<string | null>(null)
+
 const isOrderComplete = (number: string) => Boolean(
   store.workflowOrders[number]?.localCompleted || store.workflowOrders[number]?.sharedState === 'completed',
 )
@@ -101,10 +116,111 @@ function workflowLabel(number: string) {
 }
 const searchTerm = computed(() => orderSearch.value.trim().toLowerCase())
 const matchingOrders = computed(() => store.orders.filter(matchesOrder))
+const sortedOrders = computed(() => {
+  const { mode, manual } = orderSort.value
+  const ranks = new Map(manual.map((number, index) => [number, index]))
+  const orders = store.orders.map(summary => {
+    const meta = parseMeta(summary.metadata)
+    const orderedAt = meta?.orderedAt
+    const placedAt = typeof orderedAt === 'string' && Number.isFinite(Date.parse(orderedAt)) ? orderedAt : null
+    const priceText = String(meta?.amount ?? '').trim()
+    const amount = /^[¥￥]?\s*\d+(?:,\d{3})*(?:\.\d{1,2})?$/.test(priceText)
+      ? Number(priceText.replace(/[¥￥,\s]/g, '')) : null
+    return {
+      summary, placedAt,
+      time: Date.parse(placedAt ?? summary.createdAt) || 0,
+      amount: amount !== null && Number.isFinite(amount) ? amount : null,
+    }
+  })
+  return orders.sort((a, b) => {
+    if (mode === 'manual') {
+      const rank = (number: string) => ranks.get(number) ?? manual.length
+      const byRank = rank(a.summary.orderNumber) - rank(b.summary.orderNumber)
+      if (byRank) return byRank
+    }
+    if (mode === 'amount-desc' || mode === 'amount-asc') {
+      if (a.amount === null || b.amount === null) {
+        return Number(a.amount === null) - Number(b.amount === null) || b.time - a.time
+      }
+      const byAmount = a.amount - b.amount
+      if (byAmount) return mode === 'amount-asc' ? byAmount : -byAmount
+    }
+    return mode === 'time-asc' ? a.time - b.time : b.time - a.time
+  })
+})
 const visibleEntries = computed(() => {
   const byId = new Map(entries.value.map(entry => [entry.summary.id, entry.images]))
-  return matchingOrders.value.map(summary => ({ summary, images: byId.get(summary.id) ?? [] }))
+  return sortedOrders.value.filter(entry => matchesOrder(entry.summary)).map(entry => ({
+    ...entry, images: byId.get(entry.summary.id) ?? [],
+  }))
 })
+
+let sortWrites = Promise.resolve()
+function persistOrderSort(sort: OrderSort) {
+  orderSort.value = sort
+  sortWrites = sortWrites.then(() => saveOrderSort(sort))
+    .catch(error => toast('error', '保存订单排序失败：' + error))
+}
+
+function changeOrderSort(mode: OrderSortMode) {
+  const current = orderSort.value
+  if (mode === current.mode) return
+  endOrderDrag()
+  const manual = mode === 'manual' && !current.manual.length
+    ? sortedOrders.value.map(entry => entry.summary.orderNumber) : current.manual
+  persistOrderSort({ mode, manual })
+}
+
+function moveOrder(from: string, to: string) {
+  if (orderSort.value.mode !== 'manual' || from === to) return
+  const visible = visibleEntries.value.map(entry => entry.summary.orderNumber)
+  const source = visible.indexOf(from)
+  const target = visible.indexOf(to)
+  if (source < 0 || target < 0) return
+  visible.splice(source, 1)
+  visible.splice(target, 0, from)
+  const visibleNumbers = new Set(visible)
+  let index = 0
+  const manual = sortedOrders.value.map(({ summary }) => visibleNumbers.has(summary.orderNumber)
+    ? visible[index++] : summary.orderNumber)
+  persistOrderSort({ mode: 'manual', manual })
+}
+
+function moveOrderStep(number: string, direction: number) {
+  const rows = visibleEntries.value
+  const index = rows.findIndex(entry => entry.summary.orderNumber === number)
+  const target = rows[index + direction]
+  if (target) moveOrder(number, target.summary.orderNumber)
+}
+
+function startOrderDrag(number: string, event: DragEvent) {
+  if (!event.dataTransfer) return
+  event.stopPropagation()
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', number)
+  draggedOrder.value = number
+  hoverOrderId.value = null
+}
+
+function hoverOrderDrop(number: string, event: DragEvent) {
+  if (!draggedOrder.value) return
+  event.preventDefault()
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+  dropTarget.value = number === draggedOrder.value ? null : number
+}
+
+function dropOrder(number: string, event: DragEvent) {
+  if (!draggedOrder.value) return
+  event.preventDefault()
+  event.stopPropagation()
+  moveOrder(draggedOrder.value, number)
+  endOrderDrag()
+}
+
+function endOrderDrag() {
+  draggedOrder.value = null
+  dropTarget.value = null
+}
 
 function matchesOrder(order: OrderSummary) {
   if (orderFilter.value !== 'all' && (orderFilter.value === 'completed') !== isOrderComplete(order.orderNumber)) return false
@@ -157,6 +273,7 @@ async function refreshProductions(orderNumber: string) {
   if (productionRequests.get(orderNumber) === request) {
     productionsByOrder.value[orderNumber] = productions
   }
+  return productions
 }
 
 function chooseOrder(id: string) {
@@ -172,8 +289,9 @@ function codeOf(templateId: string): string {
   )
 }
 
-function webIdOf(code: string): string {
-  return store.info?.templates.find(t => t.code === code)?.webId ?? code
+function webIdOf(templateId: string): string {
+  const template = store.info?.templates.find(t => t.code === templateId)
+  return template?.legacyWebId ?? template?.webId ?? templateId
 }
 
 function specificationsFor(img: OrderImage) {
@@ -192,12 +310,8 @@ function specificationsFor(img: OrderImage) {
 }
 
 const editingTemplateIds = reactive(new Set<string>())
-async function toggleTemplate(img: OrderImage, webId: string) {
+async function persistTemplates(img: OrderImage, next: TemplateQty[]) {
   if (props.workflowBusy || editingTemplateIds.has(img.id)) return
-  const matches = (templateId: string) => webIdOf(templateId) === webId
-  const next = img.templates.some(t => matches(t.templateId))
-    ? img.templates.filter(t => !matches(t.templateId))
-    : [...img.templates, { templateId: webId, quantity: 1 }]
   editingTemplateIds.add(img.id)
   try {
     await setImageTemplates(img.id, next)
@@ -207,6 +321,52 @@ async function toggleTemplate(img: OrderImage, webId: string) {
     toast('error', `保存模板失败：${error}`)
   } finally {
     editingTemplateIds.delete(img.id)
+  }
+}
+
+function toggleTemplate(img: OrderImage, webId: string) {
+  const matches = (template: TemplateQty) => webIdOf(template.templateId) === webId
+  const next = img.templates.some(matches)
+    ? img.templates.filter(template => !matches(template))
+    : [...img.templates, { templateId: webId, quantity: 1 }]
+  return persistTemplates(img, next)
+}
+
+async function changeTemplateQuantity(img: OrderImage, webId: string, event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  const current = img.templates.find(template => webIdOf(template.templateId) === webId)
+  if (!current) return
+  const quantity = input.valueAsNumber
+  if (!Number.isSafeInteger(quantity) || quantity < 1) {
+    input.value = String(current.quantity)
+    toast('error', '数量请输入大于或等于 1 的整数。')
+    return
+  }
+  if (quantity !== current.quantity) {
+    await persistTemplates(img, img.templates.map(template =>
+      template === current ? { ...template, quantity } : template,
+    ))
+  }
+  input.value = String(img.templates.find(template => template.templateId === current.templateId)?.quantity ?? current.quantity)
+}
+
+const remarkDrafts = reactive<Record<string, string | undefined>>({})
+const savingRemarks = reactive(new Set<string>())
+
+async function saveRemark(img: OrderImage) {
+  const draft = remarkDrafts[img.id]
+  if (draft === undefined || props.workflowBusy || savingRemarks.has(img.id)) return
+  const remark = draft.trim()
+  savingRemarks.add(img.id)
+  try {
+    await setImageRemark(img.id, remark)
+    img.remark = remark
+    delete remarkDrafts[img.id]
+    await loadOrders()
+  } catch (error) {
+    toast('error', `保存图片备注失败：${error}`)
+  } finally {
+    savingRemarks.delete(img.id)
   }
 }
 
@@ -220,6 +380,8 @@ const busyImageId = ref('')
 const lastInjectedOrder = ref<string | null>(null)
 let lastInjectedImageId: string | null = null
 const numberingDrafts = new Map<string, { prefix: string; value: string }>()
+const sheetOverrides = new Map<string, Partial<OrderSheets>>()
+let activePlannedSheetTotal = 1
 let numberingDocument: Document | null = null
 let layoutTimer: ReturnType<typeof setTimeout> | undefined
 let layoutWrites: Promise<void> = Promise.resolve()
@@ -252,7 +414,19 @@ function persistLayout(): Promise<void> {
 }
 
 function onNumberingEdit(event: Event) {
-  const id = (event.target as HTMLElement | null)?.id
+  const input = event.target as HTMLInputElement | null
+  const id = input?.id
+  if (id === 'sheetTotal' || id === 'sheetIndex') {
+    const orderNumber = lastInjectedOrder.value
+    if (!orderNumber || !input) return
+    const override = sheetOverrides.get(orderNumber) ?? {}
+    const field = id === 'sheetTotal' ? 'total' : 'index'
+    const number = input.valueAsNumber
+    if (Number.isInteger(number) && number >= 1 && number <= 999) override[field] = number
+    else if (input.value === '') delete override[field]
+    sheetOverrides.set(orderNumber, override)
+    return
+  }
   if (id !== 'footerText' && id !== 'footerPrefix') return
   const draft = rememberNumbering()
   if (!draft) return
@@ -264,6 +438,48 @@ function onNumberingEdit(event: Event) {
   if (layoutTimer !== undefined) clearTimeout(layoutTimer)
   layoutTimer = setTimeout(() => { void persistLayout().catch(reportLayoutError) }, 300)
 }
+
+function plannedSheetTotal(images: OrderImage[]) {
+  const quantity = images.reduce((total, image) =>
+    total + specificationsFor(image).reduce((sum, spec) => sum + Math.max(0, spec.quantity ?? 0), 0), 0)
+  return Math.min(999, Math.max(1, quantity))
+}
+
+function orderSheets(orderNumber: string, plannedTotal: number, productions: Production[]): OrderSheets {
+  const override = sheetOverrides.get(orderNumber)
+  const total = override?.total ?? plannedTotal
+  const used = new Set<number>()
+  let unnumbered = 0
+  for (const production of productions) {
+    const file = production.filePath?.split(/[\\/]/).pop() ?? ''
+    // The existing export filename stores the page across devices and restarts.
+    const match = / 共\d{1,3}张·第([1-9]\d{0,2})张_/.exec(file)
+    if (match) used.add(Number(match[1]))
+    else unnumbered++
+  }
+  let index = 1
+  while (index < total && (used.has(index) || unnumbered > 0)) {
+    if (!used.has(index)) unnumbered--
+    index++
+  }
+  return { total, index: override?.index ?? index }
+}
+
+function updateActiveOrderSheets(orderNumber: string) {
+  if (orderNumber !== lastInjectedOrder.value) return
+  frame.value?.contentWindow?.__picUpdateOrderSheets?.(
+    orderNumber, orderSheets(orderNumber, activePlannedSheetTotal, orderProductions(orderNumber)),
+  )
+}
+
+watch(entries, current => {
+  const active = current.find(({ summary }) => summary.orderNumber === lastInjectedOrder.value)
+  if (!active) return
+  const total = plannedSheetTotal(active.images)
+  if (total === activePlannedSheetTotal) return
+  activePlannedSheetTotal = total
+  updateActiveOrderSheets(active.summary.orderNumber)
+})
 
 function removeNumberingListeners() {
   numberingDocument?.removeEventListener('input', onNumberingEdit)
@@ -283,6 +499,7 @@ async function applySharedVersion({ orderNumber, reference, localVersion }: Work
   // The modal keeps the canvas inactive while the server checks and applies the replacement.
   await workflowResolveConflict(reference, localVersion, replacingOpenOrder ? null : activeOrder)
   numberingDrafts.delete(orderNumber)
+  sheetOverrides.delete(orderNumber)
   if (expandedOrderNumber.value === orderNumber) {
     expandedOrderId.value = null
   }
@@ -364,14 +581,18 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(binary)
 }
 
-async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumber' | 'metadata'>, templateId?: string) {
+async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'id' | 'orderNumber' | 'metadata'>, templateId?: string) {
   const blocked = makeBlockReason(img)
   if (blocked) {
     status.value = blocked
     return
   }
   if (busyImageId.value || props.workflowBusy) return
-  const { orderNumber, metadata } = order
+  const { id, orderNumber, metadata } = order
+  if (savingProductions.has(orderNumber) || frame.value?.contentWindow?.__picHasPendingExport?.()) {
+    status.value = '成品正在保存，请稍后再制作。'
+    return
+  }
   const layoutNumber = parseMeta(metadata)?.layoutNumber ?? null
   const template = templateId ? webIdOf(templateId) : ''
   busyImageId.value = img.id
@@ -418,6 +639,8 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
       if (!fw.__picOpenTemplate) throw new Error('编辑器无法载入本机模板。')
       await fw.__picOpenTemplate(template, lastInjectedOrder.value !== orderNumber)
     }
+    const [detail, productions] = await Promise.all([getOrder(id), refreshProductions(orderNumber)])
+    const total = plannedSheetTotal(detail?.images ?? [img])
     await fw.__picDoInject({
       b64,
       name: img.originalName || 'order-image.png',
@@ -427,7 +650,9 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'orderNumb
       imageId: img.id,
       layoutNumber,
       numberingDraft: numberingDrafts.get(orderNumber),
+      sheets: orderSheets(orderNumber, total, productions),
     })
+    activePlannedSheetTotal = total
     lastInjectedOrder.value = orderNumber
     lastInjectedImageId = img.id
     lastExport.value = null
@@ -452,6 +677,7 @@ async function onMessage(event: MessageEvent) {
         fileName?: string
         orderNumber?: string | null
         imageId?: string | null
+        sheetIndex?: number
         action?: string
       }
     | null
@@ -489,7 +715,6 @@ async function onMessage(event: MessageEvent) {
     const orderNumber = data.orderNumber === undefined ? lastInjectedOrder.value : data.orderNumber
     const imageId = data.imageId === undefined ? lastInjectedImageId : data.imageId
     savingProductions.set(orderNumber, (savingProductions.get(orderNumber) ?? 0) + 1)
-    editor.__picAcknowledgeOrderExport?.()
     try {
       const saved = await saveProduction(orderNumber, data.b64 ?? '', data.fileName || '成品.png', imageId)
       if (orderNumber) numberingDrafts.delete(orderNumber)
@@ -500,6 +725,9 @@ async function onMessage(event: MessageEvent) {
           saved,
           ...orderProductions(orderNumber).filter(row => row.id !== saved.id),
         ]
+        const override = sheetOverrides.get(orderNumber)
+        if (override && override.index === data.sheetIndex) delete override.index
+        updateActiveOrderSheets(orderNumber)
         void refreshProductions(orderNumber).catch(() => {})
       }
       toast('ok', '成品已保存本地')
@@ -510,6 +738,7 @@ async function onMessage(event: MessageEvent) {
       const count = savingProductions.get(orderNumber) ?? 1
       if (count === 1) savingProductions.delete(orderNumber)
       else savingProductions.set(orderNumber, count - 1)
+      editor.__picAcknowledgeOrderExport?.()
     }
   }
 }
@@ -627,6 +856,9 @@ async function removeImage(imageId: string) {
 /* ---------- 生命周期与联动 ---------- */
 onMounted(() => {
   window.addEventListener('message', onMessage)
+  void getOrderSort().then(saved => { orderSort.value = saved })
+    .catch(error => toast('error', '读取订单排序失败：' + error))
+    .finally(() => { sortReady.value = true })
 })
 
 onBeforeUnmount(() => {
@@ -657,7 +889,8 @@ const hoverPos = ref({ x: 0, y: 0 })
 
 interface OrderMeta {
   status?: string
-  amount?: string
+  amount?: string | number
+  orderedAt?: string
   specText?: string
   layoutNumber?: string
 }
@@ -736,16 +969,32 @@ function orderProductions(orderNumber: string): Production[] {
         </div>
         <OptionSelect v-model="orderFilter" :options="orderFilters" compact aria-label="按制作状态筛选" />
       </div>
+      <div class="orderSort">
+        <span>排序</span>
+        <OptionSelect :model-value="orderSort.mode" :options="sortOptions" :disabled="!sortReady"
+          compact aria-label="订单排序" @update:model-value="changeOrderSort" />
+      </div>
       <div class="items">
         <div v-for="entry in visibleEntries" :key="entry.summary.id" class="orderBlock">
           <div
             class="item"
-            :class="{ on: expandedOrderId === entry.summary.id }"
+            :class="{ on: expandedOrderId === entry.summary.id, dropTarget: dropTarget === entry.summary.orderNumber }"
             @click="chooseOrder(entry.summary.id)"
             @mouseenter="onItemEnter(entry.summary.id, $event)"
             @mousemove="onItemMove($event)"
             @mouseleave="onItemLeave"
+            @dragover="hoverOrderDrop(entry.summary.orderNumber, $event)"
+            @drop="dropOrder(entry.summary.orderNumber, $event)"
           >
+            <button v-if="orderSort.mode === 'manual'" class="reorderHandle" type="button" draggable="true"
+              :aria-label="'调整订单 ' + entry.summary.orderNumber + ' 的顺序'"
+              title="拖动调整顺序，也可按方向键 ↑ / ↓"
+              @click.stop
+              @dragstart="startOrderDrag(entry.summary.orderNumber, $event)"
+              @dragend="endOrderDrag"
+              @keydown.up.stop.prevent="moveOrderStep(entry.summary.orderNumber, -1)"
+              @keydown.down.stop.prevent="moveOrderStep(entry.summary.orderNumber, 1)"
+            ><GripVertical aria-hidden="true" /></button>
             <Checkbox v-if="uploadableOrders?.has(entry.summary.orderNumber)"
               class="mt-0.5"
               :model-value="uploadSelection?.includes(entry.summary.orderNumber) ?? false" :disabled="workflowBusy"
@@ -755,14 +1004,17 @@ function orderProductions(orderNumber: string): Production[] {
             <div class="itemMain">
               <div class="orderHeading">
                 <span class="num" :title="entry.summary.orderNumber">{{ entry.summary.orderNumber }}</span>
-                <time class="orderTime" :datetime="entry.summary.updatedAt" :title="'更新时间 ' + entry.summary.updatedAt">{{ fmtTime(entry.summary.updatedAt).slice(0, 11) }}</time>
+                <time class="orderTime" :datetime="entry.placedAt ?? entry.summary.createdAt"
+                  :title="(entry.placedAt ? '下单时间 ' : '入库时间 ') + (entry.placedAt ?? entry.summary.createdAt)"
+                >{{ fmtTime(entry.placedAt ?? entry.summary.createdAt).slice(0, 11) }}</time>
                 <span v-if="store.workflowOrders[entry.summary.orderNumber]?.error" class="orderWarning"
                   role="img" :aria-label="workflowLabel(entry.summary.orderNumber)"
                   :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">!</span>
               </div>
-              <div v-if="parseMeta(entry.summary.metadata)?.layoutNumber || (orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
+              <div v-if="entry.amount !== null || parseMeta(entry.summary.metadata)?.layoutNumber || (orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
                 <div class="orderDescriptors">
                   <span v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</span>
+                  <span v-if="entry.amount !== null" class="orderPrice">¥{{ entry.amount.toFixed(2) }}</span>
                   <span v-if="orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)" class="orderDone">已完成</span>
                 </div>
                 <Button
@@ -825,7 +1077,14 @@ function orderProductions(orderNumber: string): Production[] {
                     <div class="selectedRules">
                       <span v-if="!img.templates.length" class="specEmpty">请在下方勾选规格</span>
                       <span v-for="spec in specificationsFor(img).filter(spec => spec.quantity !== null)" :key="spec.webId" class="ruleGroup">
-                        <span class="selectedSpec" :title="spec.code + ' × ' + spec.quantity">{{ spec.code }} × {{ spec.quantity }}</span>
+                        <label class="selectedSpec" :title="spec.code + ' × ' + spec.quantity">
+                          <span>{{ spec.code }} ×</span>
+                          <input class="specQuantity" type="number" min="1" step="1" inputmode="numeric"
+                            :value="spec.quantity" :aria-label="`${spec.code} 数量`"
+                            :disabled="workflowBusy || editingTemplateIds.has(img.id)"
+                            @change="changeTemplateQuantity(img, spec.webId, $event)"
+                            @keydown.enter.prevent="($event.currentTarget as HTMLInputElement).blur()" />
+                        </label>
                         <Button
                           type="button"
                           size="xs"
@@ -847,12 +1106,26 @@ function orderProductions(orderNumber: string): Production[] {
                         role="checkbox"
                         class="ruleChip"
                         :aria-checked="spec.quantity !== null"
-                        :aria-label="`${spec.code} ${spec.name}`"
+                        :aria-label="spec.code === spec.name ? spec.name : `${spec.code} ${spec.name}`"
                         :title="spec.name"
                         :disabled="workflowBusy || editingTemplateIds.has(img.id)"
                         @click.stop="toggleTemplate(img, spec.webId)"
                       >{{ spec.code }}</button>
                     </div>
+                  </div>
+                  <form v-if="remarkDrafts[img.id] !== undefined" class="remarkEditor" @submit.prevent="saveRemark(img)">
+                    <textarea v-model="remarkDrafts[img.id]" rows="2" aria-label="图片备注" placeholder="输入备注"
+                      :disabled="workflowBusy || savingRemarks.has(img.id)" />
+                    <div class="remarkActions">
+                      <button type="submit" :disabled="workflowBusy || savingRemarks.has(img.id)">保存</button>
+                      <button type="button" :disabled="savingRemarks.has(img.id)" @click="delete remarkDrafts[img.id]">取消</button>
+                    </div>
+                  </form>
+                  <div v-else class="imageRemark">
+                    <p v-if="img.remark">{{ img.remark }}</p>
+                    <button type="button" :disabled="workflowBusy" @click="remarkDrafts[img.id] = img.remark ?? ''">
+                      {{ img.remark ? '编辑备注' : '加备注' }}
+                    </button>
                   </div>
                 </div>
                 <button
@@ -938,8 +1211,11 @@ function orderProductions(orderNumber: string): Production[] {
             <div class="hcRow" v-if="parseMeta(entry.summary.metadata)!.status">
               <span class="hcLabel">状态</span>{{ parseMeta(entry.summary.metadata)!.status }}
             </div>
-            <div class="hcRow" v-if="parseMeta(entry.summary.metadata)!.amount">
-              <span class="hcLabel">金额</span>¥{{ parseMeta(entry.summary.metadata)!.amount }}
+            <div class="hcRow" v-if="entry.amount !== null">
+              <span class="hcLabel">金额</span>¥{{ entry.amount.toFixed(2) }}
+            </div>
+            <div class="hcRow" v-if="entry.placedAt">
+              <span class="hcLabel">下单</span>{{ fmtTime(entry.placedAt) }}
             </div>
             <div class="hcRow" v-if="parseMeta(entry.summary.metadata)!.specText">
               <span class="hcLabel">规格</span>{{ parseMeta(entry.summary.metadata)!.specText }}
@@ -1056,6 +1332,14 @@ function orderProductions(orderNumber: string): Production[] {
   flex: 1;
   min-width: 0;
 }
+.orderSort {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 calc(var(--list-inset) + var(--list-scrollbar-width)) 6px var(--list-inset);
+  color: var(--text-dim);
+  font-size: 12px;
+}
 .items {
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -1076,6 +1360,30 @@ function orderProductions(orderNumber: string): Production[] {
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
+}
+.item.dropTarget {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.reorderHandle {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 20px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  cursor: grab;
+}
+.reorderHandle:hover, .reorderHandle:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.reorderHandle:active { cursor: grabbing; }
+.reorderHandle svg {
+  width: 15px;
+  height: 15px;
+  pointer-events: none;
 }
 .chevron {
   flex-shrink: 0;
@@ -1128,6 +1436,12 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
+}
+.orderPrice {
+  color: var(--text-dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .orderDone {
   border-radius: 5px;
@@ -1292,7 +1606,7 @@ function orderProductions(orderNumber: string): Production[] {
   gap: 4px;
 }
 .selectedRules {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 142px), 1fr));
 }
 .allRules {
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1320,11 +1634,72 @@ function orderProductions(orderNumber: string): Production[] {
 }
 .selectedSpec {
   min-width: 0;
-  overflow: hidden;
-  padding: 2px 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 4px 1px 7px;
   font-size: 11px;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.selectedSpec > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.specQuantity {
+  box-sizing: border-box;
+  flex: none;
+  width: 43px;
+  padding: 1px 2px 1px 4px;
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
+.imageRemark, .remarkEditor {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 11px;
+}
+.imageRemark p {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 0;
+  padding: 5px 7px;
+  border-left: 2px solid var(--accent-border);
+  background: var(--bg-input);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.remarkEditor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  resize: vertical;
+}
+.remarkActions {
+  display: flex;
+  gap: 4px;
+}
+.imageRemark button, .remarkActions button {
+  padding: 2px 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 5px;
+  background: var(--bg-input);
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+.imageRemark button:hover:not(:disabled), .remarkActions button:hover:not(:disabled) {
+  background: var(--accent-soft);
 }
 .ruleChip {
   display: inline-flex;

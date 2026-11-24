@@ -180,7 +180,7 @@ watch(templates, catalog => {
           </button>
           <figcaption>
             <div class="templateDetails">
-              <div class="templateTitle"><span class="templateCode">{{ template.code }}</span><span>{{ template.name }}</span></div>
+              <div class="templateTitle"><span v-if="template.code !== template.name" class="templateCode">{{ template.code }}</span><span>{{ template.name }}</span></div>
               <span class="templateMeta">{{ dimensions(template) }}<span v-if="template.enabled === false"> · 已停用</span></span>
             </div>
             <DropdownMenuRoot>

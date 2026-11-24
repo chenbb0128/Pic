@@ -27,21 +27,7 @@
   const ORDER_NUMBER_PATTERN = /P\d{15,22}(?!\d)/g
   let ctxImg = null
 
-  // 内置目录供没有桌面桥接的页面使用。
-  const TEMPLATES = [
-    { code: 'A01', name: '爱心款', id: '模板爱心.png' },
-    { code: 'A02', name: '爱心横版', id: '爱心横版.png' },
-    { code: 'A03', name: '爱心+星星混合版', id: '模板混合.png' },
-    { code: 'A04', name: '粉色款', id: '模板粉色.png' },
-    { code: 'A05', name: '蓝色款', id: '模板蓝色.png' },
-    { code: 'A06', name: '黄色款', id: '模板黄色.png' },
-    { code: 'A07', name: '混合竖版', id: '甜心派对.png' },
-    { code: 'A08', name: '缤纷糖果版', id: '缤纷糖果.png' },
-    { code: 'A09', name: '大头混合横版', id: 'I-ME横版大头.png' },
-    { code: 'A10', name: '心动马卡龙款', id: '爱心心动马卡龙.png' },
-    { code: 'A11', name: '焦糖秋枫混合豹纹', id: '经典豹纹混合.png' },
-    { code: 'A12', name: '奶油黑粉混合豹纹', id: '黑粉奶油混合豹纹.png' },
-  ]
+  const TEMPLATES = /* VAGAGA_TEMPLATES */ []
 
   let nextCatalogRequest = 0
   const catalogRequests = new Map()
@@ -109,6 +95,22 @@
     return remarksByNumber
   }
 
+  function readOrderedAt(text) {
+    const time = text.match(/下单(?:时间)?\s*[：:]?\s*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?\s*T?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/)
+    if (!time) return ''
+    const [year, month, day, hour, minute, second = '00'] = time.slice(1).map(value => value?.padStart(2, '0'))
+    return year + '-' + month + '-' + day + 'T' + hour + ':' + minute + ':' + second + '+08:00'
+  }
+
+  function readOrderAmount(text, prices) {
+    const paid = text.match(/(?:实付款|实付(?:金额)?|订单实收(?:金额)?)\s*[：:]?\s*[¥￥]?\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)/)
+    if (!paid && !prices.length) return ''
+    const cents = value => Math.round(Number(value.replaceAll(',', '')) * 100)
+    const total = paid ? cents(paid[1])
+      : prices.reduce((sum, [, price, qty]) => sum + cents(price) * Number(qty), 0)
+    return Number.isSafeInteger(total) ? (total / 100).toFixed(2) : ''
+  }
+
   /* ---------- 订单面板解析：订单号 + 每规格数量 ---------- */
   // 右侧订单面板（.farmer-chat__right）文本结构（实测）：
   //   待发货P<订单号>下单<时间>支付<时间> <商品名> <规格文本> 规格/尺寸: <规格> 发送
@@ -129,30 +131,25 @@
       const orderNumber = matches[i][0]
       const specs = []
       const specMatches = [...segment.matchAll(/规格\/尺寸:\s*(\S+)/g)]
-      const qtyMatches = [...segment.matchAll(/¥[\d.]+x(\d+)/g)]
+      const prices = [...segment.matchAll(/[¥￥]\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)\s*[x×X]\s*(\d+)/g)]
       for (let s = 0; s < specMatches.length; s++) {
         const specText = specMatches[s][1]
         const code = specText.match(/A\d{2,}/i)?.[0].toUpperCase()
         if (!code) continue
         const template = templates.find(t => t.code === code)
         if (!template) continue
-        const qty = s < qtyMatches.length ? parseInt(qtyMatches[s][1], 10) : 1
+        const qty = Number(prices[s]?.[2] ?? 1)
         specs.push({ code, webId: template.id, qty: qty > 0 ? qty : 1 })
       }
-      // 订单元数据：状态词 / 金额（首个单价×数量）/ 规格文本（制作端悬浮卡展示）
+      // 订单元数据也供制作端的订单列表使用。
       const statusMatch = segment.match(/(待发货|待付款|待收货|已完成|已发货|交易成功|退款中)/)
-      let amount = ''
-      if (qtyMatches.length) {
-        const price = parseFloat(segment.match(/¥([\d.]+)x\d+/)?.[1] || '0')
-        const qty = parseInt(qtyMatches[0][1], 10)
-        if (price > 0) amount = (price * qty).toFixed(2)
-      }
       const remarks = remarksByOrder.get(orderNumber) || []
       orders.push({
         orderNumber,
         specs,
         status: statusMatch ? statusMatch[1] : '',
-        amount,
+        amount: readOrderAmount(segment, prices),
+        orderedAt: readOrderedAt(segment),
         specText: specs.map(sp => `${sp.code}×${sp.qty}`).join(' '),
         layoutNumber: readLayoutNumber(remarks),
         merchantRemark: remarks.join('\n').slice(0, 4096),
@@ -383,7 +380,7 @@
         (dark ? 'rgba(255,255,255,.3)' : '#c5c9d4') + ';display:inline-flex;align-items:center;justify-content:center;'
       const checkSvg = '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>'
       const code = document.createElement('span')
-      code.textContent = t.code
+      code.textContent = t.code === t.name ? '' : t.code
       code.style.cssText = 'font-weight:700;color:#5b8cff;font-size:11px;min-width:28px;flex-shrink:0;'
       const name = document.createElement('span')
       name.textContent = t.name
@@ -592,6 +589,7 @@
           orderNo: orderNumber,
           status: meta?.status || '',
           amount: meta?.amount || '',
+          orderedAt: meta?.orderedAt || '',
           specText: meta?.specText || '',
           merchantRemark: meta?.merchantRemark || '',
           layoutNumber: meta?.layoutNumber || '',

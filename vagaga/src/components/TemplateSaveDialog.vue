@@ -36,7 +36,7 @@ async function save() {
   const templateCode = code.value.trim().toUpperCase()
   const templateName = name.value.trim()
   if (!templateName || !/^A\d{2,11}$/.test(templateCode)) {
-    error.value = '请输入模板名称和类似 A13 的规格编号。'
+    error.value = '请输入模板名称和类似 A14 的规格编号。'
     return
   }
   saving.value = true

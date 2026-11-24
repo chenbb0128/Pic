@@ -61,8 +61,7 @@ pub fn run() {
             });
 
             // CDP 注入器后台运行；事件转发到前端（分流入库/失败两个频道）。
-            let core_script =
-                include_str!("../assets/vagaga_capture.js").to_string();
+            let core_script = templates::capture_script();
             let (events_tx, mut events_rx) = tokio::sync::mpsc::channel::<cdp::PaidanEvent>(64);
             let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
             let handle = app.handle().clone();
@@ -115,8 +114,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_orders,
+            commands::get_order_sort,
+            commands::save_order_sort,
             commands::get_order,
             commands::set_image_templates,
+            commands::set_image_remark,
             commands::delete_image,
             commands::delete_order,
             commands::get_app_info,
