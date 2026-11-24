@@ -21,6 +21,30 @@ function setup() {
   return { api, reads: () => reads }
 }
 
+// Canvases that record how they are painted, for the clipped-photo layer.
+function recordingSetup(density: number) {
+  const surfaces: any[] = []
+  const document = { createElement() {
+    const calls: any[] = []
+    let current: any
+    const ctx = {
+      scale: (...args: number[]) => calls.push(['scale', ...args]),
+      drawImage: (...args: any[]) => { current = args[0]; calls.push(['image', ...args]) },
+      getImageData: () => ({ data: current.pixels.slice() }),
+      set globalCompositeOperation(mode: string) { calls.push(['composite', mode]) },
+    }
+    const surface = { width: 0, height: 0, getContext: () => ctx, calls }
+    surfaces.push(surface)
+    return surface
+  } }
+  const api = new Function('globalThis', 'document', `${backgroundSource};return globalThis.HeartStarBackground`)({}, document)
+  const target: any[] = [], ctx = {
+    getTransform: () => ({ a: density, d: density }),
+    drawImage: (...args: any[]) => target.push(args),
+  }
+  return { api, surfaces, ctx, target, setDensity: (value: number) => { density = value } }
+}
+
 function checkInside(frame: any, source: ReturnType<typeof image>) {
   const left = frame.x - frame.w / 2, right = frame.x + frame.w / 2
   const top = frame.y - frame.h / 2, bottom = frame.y + frame.h / 2
@@ -217,18 +241,106 @@ describe('heart-star predefined photo placement', () => {
     expect(y + 5 * h / 6).toBeCloseTo(9.7)
   })
 
-  it('clips fitted photos for templates that require a hard photo boundary', () => {
-    const { api } = setup(), source = image(Array(10).fill('##########'))
+  it('clips fitted photos to the artwork itself at the export resolution', () => {
+    const source = image(Array(10).fill('##########'))
     const cfg = { w: 10, h: 10, custom: true, clipFittedPhotos: true,
       slots: [{ x: 5, y: 5, w: 10, h: 10 }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }
-    const calls: any[] = [], clips: any[] = []
-    const ctx = {
-      save() {}, restore() {}, beginPath() {}, rect: (...args: any[]) => clips.push(args), clip() {},
-      drawImage: (...args: any[]) => calls.push(args),
+    // A 600 DPI export draws a 300 DPI sheet at 2×; the photo must follow instead of being enlarged afterwards.
+    const { api, surfaces, ctx, target } = recordingSetup(2), photo = image(['##', '##'])
+    api.drawFittedPhoto(ctx, cfg, source, [{ size: .62, imageScale: 2 }], 0, photo)
+    const layer = surfaces.at(-1)
+    expect(layer).toMatchObject({ width: 20, height: 20 })
+    // The 18.8 × 18.8 photo is centred on the 10 × 10 artwork, then cut to where the artwork is painted.
+    expect(layer.calls).toEqual([
+      ['scale', 2, 2],
+      ['image', photo, expect.closeTo(-4.4), expect.closeTo(-4.4), expect.closeTo(18.8), expect.closeTo(18.8)],
+      ['composite', 'destination-in'],
+      ['image', source, 0, 0, 10, 10, 0, 0, 10, 10],
+    ])
+    expect(target).toEqual([[layer, 0, 0, 10, 10]])
+  })
+
+  it('reuses the clipped photo layer instead of creating canvases on every redraw', () => {
+    const source = image(Array(10).fill('##########'))
+    const cfg = { w: 10, h: 10, custom: true, clipFittedPhotos: true,
+      slots: [{ x: 5, y: 5, w: 10, h: 10 }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }
+    const { api, surfaces, ctx, target } = recordingSetup(2), photo = image(['##', '##'])
+    const states = [{ size: .62, imageScale: 2, dx: 0 }]
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, photo)
+    const layer = surfaces.at(-1), created = surfaces.length, painted = layer.calls.length
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, photo)
+    expect(surfaces).toHaveLength(created)
+    expect(layer.calls).toHaveLength(painted)
+    expect(target).toEqual([[layer, 0, 0, 10, 10], [layer, 0, 0, 10, 10]])
+    states[0]!.dx = 1
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, photo)
+    expect(surfaces).toHaveLength(created)
+    expect(target[2]).toEqual([layer, 0, 0, 10, 10])
+    expect(layer.calls.slice(painted)).toEqual([
+      ['scale', 2, 2],
+      // The photo centre moves from 5 to 6, so its left edge moves from -4.4 to -3.4.
+      ['image', photo, expect.closeTo(-3.4), expect.closeTo(-4.4), expect.closeTo(18.8), expect.closeTo(18.8)],
+      ['composite', 'destination-in'],
+      ['image', source, 0, 0, 10, 10, 0, 0, 10, 10],
+    ])
+  })
+
+  it('re-renders the clipped photo layer when the export resolution changes', () => {
+    const source = image(Array(10).fill('##########'))
+    const cfg = { w: 10, h: 10, custom: true, clipFittedPhotos: true,
+      slots: [{ x: 5, y: 5, w: 10, h: 10 }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }
+    const { api, surfaces, ctx, target, setDensity } = recordingSetup(2), photo = image(['##', '##'])
+    const states = [{ size: .62, imageScale: 2 }]
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, photo)
+    const layer = surfaces.at(-1), painted = layer.calls.length
+    setDensity(1)
+    api.drawFittedPhoto(ctx, cfg, source, states, 0, photo)
+    expect(layer).toMatchObject({ width: 10, height: 10 })
+    expect(layer.calls.slice(painted)).toEqual([
+      ['scale', 1, 1],
+      ['image', photo, expect.closeTo(-4.4), expect.closeTo(-4.4), expect.closeTo(18.8), expect.closeTo(18.8)],
+      ['composite', 'destination-in'],
+      ['image', source, 0, 0, 10, 10, 0, 0, 10, 10],
+    ])
+  })
+
+  it('keeps cropped photos inside the artwork when the editor draws them', () => {
+    const source = image(Array(10).fill('##########')), photo = image(['####', '####'])
+    const cfg = { w: 10, h: 10, custom: true, clipFittedPhotos: true, background: source,
+      slots: [{ x: 5, y: 5, w: 10, h: 10, type: 'rect' }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }
+    const { api, surfaces } = recordingSetup(2)
+    const target: any[] = [], shapes: any[] = []
+    const env: any = { sharedLibrary: undefined, rowControls: undefined, solidBackgroundEditor: undefined, aiCutoutEditor: undefined, photoThumbnails: undefined,
+      photoLightingEditor: undefined, photoLighting: { source: (image: any) => image },
+      photoFrameRequest: 0, sel: { value: 'test' }, templates: { test: cfg },
+      states: [{ size: .62, dx: 0, dy: 0, imageScale: 1, imageDx: 1, clip: true }],
+      slotBackgrounds: { update() {}, busy: () => false, hasAny: () => false },
+      updateMotifControls() {}, updateCanvasSize: () => true, canvas: { width: 20, height: 20 },
+      ctx: { clearRect() {}, save() {}, restore() {}, beginPath() {}, rect() {}, clip() {}, scale() {}, getTransform: () => ({ a: 2, d: 2 }),
+        drawImage: (...args: any[]) => target.push(args) },
+      renderConfig: () => ({ contentPxW: 20, contentPxH: 20 }), motifEditor: { source: () => source, busy: () => false },
+      HeartStarBackground: api, slotPhoto: () => photo, selectedSlots: new Set(), clip: { checked: true },
+      slotShape: () => 'rect', clipPath: (_c: unknown, type: string, ...box: number[]) => shapes.push([type, ...box]),
+      drawFooter() {}, updatePhotoControls() {}, backgroundDrag: { update() {} }, download: {}, watermarkDownload: {},
+      hasSlotPhotos: () => true, customDirty: false, customBusy: false, exportBusy: false, photoUploadBusy: false, replacementBusy: false,
     }
-    api.drawFittedPhoto(ctx, cfg, source, [{ size: .62, imageScale: 2 }], 0, image(['##', '##']))
-    expect(calls).toHaveLength(1)
-    expect(clips[0]).toEqual([expect.closeTo(.3), expect.closeTo(.3), expect.closeTo(9.4), expect.closeTo(9.4)])
+    const code = toolHtml.slice(toolHtml.indexOf('function draw(showSelection'), toolHtml.indexOf('function chooseAtCanvas('))
+    const draw = new Function('env', `with(env){${code};return draw}`)(env)
+    draw(false)
+    // The sheet never receives the photo itself, only a layer already cut to the artwork.
+    expect(target.filter(call => call[0] === photo)).toEqual([])
+    const layer = surfaces.at(-1)
+    expect(layer).toMatchObject({ width: 20, height: 20 })
+    expect(target).toContainEqual([layer, 0, 0, 10, 10])
+    // A cropped 4 × 2 photo fills the 6.2 × 6.2 frame: it grows to 12.4 × 6.2 and shifts 1 px right.
+    expect(layer.calls).toEqual([
+      ['scale', 2, 2],
+      ['image', photo, expect.closeTo(-0.2), expect.closeTo(1.9), expect.closeTo(12.4), expect.closeTo(6.2)],
+      ['composite', 'destination-in'],
+      ['image', source, 0, 0, 10, 10, 0, 0, 10, 10],
+    ])
+    // The chosen crop shape still applies on top of the artwork boundary.
+    expect(shapes).toEqual([['rect', 5, 5, 6.2, 6.2]])
   })
 
   it('keeps manual scaling and offsets, and invalidates the area when the motif changes', () => {

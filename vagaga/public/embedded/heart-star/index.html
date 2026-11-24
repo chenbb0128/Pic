@@ -319,7 +319,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </section>
 </main>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
-<script src="./slot-background.js?v=strawberry-1"></script>
+<script src="./slot-background.js?v=christmas-clip-1"></script>
 <script src="./solid-background.js?v=solid-3"></script>
 <script src="./solid-background-quick.js?v=quick-1"></script>
 <script src="./ai-cutout.js?v=ai-1"></script>
@@ -707,7 +707,7 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true,include
   if(cfg.text)drawCopy(x,y,w,h,st.size,st.text??DEFAULT_COPY);
   else {
    if(HeartStarBackground.has(st)){const b=HeartStarBackground.regions(cfg,templateImage,states)[i];HeartStarBackground.draw(ctx,st,b.x,b.y,b.w,b.h,templateImage)}
-   if(im){if(HeartStarBackground.photoOnly(st))HeartStarBackground.drawPhoto(ctx,cfg,templateImage,states,i,im);else if(fit)HeartStarBackground.drawFittedPhoto(ctx,cfg,templateImage,states,i,im);else{ctx.save();if(st.clip){clipPath(ctx,slotShape(p,i),x,y,w,h);ctx.clip()}const ratio=Math.max(w/im.width,h/im.height)*(st.imageScale??1),dw=im.width*ratio,dh=im.height*ratio;ctx.drawImage(im,x+(st.imageDx||0)-dw/2,y+(st.imageDy||0)-dh/2,dw,dh);ctx.restore()}}
+   if(im){if(HeartStarBackground.photoOnly(st))HeartStarBackground.drawPhoto(ctx,cfg,templateImage,states,i,im);else if(fit)HeartStarBackground.drawFittedPhoto(ctx,cfg,templateImage,states,i,im);else{ctx.save();if(st.clip){clipPath(ctx,slotShape(p,i),x,y,w,h);ctx.clip()}if(cfg.clipFittedPhotos)HeartStarBackground.drawCoverPhoto(ctx,cfg,templateImage,states,i,im,x,y,w,h);else{const ratio=Math.max(w/im.width,h/im.height)*(st.imageScale??1),dw=im.width*ratio,dh=im.height*ratio;ctx.drawImage(im,x+(st.imageDx||0)-dw/2,y+(st.imageDy||0)-dh/2,dw,dh)}ctx.restore()}}
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
  });
