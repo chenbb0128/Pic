@@ -217,6 +217,20 @@ describe('heart-star predefined photo placement', () => {
     expect(y + 5 * h / 6).toBeCloseTo(9.7)
   })
 
+  it('clips fitted photos for templates that require a hard photo boundary', () => {
+    const { api } = setup(), source = image(Array(10).fill('##########'))
+    const cfg = { w: 10, h: 10, custom: true, clipFittedPhotos: true,
+      slots: [{ x: 5, y: 5, w: 10, h: 10 }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }
+    const calls: any[] = [], clips: any[] = []
+    const ctx = {
+      save() {}, restore() {}, beginPath() {}, rect: (...args: any[]) => clips.push(args), clip() {},
+      drawImage: (...args: any[]) => calls.push(args),
+    }
+    api.drawFittedPhoto(ctx, cfg, source, [{ size: .62, imageScale: 2 }], 0, image(['##', '##']))
+    expect(calls).toHaveLength(1)
+    expect(clips[0]).toEqual([expect.closeTo(.3), expect.closeTo(.3), expect.closeTo(9.4), expect.closeTo(9.4)])
+  })
+
   it('keeps manual scaling and offsets, and invalidates the area when the motif changes', () => {
     const { api, reads } = setup(), source = image(Array(10).fill('##########'))
     const cfg = { w: 10, h: 10, custom: true, slots: [{ x: 5, y: 5, w: 10, h: 10 }], placements: [{ x: 0, y: 0, w: 10, h: 10 }] }

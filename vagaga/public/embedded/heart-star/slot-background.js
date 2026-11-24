@@ -333,8 +333,15 @@
     const ratio = Math.min(f.w * size / bounds.w, f.h * size / bounds.h) * (state.imageScale ?? 1);
     const x = f.x + (state.dx || 0) + (state.imageDx || 0), y = f.y + (state.dy || 0) + (state.imageDy || 0);
     // Draw the FULL image with its original alpha, never a cropped source rect.
+    if (cfg.clipFittedPhotos) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x - f.w * size / 2, y - f.h * size / 2, f.w * size, f.h * size);
+      ctx.clip();
+    }
     ctx.drawImage(image, x - (bounds.x + bounds.w / 2) * ratio, y - (bounds.y + bounds.h / 2) * ratio,
       (image.naturalWidth || image.width) * ratio, (image.naturalHeight || image.height) * ratio);
+    if (cfg.clipFittedPhotos) ctx.restore();
   }
 
   function drawTemplate(ctx, cfg, source, states) {

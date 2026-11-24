@@ -29,7 +29,7 @@
         type: 'rect', row, column, photoArea: { x: center.x, y: center.y, w: photoW, h: photoH } });
       placements.push({ x, y, w: artworkW, h: artworkH });
     }));
-    return { w, h, widthMm, heightMm, slots, placements, motifSlots: [] };
+    return { w, h, widthMm, heightMm, slots, placements, motifSlots: [], clipFittedPhotos: true };
   }
   globalThis.HeartStarChristmas = { name, source, build };
   const select = document.getElementById('template');

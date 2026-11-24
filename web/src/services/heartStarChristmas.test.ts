@@ -15,6 +15,7 @@ describe('Christmas template', () => {
     const bytes = readFileSync(new URL('../../public/embedded/heart-star/' + api.source.split('?')[0].replace('./', ''), import.meta.url))
     expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([cfg.w, cfg.h])
     expect([cfg.w, cfg.h, cfg.widthMm, cfg.heightMm]).toEqual([1701, 2480, 144, 210])
+    expect(cfg.clipFittedPhotos).toBe(true)
     expect(cfg.slots).toHaveLength(38)
     expect(Array.from({ length: 7 }, (_, row) => cfg.slots.filter((slot: any) => slot.row === row).length)).toEqual([4, 4, 6, 6, 6, 6, 6])
     cfg.slots.forEach((slot: any, i: number) => {
