@@ -6,6 +6,7 @@
   const outlineCache = new WeakMap();
   const photoAreaCache = new WeakMap();
   const visiblePhotoCache = new WeakMap();
+  const fittedPhotoCache = new WeakMap();
   const photoOnly = state => ['transparent', 'outline'].includes(state?.background?.type);
   const wholePhoto = state => photoOnly(state) && !state.background.keepLetters;
   function has(state) {
@@ -325,6 +326,33 @@
     return bounds;
   }
 
+  // Paint `image` at (x, y, width, height) in template coordinates, keeping only the part that lies over
+  // the slot's own artwork. One layer per slot, repainted only when something changes.
+  function maskedPhoto(ctx, cfg, source, states, index, image, x, y, width, height) {
+    const region = regions(cfg, source, states)[index];
+    if (!region?.w || !region?.h || !(width > 0) || !(height > 0)) return;
+    const left = Math.max(0, Math.floor(region.x - region.w / 2)), top = Math.max(0, Math.floor(region.y - region.h / 2));
+    const boxWidth = Math.min(cfg.w, Math.ceil(region.x + region.w / 2)) - left, boxHeight = Math.min(cfg.h, Math.ceil(region.y + region.h / 2)) - top;
+    // Paint at the target's resolution, like drawPhoto, so 500/600 DPI exports stay sharp.
+    const transform = ctx.getTransform(), density = Math.max(.1, Math.abs(transform.a), Math.abs(transform.d));
+    const pixelW = Math.max(1, Math.ceil(boxWidth * density)), pixelH = Math.max(1, Math.ceil(boxHeight * density));
+    const key = [source, image, left, top, boxWidth, boxHeight, pixelW, pixelH, x, y, width, height];
+    let cached = fittedPhotoCache.get(states[index]);
+    if (!cached || !key.every((value, i) => value === cached.key[i])) {
+      const layer = cached?.layer || document.createElement('canvas');
+      layer.width = pixelW; layer.height = pixelH;
+      const paint = layer.getContext('2d');
+      paint.scale(pixelW / boxWidth, pixelH / boxHeight);
+      paint.drawImage(image, x - left, y - top, width, height);
+      // Keep only the part over the artwork itself, so star tips, heart notches and gaps stay empty.
+      paint.globalCompositeOperation = 'destination-in';
+      paint.drawImage(source, left, top, boxWidth, boxHeight, 0, 0, boxWidth, boxHeight);
+      cached = { layer, key };
+      fittedPhotoCache.set(states[index], cached);
+    }
+    ctx.drawImage(cached.layer, left, top, boxWidth, boxHeight);
+  }
+
   function drawFittedPhoto(ctx, cfg, source, states, index, image) {
     const bounds = visiblePhotoBounds(image);
     if (!bounds) return;
@@ -333,15 +361,22 @@
     const ratio = Math.min(f.w * size / bounds.w, f.h * size / bounds.h) * (state.imageScale ?? 1);
     const x = f.x + (state.dx || 0) + (state.imageDx || 0), y = f.y + (state.dy || 0) + (state.imageDy || 0);
     // Draw the FULL image with its original alpha, never a cropped source rect.
-    if (cfg.clipFittedPhotos) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x - f.w * size / 2, y - f.h * size / 2, f.w * size, f.h * size);
-      ctx.clip();
+    if (!cfg.clipFittedPhotos) {
+      ctx.drawImage(image, x - (bounds.x + bounds.w / 2) * ratio, y - (bounds.y + bounds.h / 2) * ratio,
+        (image.naturalWidth || image.width) * ratio, (image.naturalHeight || image.height) * ratio);
+      return;
     }
-    ctx.drawImage(image, x - (bounds.x + bounds.w / 2) * ratio, y - (bounds.y + bounds.h / 2) * ratio,
+    maskedPhoto(ctx, cfg, source, states, index, image, x - (bounds.x + bounds.w / 2) * ratio, y - (bounds.y + bounds.h / 2) * ratio,
       (image.naturalWidth || image.width) * ratio, (image.naturalHeight || image.height) * ratio);
-    if (cfg.clipFittedPhotos) ctx.restore();
+  }
+
+  // Cropped photos fill their frame, but still only over the artwork itself.
+  function drawCoverPhoto(ctx, cfg, source, states, index, image, x, y, w, h) {
+    const state = states[index], width = image.naturalWidth || image.width, height = image.naturalHeight || image.height;
+    if (!width || !height) return;
+    const ratio = Math.max(w / width, h / height) * (state.imageScale ?? 1);
+    maskedPhoto(ctx, cfg, source, states, index, image,
+      x + (state.imageDx || 0) - width * ratio / 2, y + (state.imageDy || 0) - height * ratio / 2, width * ratio, height * ratio);
   }
 
   function drawTemplate(ctx, cfg, source, states) {
@@ -636,5 +671,5 @@
     return { update, dragging: () => !!drag };
   }
 
-  globalThis.HeartStarBackground = { has, photoOnly, apply, draw, drawPhoto, drawFittedPhoto, photoFrame, photoAreas, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
+  globalThis.HeartStarBackground = { has, photoOnly, apply, draw, drawPhoto, drawFittedPhoto, drawCoverPhoto, photoFrame, photoAreas, drawTemplate, measureRegions, measureBackgroundRegions, regions, frame, create, createDrag, outerMask };
 })();
