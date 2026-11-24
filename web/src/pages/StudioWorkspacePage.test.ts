@@ -813,6 +813,47 @@ describe('overflow artboards', () => {
     } finally { state.preview = null; cleanup() }
   })
 
+  it.each(['mouse', 'touch'])('画板四角缩放：实时预览、松手生效、取消保留原尺寸（%s）', pointerType => {
+    const { state, asset, cleanup } = mountWorkspace()
+    const canvas = { getBoundingClientRect: () => ({ left: 40, top: 60, width: 216, height: 222 }),
+      setPointerCapture: vi.fn(), hasPointerCapture: () => true, releasePointerCapture: vi.fn(), getContext: () => null }
+    const event = (x: number, y: number, type = 'pointermove') => ({
+      clientX: 40 + x * 2, clientY: 60 + y * 2, pointerId: 1, pointerType, button: 0,
+      currentTarget: canvas, isPrimary: true, type, preventDefault() {},
+    })
+    const original = { itemId: 'one', xMm: 10, yMm: 10, widthMm: 20, heightMm: 10 }
+    const neighbor = { ...original, xMm: 50 }
+    try {
+      state.assets = [asset('one', 2, 20)]
+      state.resetLayout()
+      state.manualPlacements = [original, neighbor]
+      state.numberingEnabled = true
+      state.preview = canvas
+      state.onPointerDown(event(20, 15, 'pointerdown'))
+      state.onPointerEnd(event(20, 15, 'pointerup'))
+      expect(state.resizeOutline).toBeTruthy()
+
+      state.startPlacementResize('se', event(30, 20, 'pointerdown'))
+      state.onPointerMove(event(40, 25))
+      expect(state.selectedSize).toEqual({ ...original, widthMm: 30, heightMm: 15 })
+      expect(state.placements).toEqual([original, neighbor])
+
+      state.onPointerMove(event(60, 35))
+      expect(state.selectedSize.widthMm).toBe(30)
+      expect(state.status).toContain('重叠')
+      state.onPointerEnd(event(60, 35, 'pointerup'))
+      expect(state.placements).toEqual([{ ...original, widthMm: 30, heightMm: 15 }, neighbor])
+
+      state.startPlacementResize('nw', event(10, 10, 'pointerdown'))
+      state.onPointerMove(event(20, 15))
+      expect(state.selectedSize.widthMm).toBeCloseTo(20)
+      state.onPointerEnd(event(20, 15, 'pointercancel'))
+      expect(state.selectedSize.widthMm).toBe(30)
+      expect(state.placements[1]).toEqual(neighbor)
+      expect(canvas.releasePointerCapture).toHaveBeenCalledWith(1)
+    } finally { state.preview = null; cleanup() }
+  })
+
   it.each(['mouse', 'touch'])('直接操作：点选不误移，多选整体拖动且按整体边界限位（%s）', pointerType => {
     const { state, asset, cleanup } = mountWorkspace()
     const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, width: 108, height: 108 }),

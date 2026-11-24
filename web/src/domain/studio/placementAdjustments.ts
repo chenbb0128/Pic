@@ -3,6 +3,7 @@ import { clampPaperPosition, PAPER_MARGIN_MM } from './paperBounds'
 import { findSpacingConflict, type PlacementContour } from './patternSpacing'
 
 interface PointMm { xMm: number; yMm: number }
+export type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se'
 
 export function selectPlacementsInBox(placements: Placement[], start: PointMm, end: PointMm, lockedCount = 0): number[] {
   const left = Math.min(start.xMm, end.xMm)
@@ -69,4 +70,33 @@ export function resizePlacement(placements: Placement[], index: number, widthMm:
     widthMm: width,
     heightMm: height,
   } : placement)
+}
+
+export function resizePlacementFromCorner(slot: Placement, corner: ResizeCorner, delta: PointMm, paper: PaperSize): Placement {
+  const west = corner.endsWith('w')
+  const north = corner.startsWith('n')
+  const anchorX = west ? slot.xMm + slot.widthMm : slot.xMm
+  const anchorY = north ? slot.yMm + slot.heightMm : slot.yMm
+  if (anchorX < PAPER_MARGIN_MM - 1e-6 || anchorX > paper.widthMm - PAPER_MARGIN_MM + 1e-6 ||
+    anchorY < PAPER_MARGIN_MM - 1e-6 || anchorY > paper.heightMm - PAPER_MARGIN_MM + 1e-6) return slot
+  const dx = west ? -slot.widthMm : slot.widthMm
+  const dy = north ? -slot.heightMm : slot.heightMm
+  const availableWidth = west ? anchorX - PAPER_MARGIN_MM : paper.widthMm - PAPER_MARGIN_MM - anchorX
+  const availableHeight = north ? anchorY - PAPER_MARGIN_MM : paper.heightMm - PAPER_MARGIN_MM - anchorY
+  const maxScale = Math.min(availableWidth / slot.widthMm, availableHeight / slot.heightMm)
+  const desiredScale = 1 + (delta.xMm * dx + delta.yMm * dy) / (dx * dx + dy * dy)
+  if (!Number.isFinite(desiredScale) || maxScale <= 0) return slot
+
+  const minScale = Math.min(1, 1 / slot.widthMm, maxScale)
+  const scale = Math.max(minScale, Math.min(maxScale, desiredScale))
+  if (scale === 1) return slot
+  const widthMm = slot.widthMm * scale
+  const heightMm = slot.heightMm * scale
+  return {
+    ...slot,
+    xMm: west ? anchorX - widthMm : anchorX,
+    yMm: north ? anchorY - heightMm : anchorY,
+    widthMm,
+    heightMm,
+  }
 }

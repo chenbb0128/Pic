@@ -31,6 +31,28 @@ describe('resizePlacement', () => {
   })
 })
 
+describe('resizePlacementFromCorner', () => {
+  const slot = { itemId: 'one', xMm: 20, yMm: 15, widthMm: 20, heightMm: 10 }
+  const paper = { widthMm: 100, heightMm: 80 }
+
+  it.each([
+    ['nw', -10, -5, 10, 10],
+    ['ne', 10, -5, 20, 10],
+    ['sw', -10, 5, 10, 15],
+    ['se', 10, 5, 20, 15],
+  ] as const)('anchors the opposite corner when dragging %s', (corner, dx, dy, xMm, yMm) => {
+    expect(adjustments.resizePlacementFromCorner(slot, corner, { xMm: dx, yMm: dy }, paper))
+      .toEqual({ ...slot, xMm, yMm, widthMm: 30, heightMm: 15 })
+  })
+
+  it('preserves the paper margin and stops before crossing the fixed corner', () => {
+    expect(adjustments.resizePlacementFromCorner(slot, 'nw', { xMm: -80, yMm: -40 }, paper))
+      .toEqual({ ...slot, xMm: 4, yMm: 7, widthMm: 36, heightMm: 18 })
+    expect(adjustments.resizePlacementFromCorner(slot, 'se', { xMm: -40, yMm: -20 }, paper))
+      .toEqual({ ...slot, widthMm: 1, heightMm: .5 })
+  })
+})
+
 describe('box selection and equal spacing', () => {
   const slots: Placement[] = [
     { itemId: 'same', xMm: 10, yMm: 10, widthMm: 10, heightMm: 10 },

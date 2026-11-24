@@ -6,7 +6,7 @@ import { DIRECT_CANVAS_MAX_PIXELS, exportSize } from '../domain/studio/exportSiz
 import { flattenGroups, lockGroup, mergeGroups, type LockedGroup } from '../domain/studio/groups'
 import { imageSizePresets } from '../domain/studio/imageSizeConversion'
 import { arrangeItems, customItemGap, orientedPaperSize, paperSize, type LayoutMode, type Orientation, type PaperPreset, type PaperSize, type Placement, type SmartGrouping } from '../domain/studio/layout'
-import { distributePlacements, resizePlacement, selectPlacementsInBox } from '../domain/studio/placementAdjustments'
+import { distributePlacements, resizePlacement, resizePlacementFromCorner, selectPlacementsInBox, type ResizeCorner } from '../domain/studio/placementAdjustments'
 import { clampPaperPosition, PAPER_MARGIN_MM } from '../domain/studio/paperBounds'
 import { DEFAULT_PATTERN_GAP_MM, findSpacingConflict, MIN_PATTERN_GAP_MM, normalizePatternGap, type PlacementContour } from '../domain/studio/patternSpacing'
 import { XIAOHONGSHU_ORDER_TEXT, XIAOHONGSHU_ORDER_URL } from '../domain/order'
@@ -52,6 +52,16 @@ interface AssetDragState {
   clientY: number
   active: boolean
   targetIndex: number | null
+}
+
+interface PlacementResize {
+  pointerId: number
+  handle: HTMLElement
+  index: number
+  corner: ResizeCorner
+  start: { xMm: number; yMm: number }
+  original: Placement
+  candidate: Placement
 }
 
 interface BoxSelection {
@@ -142,6 +152,9 @@ const boxSelection = shallowRef<BoxSelection | null>(null)
 const selectedPlacementIndices = ref<number[]>([])
 const background = ref<'checker' | 'white' | 'dark'>('checker')
 const drag = ref<DragState | null>(null)
+const placementResize = shallowRef<PlacementResize | null>(null)
+const canvasInteracting = computed(() => !!(drag.value || boxSelection.value || placementResize.value))
+const resizeCorners: readonly ResizeCorner[] = ['nw', 'ne', 'sw', 'se']
 const assetDrag = ref<AssetDragState | null>(null)
 const assetRows = new Map<string, HTMLElement>()
 const sidebar = ref<HTMLElement | null>(null)
@@ -257,6 +270,17 @@ const placementCounts = computed(() => {
 const selectedPlacement = computed(() => selectedPlacementIndex.value === null ? null : placements.value[selectedPlacementIndex.value] ?? null)
 const selectedAsset = computed(() => assets.value.find((asset) => asset.id === selectedPlacement.value?.itemId))
 const selectedLocked = computed(() => selectedPlacementIndex.value !== null && selectedPlacementIndex.value < lockedPlacements.value.length)
+const selectedSize = computed(() => placementResize.value?.candidate ?? selectedPlacement.value)
+const resizeOutline = computed(() => {
+  const slot = selectedSize.value
+  if (!slot || selectedLocked.value || drag.value || boxSelection.value) return null
+  return {
+    left: `${100 * slot.xMm / outputPaper.value.widthMm}%`,
+    top: `${100 * slot.yMm / outputPaper.value.heightMm}%`,
+    width: `${100 * slot.widthMm / outputPaper.value.widthMm}%`,
+    height: `${100 * slot.heightMm / outputPaper.value.heightMm}%`,
+  }
+})
 const countMode = computed(() => mode.value === 'custom' || mode.value === 'smart' || mode.value === 'neat')
 const remainingAssets = computed(() => countMode.value ? assets.value
   .filter((asset) => asset.selected || asset.lockedGroupId)
@@ -744,7 +768,9 @@ function render(context: CanvasRenderingContext2D, width: number, height: number
   const imageById = new Map(scene.assets.map((asset) => [asset.id, asset]))
   context.imageSmoothingEnabled = true
   context.imageSmoothingQuality = 'high'
-  for (const [index, slot] of scene.placements.entries()) {
+  const resize = guides ? placementResize.value : null
+  for (const [index, placedSlot] of scene.placements.entries()) {
+    const slot = resize?.index === index ? resize.candidate : placedSlot
     const asset = imageById.get(slot.itemId)
     if (!asset) continue
     const x = slot.xMm * scaleX
@@ -868,6 +894,11 @@ function onWorkspaceKeydown(event: KeyboardEvent): void {
   const target = event.target as HTMLElement | null
   if (target?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"])') ||
     (typeof document !== 'undefined' && document.querySelector?.('dialog[open]'))) return
+  if (placementResize.value) {
+    event.preventDefault()
+    finishPlacementResize(false)
+    return
+  }
   if (selectedPlacementIndex.value === null && !selectedPlacementIndices.value.length) return
   event.preventDefault()
   clearCanvasSelection()
@@ -887,7 +918,7 @@ watch([numberingEnabled, footerPrefix, footerText, sheetTotal, sheetIndex], () =
   if (!clearingDownloadedFooter) clearGenerated()
   void nextTick(renderPreview)
 }, { flush: 'sync' })
-watch([selectedPlacementIndex, selectedPlacementIndices, boxSelection], () => { void nextTick(renderPreview) })
+watch([selectedPlacementIndex, selectedPlacementIndices, boxSelection, placementResize], () => { void nextTick(renderPreview) })
 watch([watermarkEnabled, watermarkText, watermarkOpacity], () => {
   void nextTick(() => { renderPreview(); if (overviewOpen.value) overviewCanvases.forEach((_, index) => renderOverviewBoard(index)) })
 })
@@ -917,12 +948,61 @@ function pointMm(event: PointerEvent, canvas: HTMLCanvasElement): { xMm: number;
 }
 
 function clearCanvasSelection(): void {
-  const pointerId = boxSelection.value?.pointerId ?? drag.value?.pointerId
+  const pointerId = boxSelection.value?.pointerId ?? drag.value?.pointerId ?? placementResize.value?.pointerId
+  const captureTarget = placementResize.value?.handle ?? preview.value
   boxSelection.value = null
   drag.value = null
+  placementResize.value = null
   selectedPlacementIndex.value = null
   selectedPlacementIndices.value = []
-  if (pointerId !== undefined && preview.value?.hasPointerCapture(pointerId)) preview.value.releasePointerCapture(pointerId)
+  if (pointerId !== undefined && captureTarget?.hasPointerCapture(pointerId)) captureTarget.releasePointerCapture(pointerId)
+}
+
+function startPlacementResize(corner: ResizeCorner, event: PointerEvent): void {
+  const canvas = preview.value
+  const handle = event.currentTarget as HTMLElement | null
+  const index = selectedPlacementIndex.value
+  const original = selectedPlacement.value
+  if (!canvas || !handle || index === null || !original || selectedLocked.value || canvasInteracting.value ||
+    overviewOpen.value || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false) return
+  canvas.focus?.({ preventScroll: true })
+  handle.setPointerCapture(event.pointerId)
+  placementResize.value = {
+    pointerId: event.pointerId, handle, index, corner, start: pointMm(event, canvas), original, candidate: original,
+  }
+  event.preventDefault()
+}
+
+function movePlacementResize(event: PointerEvent, canvas: HTMLCanvasElement, current: PlacementResize): void {
+  const point = pointMm(event, canvas)
+  const candidate = resizePlacementFromCorner(current.original, current.corner, {
+    xMm: point.xMm - current.start.xMm,
+    yMm: point.yMm - current.start.yMm,
+  }, paper.value)
+  event.preventDefault()
+  if (candidate.widthMm === current.candidate.widthMm) return
+  if (candidate !== current.original) {
+    const updated = [...placements.value]
+    updated[current.index] = candidate
+    if (!allowPlacementChange(updated, new Set([current.index]))) return
+  }
+  placementResize.value = { ...current, candidate }
+}
+
+function finishPlacementResize(commit: boolean): void {
+  const current = placementResize.value
+  if (!current) return
+  placementResize.value = null
+  if (current.handle.hasPointerCapture(current.pointerId)) current.handle.releasePointerCapture(current.pointerId)
+  if (!commit) {
+    status.value = '已取消缩放，图片恢复原尺寸。'
+  } else if (current.candidate !== current.original) {
+    const index = current.index - lockedPlacements.value.length
+    const updated = [...manualPlacements.value]
+    updated[index] = current.candidate
+    manualPlacements.value = updated
+    status.value = '已调整选中图片大小；其他副本保持不变。'
+  }
 }
 
 function setCanvasSelection(indices: number[]): void {
@@ -943,7 +1023,7 @@ function distributeSelected(axis: 'x' | 'y'): void {
 
 function onPointerDown(event: PointerEvent): void {
   const canvas = preview.value
-  if (!canvas || !placements.value.length || overviewOpen.value || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || drag.value || boxSelection.value) return
+  if (!canvas || !placements.value.length || overviewOpen.value || exporting.value || uploading.value || event.button !== 0 || event.isPrimary === false || canvasInteracting.value) return
   const point = pointMm(event, canvas)
   if (point.xMm < 0 || point.yMm < 0 || point.xMm >= paper.value.widthMm || point.yMm >= paper.value.heightMm) return
   canvas.focus?.({ preventScroll: true })
@@ -992,6 +1072,11 @@ function onPointerDown(event: PointerEvent): void {
 
 function onPointerMove(event: PointerEvent): void {
   const canvas = preview.value
+  const resize = placementResize.value
+  if (resize?.pointerId === event.pointerId && canvas) {
+    movePlacementResize(event, canvas, resize)
+    return
+  }
   const box = boxSelection.value
   if (box && box.pointerId === event.pointerId && canvas) {
     const point = pointMm(event, canvas)
@@ -1042,6 +1127,12 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function onPointerEnd(event: PointerEvent): void {
+  if (placementResize.value?.pointerId === event.pointerId) {
+    const commit = event.type === 'pointerup'
+    if (commit) onPointerMove(event)
+    finishPlacementResize(commit)
+    return
+  }
   const box = boxSelection.value
   if (box?.pointerId === event.pointerId) {
     if (event.type === 'pointerup' && preview.value) {
@@ -1474,36 +1565,45 @@ function onSheetCountChange(kind: 'total' | 'index', event: Event): void {
       <div class="studio-canvas-area" aria-label="画布区域">
         <div ref="viewport" class="studio-viewport">
           <div ref="sheet" class="studio-canvas-sheet" :style="canvasStyle">
-            <canvas ref="preview" :width="previewWidth" :height="previewHeight" tabindex="0" class="studio-canvas studio-editable-canvas shadow-2xl" :class="[`bg-${background}`, { 'is-dragging': drag?.active, 'is-selecting': !!boxSelection }]" aria-label="排版实时预览" aria-describedby="studio-canvas-help" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
+            <canvas ref="preview" :width="previewWidth" :height="previewHeight" tabindex="0" class="studio-canvas studio-editable-canvas shadow-2xl"
+              :class="[`bg-${background}`, { 'is-dragging': drag?.active, 'is-selecting': !!boxSelection }]"
+              :style="placementResize ? { cursor: ['nw', 'se'].includes(placementResize.corner) ? 'nwse-resize' : 'nesw-resize' } : undefined"
+              aria-label="排版实时预览" aria-describedby="studio-canvas-help" @pointerdown="onPointerDown" @pointermove="onPointerMove" @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
+            <div v-if="resizeOutline" class="studio-resize-outline" :style="resizeOutline" aria-hidden="true">
+              <span v-for="corner in resizeCorners" :key="corner" class="studio-resize-handle" :class="'corner-' + corner"
+                title="拖动缩放图片" @pointerdown="startPlacementResize(corner, $event)" @pointermove="onPointerMove"
+                @pointerup="onPointerEnd" @pointercancel="onPointerEnd" @lostpointercapture="onPointerEnd" />
+            </div>
           </div>
         </div>
         <div class="studio-zoom-controls" role="group" aria-label="画布缩放">
-          <button type="button" aria-label="缩小画布" :disabled="zoom <= .5 || !!drag || !!boxSelection" @click="setZoom(zoom - .25)">−</button>
+          <button type="button" aria-label="缩小画布" :disabled="zoom <= .5 || canvasInteracting" @click="setZoom(zoom - .25)">−</button>
           <output :title="'相对适应窗口的放大倍数'">{{ Math.round(zoom * 100) }}%</output>
-          <button type="button" aria-label="放大画布" :disabled="zoom >= 4 || !!drag || !!boxSelection" @click="setZoom(zoom + .25)">+</button>
-          <button type="button" aria-label="适应窗口" :disabled="!!drag || !!boxSelection" @click="fit">适应</button>
-          <button type="button" :aria-label="expanded ? '退出全屏' : '全屏画布'" :aria-pressed="expanded" :disabled="!!drag || !!boxSelection" @click="toggleFullscreen">{{ expanded ? '退出全屏' : '全屏' }}</button>
+          <button type="button" aria-label="放大画布" :disabled="zoom >= 4 || canvasInteracting" @click="setZoom(zoom + .25)">+</button>
+          <button type="button" aria-label="适应窗口" :disabled="canvasInteracting" @click="fit">适应</button>
+          <button type="button" :aria-label="expanded ? '退出全屏' : '全屏画布'" :aria-pressed="expanded" :disabled="canvasInteracting" @click="toggleFullscreen">{{ expanded ? '退出全屏' : '全屏' }}</button>
         </div>
       </div>
       <section aria-label="选中图片调整" class="flex h-14 shrink-0 items-center gap-3 overflow-x-auto rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-white">
-        <p id="studio-canvas-help" class="sr-only">点击图片选中并拖动；空白处拖框多选，Shift 点选增减；拖动任一选中图片可整体移动，Esc 取消选择。</p>
+        <p id="studio-canvas-help" class="sr-only">拖动选中图片的四角可等比缩放，拖动图片内部可移动；空白处拖框多选，Shift 点选增减，Esc 取消。</p>
         <span v-if="selectedPlacementIndex !== null || selectedPlacementIndices.length" class="shrink-0 text-xs font-semibold text-amber-300" aria-live="polite">{{ selectedLocked ? '已选锁定组' : `已选 ${selectedPlacementIndices.length || 1} 张` }}</span>
-        <template v-if="selectedPlacement">
+        <template v-if="selectedSize">
         <strong class="max-w-32 shrink-0 truncate text-xs" :title="selectedAsset?.name">{{ selectedAsset?.name || '选中图片' }}</strong>
         <p v-if="selectedLocked" class="text-xs text-slate-300">锁定组可整体拖动；解锁后可单独调整大小。</p>
         <div v-else class="flex shrink-0 items-center gap-2 text-xs">
           <span class="shrink-0">宽度</span>
-          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base disabled:opacity-40" aria-label="缩小选中图片" :disabled="exporting || uploading || !!drag || !!boxSelection" @click="setSelectedWidth(selectedPlacement.widthMm / 10 - 0.1)">−</button>
-          <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900 disabled:opacity-40" :value="(selectedPlacement.widthMm / 10).toFixed(1)" :disabled="exporting || uploading || !!drag || !!boxSelection" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
+          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base disabled:opacity-40" aria-label="缩小选中图片" :disabled="exporting || uploading || canvasInteracting" @click="setSelectedWidth(selectedSize.widthMm / 10 - 0.1)">−</button>
+          <input type="number" min="0.1" max="42" step="0.1" inputmode="decimal" class="h-9 min-w-0 w-20 rounded-md bg-white px-2 text-center text-sm text-slate-900 disabled:opacity-40" :value="(selectedSize.widthMm / 10).toFixed(1)" :disabled="exporting || uploading || canvasInteracting" aria-label="选中图片宽度厘米" @change="setSelectedWidth(Number(($event.target as HTMLInputElement).value))" />
           <span class="shrink-0">cm</span>
-          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base disabled:opacity-40" aria-label="放大选中图片" :disabled="exporting || uploading || !!drag || !!boxSelection" @click="setSelectedWidth(selectedPlacement.widthMm / 10 + 0.1)">+</button>
+          <button type="button" class="h-9 w-9 shrink-0 rounded-md border border-slate-600 text-base disabled:opacity-40" aria-label="放大选中图片" :disabled="exporting || uploading || canvasInteracting" @click="setSelectedWidth(selectedSize.widthMm / 10 + 0.1)">+</button>
+          <span class="text-slate-300">拖动四角缩放</span>
         </div>
         </template>
         <p v-else class="shrink-0 text-xs text-slate-300">{{ selectedPlacementIndices.length ? '拖动任一选中图片整体移动；Shift 点选增减。' : '点击图片选中并拖动；空白处拖框多选。' }}</p>
         <div class="ml-auto flex shrink-0 items-center gap-1.5 text-xs" aria-label="框选与等间距排列">
-          <button type="button" class="studio-toolbar" title="至少选中 3 张图片后，横向等间距排列" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading || !!drag || !!boxSelection" @click="distributeSelected('x')">横向等间距</button>
-          <button type="button" class="studio-toolbar" title="至少选中 3 张图片后，纵向等间距排列" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading || !!drag || !!boxSelection" @click="distributeSelected('y')">纵向等间距</button>
-          <button type="button" class="shrink-0 px-2 py-1 text-slate-300 disabled:opacity-40" :disabled="(selectedPlacementIndex === null && !selectedPlacementIndices.length) || !!drag || !!boxSelection" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
+          <button type="button" class="studio-toolbar" title="至少选中 3 张图片后，横向等间距排列" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading || canvasInteracting" @click="distributeSelected('x')">横向等间距</button>
+          <button type="button" class="studio-toolbar" title="至少选中 3 张图片后，纵向等间距排列" :disabled="selectedPlacementIndices.length < 3 || exporting || uploading || canvasInteracting" @click="distributeSelected('y')">纵向等间距</button>
+          <button type="button" class="shrink-0 px-2 py-1 text-slate-300 disabled:opacity-40" :disabled="(selectedPlacementIndex === null && !selectedPlacementIndices.length) || canvasInteracting" aria-keyshortcuts="Escape" @click="clearCanvasSelection">取消选择 (Esc)</button>
         </div>
       </section>
       <footer class="studio-statusbar" aria-label="画板状态">
@@ -1569,7 +1669,7 @@ function onSheetCountChange(kind: 'total' | 'index', event: Event): void {
 .studio-menu-item:disabled { opacity: .4; }
 .studio-canvas-area { position: relative; flex: 1 0 auto; min-width: 0; min-height: 320px; height: 60dvh; overflow: hidden; border-radius: 12px; background: #1e293b; }
 .studio-viewport { position: absolute; inset: 0; display: flex; overflow: auto; overscroll-behavior: contain; padding: 12px; scrollbar-gutter: stable; }
-.studio-canvas-sheet { flex: 0 0 auto; margin: auto; }
+.studio-canvas-sheet { position: relative; flex: 0 0 auto; margin: auto; }
 .studio-canvas-sheet > .studio-canvas { display: block; width: 100%; height: 100%; max-width: none; max-height: none; }
 .studio-zoom-controls { position: absolute; right: 12px; bottom: 12px; z-index: 5; display: flex; align-items: center; gap: 2px; border: 1px solid #475569; border-radius: 8px; background: #0f172aeb; padding: 3px; color: #e2e8f0; font-size: 12px; box-shadow: 0 2px 8px #0003; }
 .studio-zoom-controls button { min-width: 28px; height: 28px; border-radius: 5px; padding: 0 7px; }
@@ -1670,6 +1770,30 @@ function onSheetCountChange(kind: 'total' | 'index', event: Event): void {
 .studio-editable-canvas { touch-action: none; }
 .studio-canvas.is-dragging { cursor: grabbing; }
 .studio-canvas.is-selecting, .studio-canvas.is-selecting:active { cursor: crosshair; }
+.studio-resize-outline { position: absolute; pointer-events: none; }
+.studio-resize-handle {
+  position: absolute;
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  touch-action: none;
+}
+.studio-resize-handle::after {
+  width: 11px;
+  height: 11px;
+  border: 1px solid #713f12;
+  border-radius: 2px;
+  background: #fbbf24;
+  box-shadow: 0 0 0 1px white;
+  content: '';
+}
+.studio-resize-handle.corner-nw { top: 0; left: 0; cursor: nwse-resize; }
+.studio-resize-handle.corner-ne { top: 0; left: 100%; cursor: nesw-resize; }
+.studio-resize-handle.corner-sw { top: 100%; left: 0; cursor: nesw-resize; }
+.studio-resize-handle.corner-se { top: 100%; left: 100%; cursor: nwse-resize; }
 @media (max-width: 520px) {
   .studio-gap-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 5px; }
   .studio-gap-row { gap: 3px; font-size: 11px; }
