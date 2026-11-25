@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { inflateSync } from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import source from '../../public/embedded/heart-star/strawberry-template.js?raw'
 import backgroundSource from '../../public/embedded/heart-star/slot-background.js?raw'
@@ -13,10 +14,49 @@ function feature() {
   return scope.HeartStarStrawberry
 }
 
+function sheetBytes() {
+  const api = feature()
+  return readFileSync(new URL('../../public/embedded/heart-star/' + api.source.split('?')[0].replace('./', ''), import.meta.url))
+}
+
+// Decodes the base sheet as exported: 8-bit RGBA without interlacing.
+function sheetAlpha(bytes: Buffer) {
+  expect([bytes[24], bytes[25], bytes[28]]).toEqual([8, 6, 0])
+  const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20)
+  const chunks: Buffer[] = []
+  for (let position = 8; position < bytes.length; position += 12 + bytes.readUInt32BE(position))
+    if (bytes.toString('ascii', position + 4, position + 8) === 'IDAT') chunks.push(bytes.subarray(position + 8, position + 8 + bytes.readUInt32BE(position)))
+  const raw = inflateSync(Buffer.concat(chunks)), stride = width * 4, pixels = Buffer.alloc(height * stride)
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)]
+    for (let x = 0; x < stride; x++) {
+      const at = y * stride + x, a = x >= 4 ? pixels[at - 4] : 0, b = y ? pixels[at - stride] : 0
+      const c = x >= 4 && y ? pixels[at - stride - 4] : 0
+      let value = raw[y * (stride + 1) + 1 + x]
+      if (filter === 1) value += a
+      else if (filter === 2) value += b
+      else if (filter === 3) value += (a + b) >> 1
+      else if (filter === 4) {
+        const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c)
+        value += pa <= pb && pa <= pc ? a : pb <= pc ? b : c
+      }
+      pixels[at] = value & 255
+    }
+  }
+  return { width, height, alpha: (x: number, y: number) => pixels[y * stride + x * 4 + 3] }
+}
+
+// The sheet is decoded once per run; two tests read its pixels.
+let decoded: ReturnType<typeof sheetAlpha> | undefined
+function baseSheet() {
+  decoded ??= sheetAlpha(sheetBytes())
+  return decoded
+}
+
 describe('strawberry template', () => {
   it('loads the full-resolution PNG with 36 non-overlapping artwork and photo positions', () => {
     const api = feature(), cfg = api.build()
-    const bytes = readFileSync(new URL('../../public/embedded/heart-star/' + api.source.split('?')[0].replace('./', ''), import.meta.url))
+    const bytes = sheetBytes()
     expect([bytes.readUInt32BE(16), bytes.readUInt32BE(20)]).toEqual([cfg.w, cfg.h])
     expect([cfg.w, cfg.h, cfg.widthMm, cfg.heightMm]).toEqual([1701, 2480, 144, 210])
     expect(cfg.slots).toHaveLength(36)
@@ -56,7 +96,9 @@ describe('strawberry template', () => {
     const photo = { width: 100, height: 200 }, calls: any[] = [], area = cfg.slots[4].photoArea
     states[4] = { size: .62, dx: 10, dy: -5 }
     api.drawFittedPhoto({ drawImage: (...args: any[]) => calls.push(args) }, cfg, {}, states, 4, photo)
-    expect(calls[0].slice(1)).toEqual([area.x + 10 - area.h / 4, area.y - 5 - area.h / 2, area.h / 2, area.h])
+    // A 100 x 200 photo is limited by the area height: it becomes half as wide as the area is tall.
+    expect(calls[0].slice(1)).toEqual([expect.closeTo(area.x + 10 - area.h / 4), expect.closeTo(area.y - 5 - area.h / 2),
+      expect.closeTo(area.h / 2), expect.closeTo(area.h)])
   })
 
   it('centers every row with more than 5 mm on each side and keeps photo frames inside their artwork', () => {
@@ -75,6 +117,44 @@ describe('strawberry template', () => {
         expect(photo.x - photo.w / 2).toBeGreaterThanOrEqual(artwork.x)
         expect(photo.x + photo.w / 2).toBeLessThanOrEqual(artwork.x + artwork.w)
       }
+    }
+  })
+
+  it('keeps every photo frame inside its own artwork and centred on it, measured on the base image', () => {
+    const cfg = feature().build(), { width, height, alpha } = baseSheet()
+    // true when every pixel the rectangle touches is painted on the sheet
+    const painted = (left: number, top: number, right: number, bottom: number) => {
+      for (let y = Math.floor(top + 1e-9); y < Math.ceil(bottom - 1e-9); y++)
+        for (let x = Math.floor(left + 1e-9); x < Math.ceil(right - 1e-9); x++)
+          if (x < 0 || y < 0 || x >= width || y >= height || alpha(x, y) < 128) return false
+      return true
+    }
+    cfg.slots.forEach((slot: any, i: number) => {
+      const artwork = cfg.placements[i], photo = slot.photoArea
+      // Centre of area of the motif as it is actually painted on the sheet.
+      let sumX = 0, sumY = 0, count = 0
+      for (let y = Math.floor(artwork.y - 6); y < Math.ceil(artwork.y + artwork.h + 6); y++)
+        for (let x = Math.floor(artwork.x - 6); x < Math.ceil(artwork.x + artwork.w + 6); x++)
+          if (alpha(x, y) >= 128) { sumX += x + .5; sumY += y + .5; count++ }
+      expect(count, `slot ${i} artwork`).toBeGreaterThan(1000)
+      expect(Math.abs(photo.x - sumX / count), `slot ${i} horizontal centre`).toBeLessThanOrEqual(1.5)
+      expect(Math.abs(photo.y - sumY / count), `slot ${i} vertical centre`).toBeLessThanOrEqual(1.5)
+      // The editor draws a 4 px dashed selection frame 6% larger than the photo area.
+      // The dashed line, half its stroke width included, must stay on the artwork.
+      expect(painted(photo.x - photo.w * .53 - 2, photo.y - photo.h * .53 - 2, photo.x + photo.w * .53 + 2, photo.y + photo.h * .53 + 2), `slot ${i} frame`).toBe(true)
+    })
+  })
+
+  it('centres every row of the base image on the sheet', () => {
+    const cfg = feature().build(), { width, alpha } = baseSheet()
+    for (let row = 0; row < 7; row++) {
+      const boxes = cfg.placements.filter((_: any, i: number) => cfg.slots[i].row === row)
+      const top = Math.floor(Math.min(...boxes.map((box: any) => box.y)) - 6), bottom = Math.ceil(Math.max(...boxes.map((box: any) => box.y + box.h)) + 6)
+      let left = width, right = -1
+      for (let y = top; y < bottom; y++) for (let x = 0; x < width; x++) if (alpha(x, y) >= 128) { left = Math.min(left, x); right = Math.max(right, x) }
+      left = left as number; right = right as number
+      expect(Math.abs(left - (width - 1 - right)), `row ${row + 1} margins`).toBeLessThanOrEqual(1)
+      expect(left / width * cfg.widthMm, `row ${row + 1} margin`).toBeGreaterThan(5)
     }
   })
 
