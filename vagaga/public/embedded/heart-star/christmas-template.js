@@ -13,6 +13,17 @@
       [[[73, 1787, 274, 298]], [[361, 1787, 274, 298]], [[657, 1787, 274, 298]], [[956, 1787, 249, 298]], [[1219, 1787, 249, 298]], [[1485, 1787, 249, 298]]],
       [[[83, 2112, 242, 277]], [[371, 2112, 242, 277]], [[677, 2112, 242, 277]], [[957, 2112, 208, 277]], [[1209, 2112, 208, 277]], [[1477, 2112, 208, 277]]],
     ];
+    // Centers are relative to the artwork bounds. Custom sizes are in sheet pixels.
+    const centered = [.5, .5];
+    const photoFrames = [
+      [centered],
+      [[.50, .575, 112, 114]], // Stars
+      [centered],
+      [centered],
+      [[.50, .45, 104, 109]], // Hearts
+      [[.50, .62, 162, 164], [.42, .56, 114, 132]], // Gift boxes, mittens
+      [[.51, .635, 96, 102], [.57, .53, 82, 102]], // Trees, stockings
+    ];
     const rowOffsets = [20.5, 12.5, 11.5, 7, 7, -29.5, -10];
     const originalW = 1748, w = 1701, h = 2480, widthMm = 144, heightMm = 210;
     const scaleY = .95, scaleX = scaleY * 148 / widthMm * w / originalW;
@@ -23,10 +34,11 @@
       const [originalX, originalY, originalWBox, originalHBox] = box;
       const x = moveX(originalX + rowOffsets[row]), y = moveY(originalY);
       const artworkW = originalWBox * scaleX, artworkH = originalHBox * scaleY;
-      const photoW = artworkW * .62, photoH = artworkH * .62;
-      const center = { x: x + artworkW / 2, y: y + artworkH / 2 };
-      slots.push({ x: center.x, y: center.y, w: photoW / .62, h: photoH / .62,
-        type: 'rect', row, column, photoArea: { x: center.x, y: center.y, w: photoW, h: photoH } });
+      const frames = photoFrames[row];
+      const [cx, cy, photoW = artworkW * .62, photoH = artworkH * .62] = frames[Math.floor(column / 3)] ?? frames[0];
+      const photoArea = { x: x + artworkW * cx, y: y + artworkH * cy, w: photoW, h: photoH };
+      slots.push({ x: photoArea.x, y: photoArea.y, w: photoW / .62, h: photoH / .62,
+        type: 'rect', row, column, photoArea });
       placements.push({ x, y, w: artworkW, h: artworkH });
     }));
     return { w, h, widthMm, heightMm, slots, placements, motifSlots: [], clipFittedPhotos: true };

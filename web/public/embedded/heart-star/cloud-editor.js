@@ -4,7 +4,7 @@
     return states.map(state => ({ ...state, clip: typeof state.clip === 'boolean' ? state.clip : legacyClip === true }));
   }
   function capture({ name, cfg, base, states, photoAt, catalog, settings, customRows, copy }) {
-    const keys = ['w', 'h', 'slots', 'placements', 'widthMm', 'heightMm', 'contentOffsetX', 'photoTypes', 'text', 'custom', 'notice'];
+    const keys = ['w', 'h', 'slots', 'placements', 'widthMm', 'heightMm', 'contentOffsetX', 'photoTypes', 'text', 'custom', 'notice', 'clipFittedPhotos'];
     const template = Object.fromEntries(keys.filter(k => cfg[k] !== undefined).map(k => [k, cfg[k]]));
     template.motifSlots = catalog; template.name = name;
     if (!cfg.text) template.image = cfg.custom ? cfg.background : base;

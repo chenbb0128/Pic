@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { sheetAlpha } from './heartStarSheetTestSupport.mts'
 import source from '../../public/embedded/heart-star/christmas-template.js?raw'
 import toolHtml from '../../public/embedded/heart-star/index.html?raw'
 
-function feature() {
+function feature(templateScript = source) {
   const scope: any = {}
-  new Function('globalThis', 'document', source)(scope, { getElementById: () => null })
+  new Function('globalThis', 'document', templateScript)(scope, { getElementById: () => null })
   return scope.HeartStarChristmas
 }
 
@@ -45,5 +46,34 @@ describe('Christmas template', () => {
       expect(left / cfg.w * cfg.widthMm).toBeGreaterThan(5)
       expect(right / cfg.w * cfg.widthMm).toBeGreaterThan(5)
     }
+  })
+
+  it('keeps the default photo and selection frame inside all 38 artwork silhouettes', () => {
+    const api = feature(), cfg = api.build()
+    const name = api.source.split('?')[0]
+    const webDir = new URL('../../public/embedded/heart-star/', import.meta.url)
+    const desktopDir = new URL('../../../vagaga/public/embedded/heart-star/', import.meta.url)
+    const webArt = readFileSync(new URL(name, webDir))
+    expect(readFileSync(new URL(name, desktopDir)).equals(webArt)).toBe(true)
+    expect(feature(readFileSync(new URL('christmas-template.js', desktopDir), 'utf8')).build()).toEqual(cfg)
+    expect(readFileSync(new URL('index.html', desktopDir), 'utf8')).toContain('christmas-template.js?v=2')
+    expect(toolHtml).toContain('christmas-template.js?v=2')
+
+    const { alpha } = sheetAlpha(webArt)
+    cfg.slots.forEach((slot: any, i: number) => {
+      const photo = slot.photoArea
+      expect([slot.x, slot.y]).toEqual([photo.x, photo.y])
+      expect(slot.w * .62).toBeCloseTo(photo.w)
+      expect(slot.h * .62).toBeCloseTo(photo.h)
+      // The 6% larger dashed selection box has a 4 px stroke.
+      const dx = photo.w * .53 + 2, dy = photo.h * .53 + 2
+      let transparent = 0
+      for (let y = Math.floor(photo.y - dy); y < Math.ceil(photo.y + dy); y++) {
+        for (let x = Math.floor(photo.x - dx); x < Math.ceil(photo.x + dx); x++) {
+          if (alpha(x, y) < 128) transparent++
+        }
+      }
+      expect(transparent, `photo position ${i + 1}`).toBe(0)
+    })
   })
 })
