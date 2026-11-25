@@ -14,7 +14,7 @@
       && !location.pathname.startsWith('/cstools/login')
   }
   if (!onWorkbench()) return
-  var VER = 'v15'
+  var VER = 'v16'
   // 已打开的旧版页面需刷新。旧脚本没有注销入口，重复注入会同时触发两套菜单。
   if (window.__QF_CORE__ === true) return
   window.__QF_CORE__ = true
@@ -25,7 +25,7 @@
   const PANEL_ID = '__qf_menu__'
   const PLATFORM_MENU_SEL = '.copy-paste'
   const ORDER_NUMBER_PATTERN = /P\d{15,22}(?!\d)/g
-  let ctxImg = null
+  let restorePlatformMenu = null
 
   const TEMPLATES = /* VAGAGA_TEMPLATES */ []
 
@@ -162,9 +162,10 @@
   window.addEventListener(
     'contextmenu',
     e => {
+      restorePlatformMenu?.()
+      restorePlatformMenu = null
       const img = e.target && e.target.closest ? e.target.closest('img') : null
       if (!img || img.clientWidth < 40) return // 仅处理 ≥40px 图片，小图标/文字放行
-      ctxImg = img
       waitForPlatformMenu(img, e.clientX, e.clientY)
     },
     true,
@@ -214,12 +215,25 @@
     return null
   }
 
+  function hidePlatformMenu(menu) {
+    const style = menu.style
+    const visibility = style.getPropertyValue('visibility')
+    const priority = style.getPropertyPriority('visibility')
+    // 千帆可能复用菜单节点。保留平台自己的 display，在下一次右击前解除临时隐藏。
+    style.setProperty('visibility', 'hidden', 'important')
+    restorePlatformMenu = () => {
+      if (style.getPropertyValue('visibility') === 'hidden' && style.getPropertyPriority('visibility') === 'important') {
+        style.setProperty('visibility', visibility, priority)
+      }
+    }
+  }
+
   /* ---------- 嵌入 + 溢出校正 ---------- */
   function embedSection(container, img, templates) {
     try {
       const existing = container.querySelector('#' + SECTION_ID)
       if (existing) existing.remove()
-      const section = buildSection(img, false, templates)
+      const section = buildSection(img, false, templates, () => hidePlatformMenu(container))
       // 平台菜单容器加宽到区块宽度（原宽度装不下排单区块）
       container.style.width = '392px'
       container.style.boxSizing = 'border-box'
@@ -260,7 +274,7 @@
     host.id = PANEL_ID
     host.style.cssText = 'position:fixed;z-index:2147483647;left:0;top:0;'
     const shadow = host.attachShadow({ mode: 'open' })
-    const section = buildSection(img, true, templates)
+    const section = buildSection(img, true, templates, hideStandalone)
     shadow.appendChild(section)
     document.body.appendChild(host)
     requestAnimationFrame(() => {
@@ -285,7 +299,7 @@
   /* ---------- 排单区块构建（dark=独立面板配色） ----------
      结构：头部（订单号和备注编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
      嵌入模式：区块透明融入平台菜单容器，行风格与平台菜单项一致 */
-  function buildSection(img, dark, templates) {
+  function buildSection(img, dark, templates, dismiss) {
     const section = document.createElement('div')
     section.id = SECTION_ID
     section.style.cssText =
@@ -490,11 +504,7 @@
       }
       // 订单规格决定初始勾选，入库使用最终选择。
       const picked = Array.from(selected, ([id, qty]) => ({ id, qty }))
-      if (dark) hideStandalone()
-      else {
-        const menu = document.querySelector(PLATFORM_MENU_SEL)
-        if (menu) menu.style.display = 'none'
-      }
+      dismiss()
       capture(img, orderNumber, picked, { ...order, layoutNumber })
     })
 

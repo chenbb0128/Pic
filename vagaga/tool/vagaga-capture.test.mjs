@@ -7,19 +7,22 @@ const catalog = readFileSync(new URL('../src-tauri/assets/templates.json', impor
 const source = readFileSync(new URL('../src-tauri/assets/vagaga_capture.js', import.meta.url), 'utf8')
   .replace('/* VAGAGA_TEMPLATES */ []', catalog)
 
-function fixture({ document, bridge } = {}) {
-  const window = { addEventListener() {}, qianfanBridge: bridge }
+function fixture({ document, bridge, startPoll = setInterval, stopPoll = clearInterval } = {}) {
+  const window = { addEventListener(type, callback) { this[type] = callback }, qianfanBridge: bridge }
   window.top = window
   vm.runInNewContext(source.replace(/\}\)\(\)\s*$/, `
     window.readLayoutNumber = readLayoutNumber
     window.parseOrderPanel = parseOrderPanel
     window.requestTemplateCatalog = () => requestTemplateCatalog()
+    window.captureWith = onCapture => { capture = onCapture }
     window.buildSection = (templates, onCapture) => {
       capture = onCapture
-      return buildSection({}, false, templates)
+      return buildSection({}, false, templates, () => {})
     }
   })()`), {
-    window, document, setTimeout, clearTimeout,
+    window, document, setTimeout, clearTimeout, setInterval: startPoll, clearInterval: stopPoll,
+    getComputedStyle: element => element.style,
+    requestAnimationFrame() {},
     location: { origin: 'https://walle.xiaohongshu.com', pathname: '/cstools/fixtures' },
   })
   return window
@@ -39,7 +42,8 @@ function panelDocument(specification, textContent = `待发货P1234567890123456�
       tagName: tag.toUpperCase(),
       children: [],
       style: { cssText: '' },
-      appendChild(child) { this.children.push(child) },
+      appendChild(child) { this.children.push(child); child.parentNode = this },
+      remove() { this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1) },
       addEventListener(type, callback) { this[type] = callback },
       setCustomValidity() {},
     }),
@@ -81,6 +85,52 @@ test('uses the built-in catalog when the catalog bridge is unavailable', async (
   const templates = await fixture().requestTemplateCatalog()
   assert.equal(templates[0].code, 'A01')
   assert.equal(templates[0].id, '模板爱心.png')
+})
+
+test('the same platform menu reopens on the first poll while a previous capture is pending', async () => {
+  const document = panelDocument('A05草莓甜心')
+  const menu = document.createElement('div')
+  menu.style = {
+    display: 'block', opacity: '1', visibility: '', priority: '',
+    getPropertyValue() { return this.visibility },
+    getPropertyPriority() { return this.priority },
+    setProperty(_name, value, priority) { this.visibility = value; this.priority = priority },
+  }
+  menu.getBoundingClientRect = () => ({ left: 100, top: 100, width: 120, height: 64 })
+  menu.querySelector = selector => menu.children.find(child => '#' + child.id === selector)
+  document.querySelectorAll = selector => selector === '.copy-paste' ? [menu] : []
+
+  let poll
+  const sent = []
+  const capture = fixture({
+    document,
+    bridge: raw => capture.__qfReceiveTemplateCatalog(JSON.parse(raw).requestId, JSON.parse(catalog)),
+    startPoll: callback => { poll = callback; return 1 },
+    stopPoll: () => { poll = null },
+  })
+  capture.captureWith(img => {
+    sent.push(img)
+    return new Promise(() => {})
+  })
+  async function rightClick(img) {
+    capture.contextmenu({ target: { closest: () => img }, clientX: 100, clientY: 100 })
+    assert.equal(typeof poll, 'function')
+    poll()
+    await Promise.resolve()
+    return menu.children[0]
+  }
+  const firstImage = { clientWidth: 100 }, secondImage = { clientWidth: 100 }
+  const first = await rightClick(firstImage)
+  first.children[4].children[0].click({ stopPropagation() {} })
+  assert.equal(menu.style.visibility, 'hidden')
+  assert.equal(menu.style.display, 'block')
+
+  const second = await rightClick(secondImage)
+  assert.equal(menu.style.visibility, '')
+  assert.notEqual(second, first)
+  assert.equal(menu.children.length, 1)
+  second.children[4].children[0].click({ stopPropagation() {} })
+  assert.deepEqual(sent, [firstImage, secondImage])
 })
 
 test('matches the complete custom code in the order specification', () => {
