@@ -120,7 +120,7 @@ describe('strawberry template', () => {
     }
   })
 
-  it('keeps every photo frame inside its own artwork and centred on it, measured on the base image', () => {
+  it('fits every default photo frame inside its artwork, including the enlarged heart frames', () => {
     const cfg = feature().build(), { width, height, alpha } = baseSheet()
     // true when every pixel the rectangle touches is painted on the sheet
     const painted = (left: number, top: number, right: number, bottom: number) => {
@@ -138,7 +138,13 @@ describe('strawberry template', () => {
           if (alpha(x, y) >= 128) { sumX += x + .5; sumY += y + .5; count++ }
       expect(count, `slot ${i} artwork`).toBeGreaterThan(1000)
       expect(Math.abs(photo.x - sumX / count), `slot ${i} horizontal centre`).toBeLessThanOrEqual(1.5)
-      expect(Math.abs(photo.y - sumY / count), `slot ${i} vertical centre`).toBeLessThanOrEqual(1.5)
+      const heart = slot.row === 3 || slot.row === 4
+      const verticalOffset = heart ? 6 * .95 : 0
+      expect(Math.abs(photo.y - sumY / count - verticalOffset), `slot ${i} vertical position`).toBeLessThanOrEqual(1.5)
+      if (heart) {
+        expect(photo.w * cfg.widthMm / cfg.w).toBeCloseTo(9.09)
+        expect(photo.h * cfg.heightMm / cfg.h).toBeCloseTo(9.69)
+      }
       // The editor draws a 4 px dashed selection frame 6% larger than the photo area.
       // The dashed line, half its stroke width included, must stay on the artwork.
       expect(painted(photo.x - photo.w * .53 - 2, photo.y - photo.h * .53 - 2, photo.x + photo.w * .53 + 2, photo.y + photo.h * .53 + 2), `slot ${i} frame`).toBe(true)
