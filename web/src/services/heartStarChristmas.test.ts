@@ -56,8 +56,8 @@ describe('Christmas template', () => {
     const webArt = readFileSync(new URL(name, webDir))
     expect(readFileSync(new URL(name, desktopDir)).equals(webArt)).toBe(true)
     expect(feature(readFileSync(new URL('christmas-template.js', desktopDir), 'utf8')).build()).toEqual(cfg)
-    expect(readFileSync(new URL('index.html', desktopDir), 'utf8')).toContain('christmas-template.js?v=2')
-    expect(toolHtml).toContain('christmas-template.js?v=2')
+    expect(readFileSync(new URL('index.html', desktopDir), 'utf8')).toContain('christmas-template.js?v=3')
+    expect(toolHtml).toContain('christmas-template.js?v=3')
 
     const { alpha } = sheetAlpha(webArt)
     cfg.slots.forEach((slot: any, i: number) => {
