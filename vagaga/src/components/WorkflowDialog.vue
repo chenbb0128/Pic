@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { ArrowRight, GitCompareArrows, X } from '@lucide/vue'
 import { Button } from './ui/button'
-import { workflowFinish, workflowSync, workflowUpload } from '../lib/tauri'
+import { workflowFinish, workflowReopen, workflowSync, workflowUpload } from '../lib/tauri'
 import { loadInfo, loadOrders, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
 import type { WorkflowPreview } from '../types'
 
@@ -13,7 +13,7 @@ const props = defineProps<{
 }>()
 const store = useOrdersStore()
 const dialog = ref<HTMLDialogElement | null>(null)
-const operation = ref<'upload' | 'sync' | 'finish' | 'resolve' | null>(null)
+const operation = ref<'upload' | 'sync' | 'finish' | 'resolve' | 'reopen' | null>(null)
 const preview = ref<WorkflowPreview | null>(null)
 const conflicts = ref<WorkflowPreview[]>([])
 const activePreview = computed(() => preview.value?.orderNumber === props.activeOrder)
@@ -70,9 +70,16 @@ async function sync() {
     showConflicts(result.conflicts)
     await Promise.all([refresh(), loadInfo().catch(error => toast('error', '刷新模板目录失败：' + error))])
     reportErrors(result.errors)
-    if (!result.errors.length || result.updated || result.completed) {
-      toast('ok', result.updated || result.completed
-        ? `已同步 ${result.updated} 个订单，更新 ${result.completed} 条完成状态。`
+    const claimsChanged = result.claimsChanged ?? 0
+    const templatesUpdated = result.templatesUpdated ?? 0
+    if (!result.errors.length || result.updated || result.completed || claimsChanged || templatesUpdated) {
+      const parts: string[] = []
+      if (result.updated) parts.push(`更新 ${result.updated} 个订单`)
+      if (result.completed) parts.push(`完成 ${result.completed} 单`)
+      if (claimsChanged) parts.push(`同步 ${claimsChanged} 条领单状态`)
+      if (templatesUpdated) parts.push(`更新 ${templatesUpdated} 个模板`)
+      toast('ok', parts.length
+        ? `同步成功：${parts.join('，')}。`
         : result.conflicts.length ? '有订单需要确认。' : '没有新数据。')
     }
   })
@@ -121,7 +128,15 @@ async function finish(orderNumber: string) {
   })
 }
 
-defineExpose({ upload, sync, finish, operation })
+async function reopen(orderNumber: string) {
+  await run('reopen', async () => {
+    await workflowReopen(orderNumber)
+    await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
+    toast('ok', `订单 ${orderNumber} 已返工重开为待制作。`)
+  })
+}
+
+defineExpose({ upload, sync, finish, reopen, operation })
 </script>
 
 <template>

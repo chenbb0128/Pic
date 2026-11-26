@@ -4,9 +4,12 @@ import { listen } from '@tauri-apps/api/event'
 import type { SavedTemplate, TemplateDraft, TemplateInfo } from '../types'
 import type {
   AppInfo,
+  ClaimResponse,
   CloudConfig,
   CloudNotice,
   OrderDetail,
+  OrderEntry,
+  OrderImage,
   OrderSort,
   OrderSummary,
   PaidanEvent,
@@ -25,6 +28,10 @@ import type {
 
 export function listOrders(): Promise<OrderSummary[]> {
   return invoke('list_orders')
+}
+
+export function listOrderEntries(): Promise<OrderEntry[]> {
+  return invoke('list_order_entries')
 }
 
 export function getOrderSort(): Promise<OrderSort> {
@@ -186,8 +193,40 @@ export function workflowSetRole(role: WorkflowRole): Promise<WorkflowSettings> {
   return invoke('workflow_set_role', { role })
 }
 
+export function workflowSetDeviceName(name: string): Promise<WorkflowSettings> {
+  return invoke('workflow_set_device_name', { name })
+}
+
+export function workflowSetAutoSync(enabled: boolean, pollSeconds?: number): Promise<WorkflowSettings> {
+  return invoke('workflow_set_auto_sync', { enabled, pollSeconds })
+}
+
 export function workflowOrders(): Promise<WorkflowOrder[]> {
   return invoke('workflow_orders')
+}
+
+export function workflowClaimOrder(orderNumber: string, force?: boolean): Promise<ClaimResponse> {
+  return invoke('workflow_claim_order', { orderNumber, force })
+}
+
+export function workflowReleaseOrder(orderNumber: string, force?: boolean): Promise<void> {
+  return invoke('workflow_release_order', { orderNumber, force })
+}
+
+export function workflowReopen(orderNumber: string): Promise<void> {
+  return invoke('workflow_reopen', { orderNumber })
+}
+
+export function workflowDownloadProduction(productionId: string): Promise<Production> {
+  return invoke('workflow_download_production', { productionId })
+}
+
+export function workflowDownloadImage(imageId: string): Promise<OrderImage> {
+  return invoke('workflow_download_image', { imageId })
+}
+
+export function onWorkflowChanged(handler: (outcome: WorkflowResult) => void): Promise<() => void> {
+  return listen<WorkflowResult>('workflow:changed', e => handler(e.payload))
 }
 
 export function workflowUpload(orderNumbers: string[]): Promise<WorkflowResult> {
@@ -216,6 +255,10 @@ export function workflowSetLayout(orderNumber: string, number: string): Promise<
 
 export function saveTemplate(input: TemplateDraft & { code: string; name: string }): Promise<TemplateInfo> {
   return invoke('save_template', { input })
+}
+
+export function editSavedTemplate(input: TemplateDraft & { id: string; name: string }): Promise<TemplateInfo> {
+  return invoke('edit_saved_template', { input })
 }
 
 export function getTemplate(id: string): Promise<SavedTemplate | null> {

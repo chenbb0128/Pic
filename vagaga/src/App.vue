@@ -46,7 +46,7 @@ function toggleUpload(orderNumber: string, checked: boolean) {
 }
 
 function sync() {
-  if (store.workflow.role !== 'customer') void workflow.value?.sync()
+  void workflow.value?.sync()
 }
 
 function saveLayout() {
@@ -114,6 +114,7 @@ onBeforeUnmount(() => {
           :uploadable-orders="uploadableOrders"
           :workflow-busy="!!workflow?.operation"
           @finish="workflow?.finish($event)"
+          @reopen="workflow?.reopen($event)"
           @toggle-upload="toggleUpload"
         >
           <template #workflow-actions>
@@ -123,7 +124,7 @@ onBeforeUnmount(() => {
               <CloudUpload v-else aria-hidden="true" />
               {{ workflow?.operation === 'upload' ? '正在上传…' : uploadSelection.length ? `上传（${uploadSelection.length}）` : '上传' }}
             </Button>
-            <Button v-if="store.workflow.role !== 'customer'" type="button" size="xs"
+            <Button type="button" size="xs"
               :variant="store.workflow.role === 'production' ? 'default' : 'outline'" :disabled="!!workflow?.operation" @click="sync">
               <LoaderCircle v-if="workflow?.operation === 'sync'" class="motion-safe:animate-spin" aria-hidden="true" />
               <CloudDownload v-else aria-hidden="true" />

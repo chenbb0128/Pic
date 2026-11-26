@@ -18,6 +18,7 @@ export interface OrderImage {
   createdAt: string
   remark: string
   templates: TemplateQty[]
+  remoteOnly?: boolean
   sourceQuality?: SourceQuality
   syncStatus?: SyncStatus
   syncError?: string
@@ -30,6 +31,11 @@ export interface OrderSummary {
   createdAt: string
   updatedAt: string
   metadata: string | null
+}
+
+export interface OrderEntry {
+  summary: OrderSummary
+  images: OrderImage[]
 }
 
 export interface OrderDetail {
@@ -167,6 +173,9 @@ export interface Production {
   imageId: string | null
   filePath: string
   createdAt: string
+  originalName?: string
+  byteLength?: number
+  remoteOnly?: boolean
   syncStatus?: SyncStatus
   syncError?: string
 }
@@ -184,6 +193,10 @@ export interface WorkflowSettings {
   role: WorkflowRole
   target: string | null
   storageProvider?: StorageProvider | null
+  deviceId?: string
+  deviceName?: string
+  autoSync?: boolean
+  pollSeconds?: number
 }
 
 export interface WorkflowOrder {
@@ -192,6 +205,18 @@ export interface WorkflowOrder {
   sharedState: 'pending' | 'completed' | null
   pendingOperation: 'finish' | 'publish' | null
   error: string | null
+  claimedBy?: string
+  claimedName?: string
+  claimedAt?: number
+  claimedByMe?: boolean
+}
+
+export interface ClaimResponse {
+  ok: boolean
+  claimedBy?: string
+  claimedName?: string
+  claimedAt?: number
+  message?: string
 }
 
 export interface WorkflowPreview {
@@ -206,6 +231,8 @@ export interface WorkflowResult {
   updated: number
   uploadedOrderNumbers: string[]
   completed: number
+  claimsChanged?: number
+  templatesUpdated?: number
   conflicts: WorkflowPreview[]
   errors: string[]
 }

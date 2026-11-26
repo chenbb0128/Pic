@@ -2,13 +2,14 @@
 import { ref } from 'vue'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { saveTemplate } from '../lib/tauri'
+import { editSavedTemplate, saveTemplate } from '../lib/tauri'
 import { loadInfo, toast, useOrdersStore } from '../stores/orders'
-import type { TemplateDraft } from '../types'
+import type { TemplateDraft, TemplateInfo } from '../types'
 
 const emit = defineEmits<{ saved: [] }>()
 const store = useOrdersStore()
 const dialog = ref<HTMLDialogElement | null>(null)
+const editingId = ref<string | null>(null)
 const code = ref('')
 const name = ref('')
 const saving = ref(false)
@@ -17,11 +18,22 @@ let capture: (() => TemplateDraft) | undefined
 
 function open(createDraft: () => TemplateDraft, suggestedName = '') {
   if (saving.value || !dialog.value || dialog.value.open) return
+  editingId.value = null
   const used = new Set(store.info?.templates.map(template => template.code))
-  let next = 13
+  let next = 14
   while (used.has('A' + next)) next++
   code.value = 'A' + next
   name.value = suggestedName
+  error.value = ''
+  capture = createDraft
+  dialog.value.showModal()
+}
+
+function openEdit(existing: TemplateInfo, createDraft: () => TemplateDraft) {
+  if (saving.value || !dialog.value || dialog.value.open) return
+  editingId.value = existing.webId
+  code.value = existing.code
+  name.value = existing.name
   error.value = ''
   capture = createDraft
   dialog.value.showModal()
@@ -35,17 +47,22 @@ async function save() {
   if (saving.value || !capture) return
   const templateCode = code.value.trim().toUpperCase()
   const templateName = name.value.trim()
-  if (!templateName || !/^A\d{2,11}$/.test(templateCode)) {
+  if (!templateName || (!editingId.value && !/^A\d{2,11}$/.test(templateCode))) {
     error.value = '请输入模板名称和类似 A14 的规格编号。'
     return
   }
   saving.value = true
   error.value = ''
   try {
-    await saveTemplate({ ...capture(), code: templateCode, name: templateName })
+    if (editingId.value) {
+      await editSavedTemplate({ ...capture(), id: editingId.value, name: templateName })
+      toast('ok', `模板 ${templateCode} 修改已保存（如需跨设备生效请点击共享模板）。`)
+    } else {
+      await saveTemplate({ ...capture(), code: templateCode, name: templateName })
+      toast('ok', '模板已保存到本机。')
+    }
     dialog.value?.close()
     emit('saved')
-    toast('ok', '模板已保存到本机。')
     await loadInfo().catch(reason => toast('error', '刷新模板目录失败：' + reason))
   } catch (reason) {
     error.value = String(reason)
@@ -54,25 +71,25 @@ async function save() {
   }
 }
 
-defineExpose({ open })
+defineExpose({ open, openEdit })
 </script>
 
 <template>
-  <dialog ref="dialog" class="saveDialog" aria-label="保存模板" @cancel.prevent="close">
+  <dialog ref="dialog" class="saveDialog" :aria-label="editingId ? '保存模板修改' : '保存模板'" @cancel.prevent="close">
     <form class="grid gap-3" @submit.prevent="save">
-      <h2 class="m-0 text-base font-semibold">保存模板</h2>
+      <h2 class="m-0 text-base font-semibold">{{ editingId ? '保存模板修改' : '保存模板' }}</h2>
       <label class="grid gap-1">
         <span>模板名称</span>
         <Input v-model="name" maxlength="80" required autofocus placeholder="例如 草莓横版" :disabled="saving" />
       </label>
       <label class="grid gap-1">
         <span>规格编号</span>
-        <Input v-model="code" maxlength="12" required :disabled="saving" />
+        <Input v-model="code" maxlength="12" required :disabled="saving || !!editingId" />
       </label>
       <p v-if="error" class="m-0 text-destructive" role="alert">{{ error }}</p>
       <div class="flex justify-end gap-2">
         <Button type="button" variant="outline" :disabled="saving" @click="close">取消</Button>
-        <Button type="submit" :disabled="saving">{{ saving ? '正在保存…' : '保存模板' }}</Button>
+        <Button type="submit" :disabled="saving">{{ saving ? '正在保存…' : (editingId ? '保存修改' : '保存模板') }}</Button>
       </div>
     </form>
   </dialog>

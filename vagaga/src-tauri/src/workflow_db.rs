@@ -5,6 +5,12 @@ use serde::Serialize;
 
 use crate::store::{now, random_hex_pub, valid_layout_number, Store};
 
+pub(crate) const CLAIM_LEASE_MS: i64 = 4 * 60 * 60 * 1000;
+
+pub(crate) fn now_ms() -> i64 {
+    chrono::Utc::now().timestamp_millis()
+}
+
 pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS workflow_settings (
@@ -17,7 +23,14 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
              order_number TEXT PRIMARY KEY, local_completed INTEGER NOT NULL DEFAULT 0,
              target TEXT, revision INTEGER NOT NULL DEFAULT 0, shared_state TEXT,
              synced_generation INTEGER NOT NULL DEFAULT 0,
-             remote_operation_id TEXT
+             remote_operation_id TEXT,
+             claimed_by TEXT,
+             claimed_name TEXT,
+             claimed_at INTEGER
+         );
+         CREATE TABLE IF NOT EXISTS workflow_synced_snapshots (
+             order_number TEXT PRIMARY KEY,
+             payload TEXT NOT NULL
          );
          CREATE TABLE IF NOT EXISTS workflow_tasks (
              order_number TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
@@ -28,10 +41,12 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
          CREATE TABLE IF NOT EXISTS workflow_remote_ids (
              local_id TEXT PRIMARY KEY, remote_id TEXT NOT NULL
          );
-         CREATE TRIGGER IF NOT EXISTS workflow_delete_order AFTER DELETE ON orders
+         DROP TRIGGER IF EXISTS workflow_delete_order;
+         CREATE TRIGGER workflow_delete_order AFTER DELETE ON orders
          BEGIN
              DELETE FROM workflow_changes WHERE order_number = OLD.order_number;
              DELETE FROM workflow_orders WHERE order_number = OLD.order_number;
+             DELETE FROM workflow_synced_snapshots WHERE order_number = OLD.order_number;
              DELETE FROM workflow_tasks WHERE order_number = OLD.order_number;
          END;",
     )?;
@@ -40,6 +55,18 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
     // version and add the operation-id fields used by the current protocol.
     let _ = conn.execute(
         "ALTER TABLE workflow_orders ADD COLUMN remote_operation_id TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workflow_orders ADD COLUMN claimed_by TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workflow_orders ADD COLUMN claimed_name TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE workflow_orders ADD COLUMN claimed_at INTEGER",
         [],
     );
     let _ = conn.execute(
@@ -163,6 +190,85 @@ pub(crate) fn role(store: &Store) -> String {
         .unwrap_or_else(|| "both".into())
 }
 
+pub(crate) fn device_id(store: &Store) -> Result<String, String> {
+    if let Ok((qiniu, _)) = crate::qiniu_settings::load(store) {
+        if let Some(id) = qiniu.device_id.filter(|id| !id.trim().is_empty()) {
+            return Ok(id);
+        }
+    }
+    if let Some(existing) = setting(store, "device-id").map_err(error)? {
+        if !existing.trim().is_empty() {
+            return Ok(existing);
+        }
+    }
+    let generated = format!("dev-{}", random_hex_pub(6));
+    put_setting(store, "device-id", &generated).map_err(error)?;
+    Ok(generated)
+}
+
+fn default_device_name(fallback_id: &str) -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .map(|name| name.trim().chars().take(40).collect::<String>())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| fallback_id.to_owned())
+}
+
+pub(crate) fn device_name(store: &Store) -> Result<String, String> {
+    if let Some(saved) = setting(store, "device-name").map_err(error)? {
+        let trimmed = saved.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_owned());
+        }
+    }
+    let id = device_id(store)?;
+    Ok(default_device_name(&id))
+}
+
+pub(crate) fn set_device_name(store: &Store, name: &str) -> Result<String, String> {
+    let trimmed = name.trim();
+    if trimmed.chars().count() > 40 || trimmed.chars().any(char::is_control) {
+        return Err("设备名称最多 40 个字符，且不能包含控制字符。".into());
+    }
+    if trimmed.is_empty() {
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM workflow_settings WHERE key='device-name'", [])
+            .map_err(error)?;
+    } else {
+        put_setting(store, "device-name", trimmed).map_err(error)?;
+    }
+    device_name(store)
+}
+
+pub(crate) fn sync_cursor(store: &Store, target: &str) -> rusqlite::Result<u64> {
+    let key = format!("cursor:{target}");
+    Ok(setting(store, &key)?
+        .and_then(|val| val.parse::<u64>().ok())
+        .unwrap_or(0))
+}
+
+pub(crate) fn set_sync_cursor(store: &Store, target: &str, seq: u64) -> rusqlite::Result<()> {
+    let key = format!("cursor:{target}");
+    put_setting(store, &key, &seq.to_string())
+}
+
+pub(crate) fn synced_snapshot(store: &Store, number: &str) -> rusqlite::Result<Option<String>> {
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT payload FROM workflow_synced_snapshots WHERE order_number=?1",
+            [number],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
 pub(crate) fn set_layout(store: &Store, number: &str, layout: &str) -> Result<(), String> {
     if !layout.is_empty() && !valid_layout_number(layout) {
         return Err("排版编号格式无效。".into());
@@ -216,6 +322,9 @@ pub(crate) struct OrderState {
     pub(crate) remote_operation_id: Option<String>,
     pub(crate) generation: i64,
     pub(crate) synced_generation: i64,
+    pub(crate) claimed_by: Option<String>,
+    pub(crate) claimed_name: Option<String>,
+    pub(crate) claimed_at: Option<i64>,
 }
 
 impl OrderState {
@@ -228,7 +337,8 @@ fn read_state(conn: &Connection, number: &str) -> rusqlite::Result<Option<OrderS
     conn.query_row(
         "SELECT o.id, COALESCE(s.local_completed,0), s.target,
                 s.shared_state, s.remote_operation_id,
-                COALESCE(c.generation,0), COALESCE(s.synced_generation,0)
+                COALESCE(c.generation,0), COALESCE(s.synced_generation,0),
+                s.claimed_by, s.claimed_name, s.claimed_at
          FROM orders o LEFT JOIN workflow_orders s USING(order_number)
          LEFT JOIN workflow_changes c USING(order_number) WHERE o.order_number=?1",
         [number],
@@ -241,6 +351,9 @@ fn read_state(conn: &Connection, number: &str) -> rusqlite::Result<Option<OrderS
                 remote_operation_id: row.get(4)?,
                 generation: row.get(5)?,
                 synced_generation: row.get(6)?,
+                claimed_by: row.get(7)?,
+                claimed_name: row.get(8)?,
+                claimed_at: row.get(9)?,
             })
         },
     )
@@ -259,12 +372,22 @@ pub(crate) struct OrderRow {
     pub(crate) shared_state: Option<String>,
     pub(crate) pending_operation: Option<String>,
     pub(crate) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_at: Option<i64>,
+    pub(crate) claimed_by_me: bool,
 }
 
 pub(crate) fn list(store: &Store) -> rusqlite::Result<Vec<OrderRow>> {
+    let my_id = device_id(store).unwrap_or_default();
+    let expired_before = now_ms().saturating_sub(CLAIM_LEASE_MS);
     let conn = store.conn.lock().unwrap();
     let mut query = conn.prepare(
-        "SELECT o.order_number, COALESCE(s.local_completed,0), s.shared_state, t.kind, t.error
+        "SELECT o.order_number, COALESCE(s.local_completed,0), s.shared_state, t.kind, t.error,
+                s.claimed_by, s.claimed_name, s.claimed_at
          FROM orders o LEFT JOIN workflow_orders s USING(order_number)
          LEFT JOIN workflow_tasks t ON t.order_number=o.order_number AND t.kind=(
              SELECT kind FROM workflow_tasks WHERE order_number=o.order_number AND kind IN ('publish','finish')
@@ -272,12 +395,31 @@ pub(crate) fn list(store: &Store) -> rusqlite::Result<Vec<OrderRow>> {
          )",
     )?;
     let rows = query.query_map([], |r| {
+        let local_completed: bool = r.get(1)?;
+        let shared_state: Option<String> = r.get(2)?;
+        let raw_claimed_by: Option<String> = r.get(5)?;
+        let raw_claimed_name: Option<String> = r.get(6)?;
+        let raw_claimed_at: Option<i64> = r.get(7)?;
+        let active_claim = !local_completed
+            && shared_state.as_deref() != Some("completed")
+            && raw_claimed_by.as_ref().is_some_and(|id| !id.is_empty())
+            && raw_claimed_at.is_none_or(|ts| ts >= expired_before);
+        let (claimed_by, claimed_name, claimed_at, claimed_by_me) = if active_claim {
+            let by_me = raw_claimed_by.as_deref() == Some(my_id.as_str());
+            (raw_claimed_by, raw_claimed_name, raw_claimed_at, by_me)
+        } else {
+            (None, None, None, false)
+        };
         Ok(OrderRow {
             order_number: r.get(0)?,
-            local_completed: r.get(1)?,
-            shared_state: r.get(2)?,
+            local_completed,
+            shared_state,
             pending_operation: r.get(3)?,
             error: r.get(4)?,
+            claimed_by,
+            claimed_name,
+            claimed_at,
+            claimed_by_me,
         })
     })?;
     rows.collect()
@@ -366,11 +508,191 @@ pub(crate) fn finish_task(
             operation_id,
             task.generation,
         )?;
+        if state == "completed" {
+            tx.execute(
+                "UPDATE workflow_orders SET claimed_by=NULL, claimed_name=NULL, claimed_at=NULL WHERE order_number=?1",
+                [&task.number],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO workflow_synced_snapshots(order_number, payload) VALUES (?1, ?2)
+             ON CONFLICT(order_number) DO UPDATE SET payload = excluded.payload",
+            params![task.number, task.payload],
+        )?;
     }
     tx.execute(
         "DELETE FROM workflow_tasks WHERE order_number=?1 AND kind=?2",
         params![task.number, task.kind],
     )?;
+    tx.commit()
+}
+
+pub(crate) fn update_claim_local(
+    store: &Store,
+    number: &str,
+    target: Option<&str>,
+    claimed_by: Option<&str>,
+    claimed_name: Option<&str>,
+    claimed_at: Option<i64>,
+) -> rusqlite::Result<bool> {
+    let conn = store.conn.lock().unwrap();
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM orders WHERE order_number=?1)",
+        [number],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Ok(false);
+    }
+    conn.execute(
+        "INSERT INTO workflow_orders(order_number, target, claimed_by, claimed_name, claimed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(order_number) DO UPDATE SET
+            target = COALESCE(excluded.target, workflow_orders.target),
+            claimed_by = excluded.claimed_by,
+            claimed_name = excluded.claimed_name,
+            claimed_at = excluded.claimed_at",
+        params![number, target, claimed_by, claimed_name, claimed_at],
+    )?;
+    Ok(true)
+}
+
+pub(crate) fn reopen_local(
+    store: &Store,
+    number: &str,
+    target: Option<&str>,
+    operation_id: Option<&str>,
+    payload: Option<&str>,
+) -> rusqlite::Result<()> {
+    let mut conn = store.conn.lock().unwrap();
+    let tx = conn.transaction()?;
+    let generation: i64 = tx
+        .query_row(
+            "SELECT COALESCE(generation, 0) FROM workflow_changes WHERE order_number=?1",
+            [number],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    tx.execute(
+        "DELETE FROM workflow_tasks WHERE order_number=?1 AND kind='finish'",
+        [number],
+    )?;
+    if let (Some(target), Some(op_id)) = (target, operation_id) {
+        tx.execute(
+            "INSERT INTO workflow_orders(order_number, local_completed, target, shared_state, synced_generation, remote_operation_id, claimed_by, claimed_name, claimed_at)
+             VALUES (?1, 0, ?2, 'pending', ?3, ?4, NULL, NULL, NULL)
+             ON CONFLICT(order_number) DO UPDATE SET
+                local_completed = 0,
+                target = excluded.target,
+                shared_state = 'pending',
+                synced_generation = excluded.synced_generation,
+                remote_operation_id = excluded.remote_operation_id,
+                claimed_by = NULL,
+                claimed_name = NULL,
+                claimed_at = NULL",
+            params![number, target, generation, op_id],
+        )?;
+    } else {
+        tx.execute(
+            "INSERT INTO workflow_orders(order_number, local_completed, claimed_by, claimed_name, claimed_at)
+             VALUES (?1, 0, NULL, NULL, NULL)
+             ON CONFLICT(order_number) DO UPDATE SET
+                local_completed = 0,
+                shared_state = CASE WHEN workflow_orders.target IS NULL THEN NULL ELSE 'pending' END,
+                claimed_by = NULL,
+                claimed_name = NULL,
+                claimed_at = NULL",
+            [number],
+        )?;
+    }
+    if let Some(payload) = payload {
+        tx.execute(
+            "INSERT INTO workflow_synced_snapshots(order_number, payload) VALUES (?1, ?2)
+             ON CONFLICT(order_number) DO UPDATE SET payload = excluded.payload",
+            params![number, payload],
+        )?;
+    }
+    tx.commit()
+}
+
+pub(crate) fn save_downloaded_production(
+    store: &Store,
+    production_id: &str,
+    file_path: &std::path::Path,
+    byte_length: u64,
+) -> rusqlite::Result<()> {
+    let mut conn = store.conn.lock().unwrap();
+    let tx = conn.transaction()?;
+    let order_number: Option<String> = tx
+        .query_row(
+            "SELECT order_number FROM productions WHERE id=?1",
+            [production_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(order_number) = order_number else {
+        return Ok(());
+    };
+    let was_clean = read_state(&tx, &order_number)?
+        .is_some_and(|st| st.generation == st.synced_generation);
+    tx.execute(
+        "UPDATE productions SET file_path=?2, byte_length=?3 WHERE id=?1",
+        params![production_id, file_path.to_string_lossy(), byte_length as i64],
+    )?;
+    if was_clean {
+        tx.execute(
+            "UPDATE workflow_orders SET synced_generation = COALESCE(
+                (SELECT generation FROM workflow_changes WHERE order_number=?1), 0
+             ) WHERE order_number=?1",
+            [&order_number],
+        )?;
+    }
+    tx.commit()
+}
+
+pub(crate) fn save_downloaded_image(
+    store: &Store,
+    image_id: &str,
+    file_path: &std::path::Path,
+    thumb_path: Option<&std::path::Path>,
+    width: u32,
+    height: u32,
+    byte_length: u64,
+) -> rusqlite::Result<()> {
+    let mut conn = store.conn.lock().unwrap();
+    let tx = conn.transaction()?;
+    let order_number: Option<String> = tx
+        .query_row(
+            "SELECT o.order_number FROM images i JOIN orders o ON o.id=i.order_id WHERE i.id=?1",
+            [image_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(order_number) = order_number else {
+        return Ok(());
+    };
+    let was_clean = read_state(&tx, &order_number)?
+        .is_some_and(|st| st.generation == st.synced_generation);
+    tx.execute(
+        "UPDATE images SET file_path=?2, thumb_path=?3, width=?4, height=?5, byte_length=?6 WHERE id=?1",
+        params![
+            image_id,
+            file_path.to_string_lossy(),
+            thumb_path.map(|p| p.to_string_lossy().into_owned()),
+            width as i64,
+            height as i64,
+            byte_length as i64,
+        ],
+    )?;
+    if was_clean {
+        tx.execute(
+            "UPDATE workflow_orders SET synced_generation = COALESCE(
+                (SELECT generation FROM workflow_changes WHERE order_number=?1), 0
+             ) WHERE order_number=?1",
+            [&order_number],
+        )?;
+    }
     tx.commit()
 }
 
@@ -398,7 +720,9 @@ pub(crate) fn mark_remote_complete(
 ) -> rusqlite::Result<bool> {
     let conn = store.conn.lock().unwrap();
     Ok(conn.execute(
-        "UPDATE workflow_orders SET shared_state='completed',revision=0,remote_operation_id=?3
+        "UPDATE workflow_orders
+         SET shared_state='completed', revision=0, remote_operation_id=?3,
+             claimed_by=NULL, claimed_name=NULL, claimed_at=NULL
          WHERE order_number=?1 AND target=?2 AND COALESCE(remote_operation_id,'')<>?3",
         params![number, target, operation_id],
     )? > 0)
@@ -442,6 +766,7 @@ pub(crate) struct ImportedAsset {
     pub(crate) name: String,
     pub(crate) path: PathBuf,
     pub(crate) thumb: Option<PathBuf>,
+    pub(crate) remote_object_name: Option<String>,
     pub(crate) production: bool,
     pub(crate) bytes: u64,
     pub(crate) width: u32,
@@ -464,6 +789,8 @@ pub(crate) struct Import<'a> {
     pub(crate) completed: bool,
     pub(crate) action: ImportAction,
     pub(crate) assets: &'a [ImportedAsset],
+    pub(crate) raw_payload: Option<&'a str>,
+    pub(crate) claim: Option<(Option<&'a str>, Option<&'a str>, Option<i64>)>,
 }
 
 fn error(error: impl std::fmt::Display) -> String {
@@ -482,18 +809,83 @@ fn verify_version(
     Ok(state)
 }
 
-fn remove_current_files(conn: &Transaction<'_>, number: &str, id: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM qiniu_assets WHERE id IN
-        (SELECT id FROM images WHERE order_id=?1 UNION SELECT id FROM productions WHERE order_number=?2)", params![id, number])?;
-    conn.execute("DELETE FROM workflow_remote_ids WHERE local_id IN
-        (SELECT id FROM images WHERE order_id=?1 UNION SELECT id FROM productions WHERE order_number=?2)", params![id, number])?;
+fn remove_current_originals_and_synced_productions(
+    conn: &Transaction<'_>,
+    number: &str,
+    id: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM qiniu_assets WHERE id IN (
+            SELECT id FROM images WHERE order_id=?1
+            UNION
+            SELECT p.id FROM productions p JOIN workflow_remote_ids m ON m.local_id=p.id WHERE p.order_number=?2
+        )",
+        params![id, number],
+    )?;
+    conn.execute(
+        "DELETE FROM workflow_remote_ids WHERE local_id IN (
+            SELECT id FROM images WHERE order_id=?1
+            UNION
+            SELECT id FROM productions WHERE order_number=?2 AND id IN (SELECT local_id FROM workflow_remote_ids)
+        )",
+        params![id, number],
+    )?;
     conn.execute(
         "DELETE FROM image_templates WHERE image_id IN (SELECT id FROM images WHERE order_id=?1)",
         [id],
     )?;
     conn.execute("DELETE FROM images WHERE order_id=?1", [id])?;
-    conn.execute("DELETE FROM productions WHERE order_number=?1", [number])?;
+    conn.execute(
+        "DELETE FROM productions WHERE order_number=?1 AND id IN (SELECT local_id FROM workflow_remote_ids) OR (order_number=?1 AND file_path='')",
+        [number],
+    )?;
     Ok(())
+}
+
+pub(crate) fn existing_remote_files(
+    store: &Store,
+    number: &str,
+) -> rusqlite::Result<HashMap<String, (String, Option<String>, i64, i64)>> {
+    let conn = store.conn.lock().unwrap();
+    let mut files = HashMap::new();
+    let mut img_q = conn.prepare(
+        "SELECT COALESCE(m.remote_id, i.id), i.file_path, i.thumb_path, i.width, i.height
+         FROM images i
+         JOIN orders o ON o.id = i.order_id
+         LEFT JOIN workflow_remote_ids m ON m.local_id = i.id
+         WHERE o.order_number = ?1 AND i.file_path <> ''",
+    )?;
+    for row in img_q.query_map([number], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            (
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, i64>(4)?,
+            ),
+        ))
+    })? {
+        let (remote_id, info) = row?;
+        if std::path::Path::new(&info.0).is_file() {
+            files.insert(remote_id, info);
+        }
+    }
+    let mut prod_q = conn.prepare(
+        "SELECT COALESCE(m.remote_id, p.id), p.file_path
+         FROM productions p
+         LEFT JOIN workflow_remote_ids m ON m.local_id = p.id
+         WHERE p.order_number = ?1 AND p.file_path <> ''",
+    )?;
+    for row in prod_q.query_map([number], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })? {
+        let (remote_id, path) = row?;
+        if std::path::Path::new(&path).is_file() {
+            files.insert(remote_id, (path, None, 0, 0));
+        }
+    }
+    Ok(files)
 }
 
 pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
@@ -505,6 +897,8 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
     }
     let number = request.number.to_owned();
     let mut previous_remarks = HashMap::new();
+    let mut previous_files: HashMap<String, (String, Option<String>, i64, i64)> = HashMap::new();
+    let mut had_unsynced_local_productions = false;
     let copy = |number: &str| format!("{number}~副本-{}", random_hex_pub(6));
     match request.action {
         ImportAction::Replace => {
@@ -558,14 +952,75 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
                 previous_remarks = query.query_map([&current.id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
                 }).map_err(error)?.collect::<rusqlite::Result<_>>().map_err(error)?;
-                remove_current_files(&tx, &number, &current.id).map_err(error)?;
+
+                let mut files_q = tx.prepare(
+                    "SELECT COALESCE(m.remote_id, i.id), i.file_path, i.thumb_path, i.width, i.height
+                     FROM images i
+                     LEFT JOIN workflow_remote_ids m ON m.local_id=i.id
+                     WHERE i.order_id=?1 AND i.file_path<>''",
+                ).map_err(error)?;
+                for row in files_q.query_map([&current.id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        (
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, i64>(3)?,
+                            row.get::<_, i64>(4)?,
+                        ),
+                    ))
+                }).map_err(error)? {
+                    let (rid, info) = row.map_err(error)?;
+                    previous_files.insert(rid, info);
+                }
+
+                let mut prod_q = tx.prepare(
+                    "SELECT COALESCE(m.remote_id, p.id), p.file_path, m.remote_id IS NOT NULL
+                     FROM productions p
+                     LEFT JOIN workflow_remote_ids m ON m.local_id=p.id
+                     WHERE p.order_number=?1",
+                ).map_err(error)?;
+                let mut synced_prod_ids = Vec::new();
+                for row in prod_q.query_map([&number], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, bool>(2)?,
+                    ))
+                }).map_err(error)? {
+                    let (rid, fpath, is_synced) = row.map_err(error)?;
+                    if !fpath.is_empty() {
+                        previous_files.insert(rid.clone(), (fpath.clone(), None, 0, 0));
+                    }
+                    if is_synced || fpath.is_empty() {
+                        synced_prod_ids.push(rid);
+                    } else {
+                        had_unsynced_local_productions = true;
+                    }
+                }
+                drop(prod_q);
+
+                remove_current_originals_and_synced_productions(&tx, &number, &current.id).map_err(error)?;
+                for rid in synced_prod_ids {
+                    tx.execute(
+                        "DELETE FROM productions WHERE order_number=?1 AND id=?2",
+                        params![number, rid],
+                    )
+                    .map_err(error)?;
+                }
             }
         }
     }
     let order_id = store.find_or_create_order(&tx, &number).map_err(error)?;
+    let merged_meta = match (&request.action, request.metadata) {
+        (ImportAction::Sync, Some(incoming)) => {
+            crate::store::merge_order_metadata_for_id(&tx, &order_id, Some(incoming)).map_err(error)?
+        }
+        (_, meta) => meta.map(str::to_owned),
+    };
     tx.execute(
         "UPDATE orders SET metadata=?2,updated_at=?3 WHERE id=?1",
-        params![order_id, request.metadata, now()],
+        params![order_id, merged_meta, now()],
     )
     .map_err(error)?;
     for asset in request.assets.iter().filter(|asset| !asset.production) {
@@ -573,11 +1028,28 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
         let remark = asset.remark.as_deref()
             .or_else(|| previous_remarks.get(&asset.remote_id).map(String::as_str))
             .unwrap_or_default();
+        let (file_path, thumb_path, width, height) = if !asset.path.as_os_str().is_empty() {
+            (
+                asset.path.to_string_lossy().into_owned(),
+                asset.thumb.as_deref().map(|p| p.to_string_lossy().into_owned()),
+                asset.width as i64,
+                asset.height as i64,
+            )
+        } else if let Some((existing_path, existing_thumb, w, h)) = previous_files.get(&asset.remote_id) {
+            (
+                existing_path.clone(),
+                existing_thumb.clone(),
+                if asset.width > 0 { asset.width as i64 } else { *w },
+                if asset.height > 0 { asset.height as i64 } else { *h },
+            )
+        } else {
+            (String::new(), None, asset.width as i64, asset.height as i64)
+        };
         tx.execute(
-            "INSERT INTO images(id,order_id,file_path,original_name,byte_length,width,height,source,created_at,thumb_path,remark)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,'共享存储',?8,?9,?10)",
-            params![id, order_id, asset.path.to_string_lossy(), asset.name, asset.bytes, asset.width,
-                asset.height, now(), asset.thumb.as_deref().map(|p| p.to_string_lossy()), remark],
+            "INSERT INTO images(id,order_id,file_path,original_name,byte_length,width,height,source,created_at,thumb_path,remark,remote_object_name)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,'共享存储',?8,?9,?10,?11)",
+            params![id, order_id, file_path, asset.name, asset.bytes, width,
+                height, now(), thumb_path, remark, asset.remote_object_name],
         ).map_err(error)?;
         tx.execute(
             "INSERT INTO workflow_remote_ids(local_id,remote_id) VALUES (?1,?2)",
@@ -629,8 +1101,27 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
         } else {
             None
         };
-        tx.execute("INSERT INTO productions(id,order_number,image_id,file_path,created_at) VALUES(?1,?2,?3,?4,?5)",
-            params![id, number, image_id, asset.path.to_string_lossy(), now()]).map_err(error)?;
+        let file_path = if !asset.path.as_os_str().is_empty() {
+            asset.path.to_string_lossy().into_owned()
+        } else if let Some((existing_path, _, _, _)) = previous_files.get(&asset.remote_id) {
+            existing_path.clone()
+        } else {
+            String::new()
+        };
+        tx.execute(
+            "INSERT INTO productions(id,order_number,image_id,file_path,created_at,remote_object_name,byte_length,original_name)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                id,
+                number,
+                image_id,
+                file_path,
+                now(),
+                asset.remote_object_name,
+                asset.bytes as i64,
+                asset.name
+            ],
+        ).map_err(error)?;
         tx.execute(
             "INSERT INTO workflow_remote_ids(local_id,remote_id) VALUES (?1,?2)",
             params![id, asset.remote_id],
@@ -641,13 +1132,46 @@ pub(crate) fn import(store: &Store, request: Import<'_>) -> Result<(), String> {
         let state = read_state(&tx, &number)
             .map_err(error)?
             .ok_or("订单记录不存在")?;
+        let synced_gen = if had_unsynced_local_productions {
+            state.generation.saturating_sub(1)
+        } else {
+            state.generation
+        };
         set_shared(
             &tx,
             &number,
             target,
             shared_state,
             operation_id,
-            state.generation,
+            synced_gen,
+        )
+        .map_err(error)?;
+        if shared_state == "completed" {
+            tx.execute(
+                "UPDATE workflow_orders SET local_completed=0, claimed_by=NULL, claimed_name=NULL, claimed_at=NULL WHERE order_number=?1",
+                [&number],
+            )
+            .map_err(error)?;
+        } else if matches!(request.action, ImportAction::Sync) {
+            tx.execute(
+                "UPDATE workflow_orders SET local_completed=0 WHERE order_number=?1",
+                [&number],
+            )
+            .map_err(error)?;
+        }
+    }
+    if let Some((claimed_by, claimed_name, claimed_at)) = request.claim {
+        tx.execute(
+            "UPDATE workflow_orders SET claimed_by=?2, claimed_name=?3, claimed_at=?4 WHERE order_number=?1",
+            params![number, claimed_by, claimed_name, claimed_at],
+        )
+        .map_err(error)?;
+    }
+    if let Some(raw_payload) = request.raw_payload {
+        tx.execute(
+            "INSERT INTO workflow_synced_snapshots(order_number, payload) VALUES (?1, ?2)
+             ON CONFLICT(order_number) DO UPDATE SET payload = excluded.payload",
+            params![number, raw_payload],
         )
         .map_err(error)?;
     }
@@ -702,6 +1226,8 @@ mod tests {
                 completed: false,
                 action: ImportAction::Sync,
                 assets: &[],
+                raw_payload: None,
+                claim: None,
             },
         )
         .unwrap();
@@ -755,6 +1281,8 @@ mod tests {
                 completed: false,
                 action: ImportAction::Replace,
                 assets: &[],
+                raw_payload: None,
+                claim: None,
             },
         );
         assert!(result.unwrap_err().contains("待上传"));
@@ -782,6 +1310,8 @@ mod tests {
                     completed: false,
                     action: ImportAction::Replace,
                     assets: &[],
+                    raw_payload: None,
+                    claim: None,
                 },
             )
         };

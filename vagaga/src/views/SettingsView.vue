@@ -24,6 +24,8 @@ import {
   saveMysqlConfig,
   saveQiniuSettings,
   testQiniuSettings,
+  workflowSetAutoSync,
+  workflowSetDeviceName,
   workflowSetRole,
 } from '../lib/tauri'
 import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, SmbConfig, StorageProvider, WebDavConfig, WorkflowRole } from '../types'
@@ -35,6 +37,11 @@ const props = defineProps<{ activeOrder: string | null }>()
 const roleBusy = ref(false)
 const roleMessage = ref('')
 const role = ref<WorkflowRole>(store.workflow.role)
+const deviceName = ref(store.workflow.deviceName ?? '')
+const autoSync = ref(store.workflow.autoSync ?? true)
+const pollSeconds = ref(store.workflow.pollSeconds ?? 15)
+const deviceBusy = ref(false)
+const deviceMessage = ref('')
 const roles = [
   { id: 'customer', label: '排单', detail: '接收千帆订单并上传', icon: ClipboardList },
   { id: 'production', label: '制作', detail: '同步共享订单并制作', icon: Layers },
@@ -55,6 +62,29 @@ async function saveRole() {
     roleMessage.value = String(error)
   } finally {
     roleBusy.value = false
+  }
+}
+
+async function saveDeviceAndSync() {
+  const secs = Number(pollSeconds.value)
+  if (!Number.isInteger(secs) || secs < 10 || secs > 60) {
+    deviceMessage.value = '自动同步间隔请输入 10 到 60 之间的整数秒。'
+    return
+  }
+  deviceBusy.value = true
+  deviceMessage.value = ''
+  try {
+    await workflowSetDeviceName(deviceName.value.trim())
+    const updated = await workflowSetAutoSync(autoSync.value, secs)
+    store.workflow = updated
+    deviceName.value = updated.deviceName ?? ''
+    autoSync.value = updated.autoSync ?? true
+    pollSeconds.value = updated.pollSeconds ?? 15
+    deviceMessage.value = '工位名称与自动同步设置已保存。'
+  } catch (error) {
+    deviceMessage.value = String(error)
+  } finally {
+    deviceBusy.value = false
   }
 }
 
@@ -140,7 +170,7 @@ const mysqlForm = ref<MysqlConfig>({ enabled: false, host: '', port: 3306, user:
 const mysqlSaved = ref<MysqlConfig | null>(null)
 const canSyncMysql = computed(() => {
   const config = mysqlSaved.value
-  return store.workflow.role !== 'customer' && Boolean(config && mysqlConfigured(config))
+  return Boolean(config && mysqlConfigured(config))
 })
 const mysqlMessage = ref('')
 const mysqlBusy = ref(false)
@@ -169,7 +199,12 @@ function goto(key: string) {
 }
 
 onMounted(async () => {
-  void refreshWorkflowSettings().then(() => { role.value = store.workflow.role }).catch(error => {
+  void refreshWorkflowSettings().then(() => {
+    role.value = store.workflow.role
+    deviceName.value = store.workflow.deviceName ?? ''
+    autoSync.value = store.workflow.autoSync ?? true
+    pollSeconds.value = store.workflow.pollSeconds ?? 15
+  }).catch(error => {
     roleMessage.value = String(error)
   })
   void loadQiniuSettings()
@@ -443,6 +478,22 @@ async function openCutoutLogs() {
             </div>
             <div v-if="roleMessage" class="cloudMsg" role="status">{{ roleMessage }}</div>
             <div class="row">
+              <Label for="workflow-device-name" class="label">工位名称</Label>
+              <Input id="workflow-device-name" v-model="deviceName" class="w-full max-w-64" maxlength="40" placeholder="例如：制作1号机 / 客服小王" :disabled="deviceBusy" />
+              <span v-if="store.workflow.deviceId" class="hint">ID: {{ store.workflow.deviceId }}</span>
+            </div>
+            <div class="row">
+              <Label for="workflow-poll-secs" class="label">后台自动同步</Label>
+              <label class="inline-flex items-center gap-2 text-[13px]">
+                <input type="checkbox" v-model="autoSync" :disabled="deviceBusy" />
+                <span>自动增量拉取变更</span>
+              </label>
+              <Input id="workflow-poll-secs" v-model.number="pollSeconds" type="number" min="10" max="60" class="w-20" :disabled="deviceBusy || !autoSync" />
+              <span class="hint">秒（10–60）</span>
+              <Button type="button" variant="outline" :disabled="deviceBusy" @click="saveDeviceAndSync">保存设置</Button>
+            </div>
+            <div v-if="deviceMessage" class="cloudMsg" role="status">{{ deviceMessage }}</div>
+            <div class="row">
               <span class="label">数据目录</span>
               <span class="value">{{ store.info?.dataRoot ?? '-' }}</span>
             </div>
@@ -489,7 +540,7 @@ async function openCutoutLogs() {
             <div class="row actions">
               <Button type="button" :disabled="mysqlBusy || !mysqlSaved" @click="saveMysql()">保存配置</Button>
               <Button type="button" variant="outline" :disabled="mysqlBusy" @click="testMysql"><FlaskConical aria-hidden="true" />测试连接</Button>
-              <Button v-if="store.workflow.role !== 'customer'" type="button" variant="outline" :disabled="mysqlBusy || !canSyncMysql" @click="syncMysql">立即同步</Button>
+              <Button type="button" variant="outline" :disabled="mysqlBusy || !canSyncMysql" @click="syncMysql">立即同步</Button>
             </div>
             <div v-if="mysqlMessage" class="cloudMsg" role="status">{{ mysqlMessage }}</div>
           </div>

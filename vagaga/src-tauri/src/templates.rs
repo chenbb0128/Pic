@@ -77,10 +77,18 @@ pub(crate) struct SavedTemplate {
     pub layout: String,
     pub enabled: bool,
     pub updated_at: i64,
+    pub image_rev: String,
 }
 
 impl SavedTemplate {
     fn dto(&self, root: &Path) -> TemplateDto {
+        let rev_preview = if self.image_rev != self.id {
+            let p = image_path(root, &self.id, &format!("preview_{}.webp", self.image_rev));
+            p.is_file().then_some(p)
+        } else {
+            None
+        };
+        let preview_file = rev_preview.unwrap_or_else(|| image_path(root, &self.id, PREVIEW));
         TemplateDto {
             code: self.code.clone(),
             name: self.name.clone(),
@@ -91,24 +99,21 @@ impl SavedTemplate {
             width: self.width,
             height: self.height,
             dpi: self.dpi,
-            preview_path: Some(
-                image_path(root, &self.id, PREVIEW)
-                    .to_string_lossy()
-                    .into_owned(),
-            ),
+            preview_path: Some(preview_file.to_string_lossy().into_owned()),
         }
     }
 
     pub(crate) fn background_key(&self) -> String {
-        format!("templates/{}/{BACKGROUND}", self.id)
+        format!("templates/{}/{BACKGROUND}", self.image_rev)
     }
 
     pub(crate) fn preview_key(&self) -> String {
-        format!("templates/{}/{PREVIEW}", self.id)
+        format!("templates/{}/{PREVIEW}", self.image_rev)
     }
 
     fn validate(&self) -> Result<Value, String> {
         if !is_saved_id(&self.id)
+            || !is_saved_id(&self.image_rev)
             || self.code != normalize_code(&self.code)?
             || self.name != normalize_name(&self.name)?
         {
@@ -156,14 +161,31 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
         "CREATE TABLE IF NOT EXISTS templates (
             id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
             width REAL NOT NULL, height REAL NOT NULL, dpi INTEGER NOT NULL,
-            layout TEXT NOT NULL, enabled BOOLEAN NOT NULL, updated_at INTEGER NOT NULL
+            layout TEXT NOT NULL, enabled BOOLEAN NOT NULL, updated_at INTEGER NOT NULL,
+            image_rev TEXT
         );",
-    )
+    )?;
+    let has_rev: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('templates') WHERE name='image_rev')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_rev {
+        conn.execute("ALTER TABLE templates ADD COLUMN image_rev TEXT", [])?;
+    }
+    conn.execute(
+        "UPDATE templates SET image_rev = id WHERE image_rev IS NULL OR image_rev = ''",
+        [],
+    )?;
+    Ok(())
 }
 
 fn row_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedTemplate> {
+    let id: String = row.get(0)?;
+    let image_rev: Option<String> = row.get(9)?;
+    let image_rev = image_rev.filter(|rev| !rev.is_empty()).unwrap_or_else(|| id.clone());
     Ok(SavedTemplate {
-        id: row.get(0)?,
+        id,
         code: row.get(1)?,
         name: row.get(2)?,
         width: row.get(3)?,
@@ -172,10 +194,11 @@ fn row_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedTemplate> {
         layout: row.get(6)?,
         enabled: row.get(7)?,
         updated_at: row.get(8)?,
+        image_rev,
     })
 }
 
-const COLUMNS: &str = "id,code,name,width,height,dpi,layout,enabled,updated_at";
+const COLUMNS: &str = "id,code,name,width,height,dpi,layout,enabled,updated_at,image_rev";
 
 fn local(store: &Store, id: &str) -> Result<Option<SavedTemplate>, String> {
     store
@@ -214,11 +237,19 @@ fn code_owner(store: &Store, code: &str) -> Result<Option<String>, String> {
 
 fn save_record(store: &Store, template: &SavedTemplate) -> Result<(), String> {
     store.conn.lock().expect("store mutex poisoned").execute(
-        "INSERT INTO templates(id,code,name,width,height,dpi,layout,enabled,updated_at)
-         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
-         ON CONFLICT(id) DO UPDATE SET name=excluded.name,enabled=excluded.enabled,updated_at=excluded.updated_at",
+        "INSERT INTO templates(id,code,name,width,height,dpi,layout,enabled,updated_at,image_rev)
+         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+         ON CONFLICT(id) DO UPDATE SET
+            name=excluded.name,
+            width=excluded.width,
+            height=excluded.height,
+            dpi=excluded.dpi,
+            layout=excluded.layout,
+            enabled=excluded.enabled,
+            updated_at=excluded.updated_at,
+            image_rev=excluded.image_rev",
         params![template.id,template.code,template.name,template.width,template.height,template.dpi,
-            template.layout,template.enabled,template.updated_at],
+            template.layout,template.enabled,template.updated_at,template.image_rev],
     ).map_err(display)?;
     Ok(())
 }
@@ -357,15 +388,49 @@ fn decode(value: &str) -> Result<Vec<u8>, String> {
         .map_err(|_| "无法读取模板图片。".into())
 }
 
-fn save_images(root: &Path, id: &str, background: &[u8], preview: &[u8]) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EditTemplateInput {
+    id: String,
+    name: String,
+    width: f64,
+    height: f64,
+    dpi: u32,
+    layout: Value,
+    background_b64: String,
+    preview_b64: String,
+}
+
+fn save_images(
+    root: &Path,
+    id: &str,
+    image_rev: &str,
+    background: &[u8],
+    preview: &[u8],
+) -> Result<(), String> {
     image_bytes(background, image::ImageFormat::Png)?;
     image_bytes(preview, image::ImageFormat::WebP)?;
     let folder = root.join("templates").join(id);
     std::fs::create_dir_all(&folder).map_err(display)?;
+    if let Ok(entries) = std::fs::read_dir(&folder) {
+        for entry in entries.flatten() {
+            if let Some(fname) = entry.file_name().to_str() {
+                if fname.starts_with("preview_") && fname.ends_with(".webp") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
     for (name, bytes) in [(BACKGROUND, background), (PREVIEW, preview)] {
         let mut file = tempfile::NamedTempFile::new_in(&folder).map_err(display)?;
         file.write_all(bytes).map_err(display)?;
         file.persist(folder.join(name)).map_err(display)?;
+    }
+    if image_rev != id {
+        let rev_name = format!("preview_{image_rev}.webp");
+        let mut file = tempfile::NamedTempFile::new_in(&folder).map_err(display)?;
+        file.write_all(preview).map_err(display)?;
+        file.persist(folder.join(rev_name)).map_err(display)?;
     }
     Ok(())
 }
@@ -389,8 +454,10 @@ fn save_local(store: &Store, root: &Path, input: TemplateInput) -> Result<Templa
     if find_by_code(&code).is_some() {
         return Err(format!("规格 {code} 已用于内置模板。"));
     }
+    let id = crate::store::random_hex_pub(16);
     let template = SavedTemplate {
-        id: crate::store::random_hex_pub(16),
+        image_rev: id.clone(),
+        id,
         code,
         name: normalize_name(&input.name)?,
         width: input.width,
@@ -406,7 +473,43 @@ fn save_local(store: &Store, root: &Path, input: TemplateInput) -> Result<Templa
     }
     let background = decode(&input.background_b64)?;
     let preview = decode(&input.preview_b64)?;
-    save_images(root, &template.id, &background, &preview)?;
+    save_images(root, &template.id, &template.image_rev, &background, &preview)?;
+    save_record(store, &template)?;
+    Ok(template.dto(root))
+}
+
+#[tauri::command]
+pub(crate) async fn edit_saved_template(
+    state: State<'_, AppState>,
+    input: EditTemplateInput,
+) -> Result<TemplateDto, String> {
+    let _operation = state.workflow_operations.lock().await;
+    edit_local(&state.store, &state.data_root, input)
+}
+
+fn edit_local(
+    store: &Store,
+    root: &Path,
+    input: EditTemplateInput,
+) -> Result<TemplateDto, String> {
+    let existing = local(store, &input.id)?.ok_or("找不到自定义模板。")?;
+    let next_rev = crate::store::random_hex_pub(16);
+    let template = SavedTemplate {
+        id: existing.id,
+        code: existing.code,
+        name: normalize_name(&input.name)?,
+        width: input.width,
+        height: input.height,
+        dpi: input.dpi,
+        layout: serde_json::to_string(&input.layout).map_err(display)?,
+        enabled: existing.enabled,
+        updated_at: now().max(existing.updated_at.saturating_add(1)),
+        image_rev: next_rev,
+    };
+    template.validate()?;
+    let background = decode(&input.background_b64)?;
+    let preview = decode(&input.preview_b64)?;
+    save_images(root, &template.id, &template.image_rev, &background, &preview)?;
     save_record(store, &template)?;
     Ok(template.dto(root))
 }
@@ -476,7 +579,9 @@ async fn publish(state: &AppState, backend: &Backend, id: &str) -> Result<(), St
     for name in [BACKGROUND, PREVIEW] {
         let path = image_path(&state.data_root, id, name);
         let bytes = tokio::fs::read(path).await.map_err(display)?;
-        backend.put_template_image(id, name, bytes).await?;
+        backend
+            .put_template_image(&template.image_rev, name, bytes)
+            .await?;
     }
     index.write(&target, &template, previous.is_some()).await
 }
@@ -492,31 +597,56 @@ async fn import_one(
     }
     let current = local(&state.store, &template.id)?;
     let ready = has_images(&state.data_root, &template.id);
+    let rev_changed = current
+        .as_ref()
+        .is_some_and(|item| item.image_rev != template.image_rev);
     if current
         .as_ref()
-        .is_some_and(|item| item.updated_at >= template.updated_at)
+        .is_some_and(|item| item.updated_at >= template.updated_at && !rev_changed)
         && ready
     {
         return Ok(false);
     }
-    if !ready {
+    if !ready || rev_changed {
         let background = backend
-            .get_template_image(&template.id, BACKGROUND)
+            .get_template_image(&template.image_rev, BACKGROUND)
             .await?
             .ok_or("共享模板底图缺失。")?;
         let preview = backend
-            .get_template_image(&template.id, PREVIEW)
+            .get_template_image(&template.image_rev, PREVIEW)
             .await?
             .ok_or("共享模板缩略图缺失。")?;
-        save_images(&state.data_root, &template.id, &background, &preview)?;
+        save_images(
+            &state.data_root,
+            &template.id,
+            &template.image_rev,
+            &background,
+            &preview,
+        )?;
     }
     if current
         .as_ref()
-        .is_none_or(|item| item.updated_at < template.updated_at)
+        .is_none_or(|item| item.updated_at < template.updated_at || rev_changed)
     {
         save_record(&state.store, &template)?;
     }
     Ok(true)
+}
+
+pub(crate) async fn sync_shared_quiet(state: &AppState, backend: &Backend) -> usize {
+    let Ok(mut index) = mysql::connect_template_index(&state.data_root).await else {
+        return 0;
+    };
+    let Ok(templates) = index.list(&backend.target()).await else {
+        return 0;
+    };
+    let mut updated = 0usize;
+    for template in templates {
+        if matches!(import_one(state, backend, template).await, Ok(true)) {
+            updated += 1;
+        }
+    }
+    updated
 }
 
 #[tauri::command]
@@ -690,6 +820,7 @@ mod tests {
             layout: layout().to_string(),
             enabled: true,
             updated_at: 1,
+            image_rev: id.into(),
         };
         let (listener, endpoint) = local_server();
         let server = std::thread::spawn(move || {
@@ -722,6 +853,94 @@ mod tests {
         assert!(!import_one(&state, &backend, template()).await.unwrap());
         assert!(has_images(dir.path(), id));
         assert_eq!(local(&state.store, id).unwrap().unwrap().code, "A13");
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn editing_saved_template_rotates_image_rev_and_syncs_updated_layout_and_images() {
+        use crate::qiniu_transport::tests::{local_server, receive, reply};
+
+        let sender_dir = tempfile::tempdir().unwrap();
+        let receiver_dir = tempfile::tempdir().unwrap();
+        let sender = workstation(sender_dir.path());
+        let receiver = workstation(receiver_dir.path());
+        let created = save_local(&sender.store, &sender.data_root, template_input("A15")).unwrap();
+        let id = created.web_id.clone();
+        let edited_layout =
+            serde_json::json!({"template":{"w":2100,"h":1440,"slots":[{},{}]},"states":[{},{}]});
+        let updated = edit_local(
+            &sender.store,
+            &sender.data_root,
+            EditTemplateInput {
+                id: id.clone(),
+                name: "改版横排".into(),
+                width: 210.,
+                height: 144.,
+                dpi: 300,
+                layout: edited_layout.clone(),
+                background_b64: STANDARD.encode(make_image(ImageFormat::Png)),
+                preview_b64: STANDARD.encode(make_image(ImageFormat::WebP)),
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.code, "A15");
+        assert_eq!(updated.name, "改版横排");
+        assert_eq!(updated.width, 210.);
+        assert!(updated.preview_path.unwrap().contains("preview_"));
+        let sender_record = local(&sender.store, &id).unwrap().unwrap();
+        assert_ne!(sender_record.image_rev, id);
+        let new_rev = sender_record.image_rev.clone();
+
+        // Seed receiver with old v1 template first.
+        let v1 = SavedTemplate {
+            id: id.clone(),
+            code: "A15".into(),
+            name: "测试排版".into(),
+            width: 144.,
+            height: 210.,
+            dpi: 600,
+            layout: layout().to_string(),
+            enabled: true,
+            updated_at: 1,
+            image_rev: id.clone(),
+        };
+        save_images(
+            &receiver.data_root,
+            &id,
+            &id,
+            &make_image(ImageFormat::Png),
+            &make_image(ImageFormat::WebP),
+        )
+        .unwrap();
+        save_record(&receiver.store, &v1).unwrap();
+
+        let (listener, endpoint) = local_server();
+        let server = std::thread::spawn(move || {
+            let (socket, _) = receive(
+                &listener,
+                &format!("GET /fixture/templates/{new_rev}/{BACKGROUND}"),
+            );
+            reply(socket, 200, &[], &make_image(ImageFormat::Png));
+            let (socket, _) = receive(
+                &listener,
+                &format!("GET /fixture/templates/{new_rev}/{PREVIEW}"),
+            );
+            reply(socket, 200, &[], &make_image(ImageFormat::WebP));
+        });
+        let config = crate::cloud::CloudConfig {
+            endpoint,
+            bucket: "fixture".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        };
+        let backend = Backend::Nas(config.clone(), config.client().unwrap());
+        assert!(import_one(&receiver, &backend, sender_record).await.unwrap());
+        let synced = local(&receiver.store, &id).unwrap().unwrap();
+        assert_eq!(synced.name, "改版横排");
+        assert_eq!(synced.width, 210.);
+        assert_eq!(synced.dpi, 300);
+        assert_eq!(synced.validate().unwrap(), edited_layout);
         server.join().unwrap();
     }
 

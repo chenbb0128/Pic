@@ -285,6 +285,7 @@ test('the editor fills order sheet counts and ignores updates for orders that ar
 function environment(t, overrides = {}) {
   let rows = [], timerId = 0, delayedDetail = null
   let productions = [], qiniuStatus = { enabled: false, legacyEnabled: true }, fetchImage
+  let confirmHandler = () => true
   const handlers = { ingested: new Set(), failed: new Set(), cloud: new Set() }
   const intervals = new Map()
   const mounted = [], unmounted = [], scopes = []
@@ -336,6 +337,7 @@ function environment(t, overrides = {}) {
       setInterval: callback => { const id = ++timerId; intervals.set(id, callback); return id },
       clearInterval: id => intervals.delete(id),
       window: { addEventListener() {}, removeEventListener() {} },
+      confirm: (...args) => confirmHandler(...args),
       fetch: (...args) => fetchImage(...args),
       createImageBitmap: async () => ({ close() {} }),
       btoa,
@@ -356,6 +358,7 @@ function environment(t, overrides = {}) {
     productions(value) { productions = value },
     qiniuStatus(value) { qiniuStatus = value },
     fetchImage(value) { fetchImage = value },
+    onConfirm(value) { confirmHandler = value },
     delayNextDetail() {
       let release
       delayedDetail = new Promise(resolve => { release = resolve })
@@ -897,4 +900,78 @@ test('upload and finish open the comparison without a separate sync action', asy
   await workflow.replace()
   assert.equal(applied[0].reference, conflict.reference)
   assert.equal(dialog.open, false)
+})
+
+test('listOrderEntries populates sidebar entries in one batch without per-order getOrder IPC calls', async t => {
+  let detailCalls = 0
+  const batchEntries = [
+    { summary: { id: 'one', orderNumber: 'ORDER-1', imageCount: 1, createdAt: '2026-11-26T00:00:00', updatedAt: '2026-11-26T00:00:00', metadata: null }, images: [image('img-1')] },
+    { summary: { id: 'two', orderNumber: 'ORDER-2', imageCount: 1, createdAt: '2026-11-26T00:01:00', updatedAt: '2026-11-26T00:01:00', metadata: null }, images: [image('img-2')] },
+  ]
+  const env = environment(t, {
+    listOrderEntries: async () => structuredClone(batchEntries),
+    getOrder: async () => { detailCalls++; return null },
+  })
+  await env.store.loadOrders()
+  const view = await env.mountView()
+  assert.equal(detailCalls, 0)
+  assert.equal(view.visibleEntries.value.length, 2)
+  assert.equal(view.visibleEntries.value[0].images[0].id, 'img-2')
+})
+
+test('claim lock warns when another workstation is making the order and allows lazy production preview', async t => {
+  const claims = []
+  const downloadedIds = []
+  const env = environment(t, {
+    workflowOrders: async () => [{
+      orderNumber: 'ORDER-one',
+      localCompleted: false,
+      sharedState: 'pending',
+      pendingOperation: null,
+      error: null,
+      claimedBy: 'dev-other',
+      claimedName: '制作2号机',
+      claimedByMe: false,
+    }],
+    workflowClaimOrder: async (orderNumber, force) => {
+      claims.push({ orderNumber, force: Boolean(force) })
+      return { ok: true, claimedBy: 'dev-me', claimedName: '制作1号机' }
+    },
+    workflowDownloadProduction: async id => {
+      downloadedIds.push(id)
+      return { id, orderNumber: 'ORDER-one', imageId: null, filePath: 'D:/app/data/productions/done.png', createdAt: '2026-11-26T01:00:00', remoteOnly: false }
+    },
+  })
+  env.rows([order('one', [image('photo-1')])])
+  env.productions([{ id: 'prod-remote', orderNumber: 'ORDER-one', imageId: null, filePath: '', originalName: '成品.png', byteLength: 2048, remoteOnly: true }])
+  env.fetchImage(async () => ({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }))
+  await env.store.refreshWorkflowOrders()
+  await env.store.loadOrders()
+  const view = await env.mountView()
+  const frame = { async __picDoInject() {} }
+  view.frame.value = vue.markRaw({ contentWindow: frame })
+  view.editorSrc.value = '/embedded/heart-star/index.html'
+  view.editorReady.value = true
+
+  // Declining takeover keeps canvas untouched and sends no claim write.
+  env.onConfirm(() => false)
+  await view.injectImage(image('photo-1'), order('one'))
+  assert.equal(claims.length, 0)
+  assert.equal(view.lastInjectedOrder.value, null)
+
+  // Confirming takeover claims with force=true and injects into editor.
+  env.onConfirm(() => true)
+  await view.injectImage(image('photo-1'), order('one'))
+  assert.deepEqual(claims, [{ orderNumber: 'ORDER-one', force: true }])
+  assert.equal(view.lastInjectedOrder.value, 'ORDER-one')
+
+  // Clicking a cloud-only production downloads it on demand and opens preview.
+  let modalOpened = false
+  view.materialDialog.value = { open: false, showModal() { modalOpened = true } }
+  view.expandedOrderId.value = 'one'
+  await flush()
+  await view.openOrDownloadProduction(view.orderProductions('ORDER-one')[0])
+  assert.deepEqual(downloadedIds, ['prod-remote'])
+  assert.equal(modalOpened, true)
+  assert.equal(view.materialPath.value, 'D:/app/data/productions/done.png')
 })

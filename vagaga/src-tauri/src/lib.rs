@@ -110,10 +110,35 @@ pub fn run() {
                 }
             });
 
+            // 后台自动增量同步（读取本机 auto-sync 开关与 poll-seconds 间隔，使用 try_lock 不阻塞手动操作）。
+            let bg_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut last_poll = std::time::Instant::now();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let state = bg_handle.state::<AppState>();
+                    let (enabled, poll_secs) = workflow::auto_sync_config(&state.store);
+                    if !enabled || last_poll.elapsed() < std::time::Duration::from_secs(poll_secs) {
+                        continue;
+                    }
+                    last_poll = std::time::Instant::now();
+                    if let Some(outcome) = workflow::background_poll(&state).await {
+                        if outcome.updated > 0
+                            || outcome.completed > 0
+                            || outcome.claims_changed > 0
+                            || outcome.templates_updated > 0
+                        {
+                            let _ = bg_handle.emit("workflow:changed", &outcome);
+                        }
+                    }
+                }
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_orders,
+            commands::list_order_entries,
             commands::get_order_sort,
             commands::save_order_sort,
             commands::get_order,
@@ -123,6 +148,7 @@ pub fn run() {
             commands::delete_order,
             commands::get_app_info,
             templates::save_template,
+            templates::edit_saved_template,
             templates::get_template,
             templates::update_template,
             templates::publish_template,
@@ -151,8 +177,15 @@ pub fn run() {
             qiniu_sync::qiniu_sync_now,
             workflow::workflow_settings,
             workflow::workflow_set_role,
+            workflow::workflow_set_device_name,
+            workflow::workflow_set_auto_sync,
             workflow::workflow_orders,
             workflow::workflow_set_layout,
+            workflow::workflow_claim_order,
+            workflow::workflow_release_order,
+            workflow::workflow_reopen,
+            workflow::workflow_download_production,
+            workflow::workflow_download_image,
             workflow::workflow_upload,
             workflow::workflow_sync,
             workflow::workflow_finish,

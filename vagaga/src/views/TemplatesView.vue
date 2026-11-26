@@ -24,6 +24,7 @@ const renameDialog = ref<HTMLDialogElement | null>(null)
 const saveDialog = ref<InstanceType<typeof TemplateSaveDialog> | null>(null)
 const source = ref(blank)
 const draftSource = ref<string | null>(null)
+const editingTemplate = ref<TemplateInfo | null>(null)
 const builder = ref<HTMLIFrameElement | null>(null)
 const builderReady = ref(false)
 const builderError = ref('')
@@ -72,13 +73,23 @@ function openCreate() {
 
 function startBuilder(id: string) {
   createDialog.value?.close()
+  editingTemplate.value = null
   builderReady.value = false
   builderError.value = ''
   draftSource.value = id
 }
 
+function startEdit(item: TemplateInfo) {
+  createDialog.value?.close()
+  editingTemplate.value = item
+  builderReady.value = false
+  builderError.value = ''
+  draftSource.value = item.webId
+}
+
 function closeBuilder() {
   draftSource.value = null
+  editingTemplate.value = null
 }
 
 async function loadBuilder() {
@@ -97,7 +108,12 @@ async function loadBuilder() {
 
 function saveBuilder() {
   const capture = builder.value?.contentWindow?.__picCaptureTemplate
-  if (capture) saveDialog.value?.open(capture, sourceItem.value?.name ?? '')
+  if (!capture) return
+  if (editingTemplate.value) {
+    saveDialog.value?.openEdit(editingTemplate.value, capture)
+  } else {
+    saveDialog.value?.open(capture, sourceItem.value?.name ?? '')
+  }
 }
 
 function openRename(item: TemplateInfo) {
@@ -158,9 +174,9 @@ watch(templates, catalog => {
           <Button v-if="draftSource" variant="ghost" size="icon-sm" aria-label="返回模板中心" @click="closeBuilder">
             <ArrowLeft aria-hidden="true" />
           </Button>
-          <h2 id="templates-title">{{ draftSource ? '新建模板' : '模板中心' }}</h2>
+          <h2 id="templates-title">{{ editingTemplate ? `编辑模板 · ${editingTemplate.code}` : draftSource ? '新建模板' : '模板中心' }}</h2>
         </div>
-        <Button v-if="draftSource" size="sm" :disabled="!builderReady" @click="saveBuilder">保存模板</Button>
+        <Button v-if="draftSource" size="sm" :disabled="!builderReady" @click="saveBuilder">{{ editingTemplate ? '保存修改' : '保存模板' }}</Button>
         <Button v-else variant="outline" size="sm" :disabled="!!operation" @click="sync">
           <LoaderCircle v-if="operation === 'sync'" class="animate-spin" aria-hidden="true" />
           <CloudDownload v-else aria-hidden="true" />
@@ -193,6 +209,7 @@ watch(templates, catalog => {
                 <DropdownMenuContent align="end" :side-offset="4" class="z-50 min-w-28 rounded-md border border-solid border-border bg-popover p-1 shadow-lg">
                   <DropdownMenuItem class="menuItem" @select="startBuilder(template.webId)">复制模板</DropdownMenuItem>
                   <template v-if="template.custom">
+                    <DropdownMenuItem class="menuItem" @select="startEdit(template)">编辑模板</DropdownMenuItem>
                     <DropdownMenuItem class="menuItem" @select="openRename(template)">重命名</DropdownMenuItem>
                     <DropdownMenuItem class="menuItem" @select="editTemplate(template, template.name, template.enabled === false)">
                       {{ template.enabled === false ? '重新启用' : '停用模板' }}

@@ -83,8 +83,8 @@ fn layout_metadata(value: &Value) -> Option<(&str, Option<chrono::DateTime<chron
     Some((number, captured_at))
 }
 
-/// Keep earlier order facts when the latest capture omits them.
-fn merge_order_metadata(current: Option<&str>, incoming: &str) -> String {
+///Keep earlier order facts when the latest capture omits them.
+pub(crate) fn merge_order_metadata(current: Option<&str>, incoming: &str) -> String {
     let Some(previous) = current.and_then(|text| serde_json::from_str::<Value>(text).ok()) else {
         return incoming.to_owned();
     };
@@ -170,6 +170,8 @@ pub struct OrderImage {
     pub source: String,
     pub created_at: String,
     pub remark: String,
+    pub remote_object_name: Option<String>,
+    pub source_quality: Option<String>,
     pub templates: Vec<TemplateQty>,
 }
 
@@ -178,6 +180,11 @@ pub struct OrderDetail {
     pub order_number: String,
     pub created_at: String,
     pub updated_at: String,
+    pub images: Vec<OrderImage>,
+}
+
+pub struct OrderEntry {
+    pub summary: OrderSummary,
     pub images: Vec<OrderImage>,
 }
 
@@ -214,6 +221,9 @@ pub struct ProductionRow {
     pub image_id: Option<String>,
     pub file_path: String,
     pub created_at: String,
+    pub remote_object_name: Option<String>,
+    pub byte_length: i64,
+    pub original_name: String,
 }
 
 pub struct Store {
@@ -340,6 +350,28 @@ impl Store {
         )?;
         if !has_remark_column {
             conn.execute("ALTER TABLE images ADD COLUMN remark TEXT NOT NULL DEFAULT ''", [])?;
+        }
+        let has_image_remote_column: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('images') WHERE name = 'remote_object_name')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_image_remote_column {
+            conn.execute("ALTER TABLE images ADD COLUMN remote_object_name TEXT", [])?;
+        }
+        for (col, ddl) in [
+            ("remote_object_name", "ALTER TABLE productions ADD COLUMN remote_object_name TEXT"),
+            ("byte_length", "ALTER TABLE productions ADD COLUMN byte_length INTEGER NOT NULL DEFAULT 0"),
+            ("original_name", "ALTER TABLE productions ADD COLUMN original_name TEXT NOT NULL DEFAULT ''"),
+        ] {
+            let exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('productions') WHERE name = ?1)",
+                [col],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                conn.execute(ddl, [])?;
+            }
         }
         // 旧库迁移：orders 表补 cloud_hash 列（云同步清单指纹，多机协同）
         let has_cloud_column: i64 = conn
@@ -659,8 +691,11 @@ impl Store {
         };
 
         let mut statement = conn.prepare(
-            "SELECT id, order_id, file_path, original_name, byte_length, width, height, source, created_at, thumb_path, remark
-             FROM images WHERE order_id = ?1 ORDER BY created_at ASC",
+            "SELECT i.id, i.order_id, i.file_path, i.original_name, i.byte_length, i.width, i.height,
+                    i.source, i.created_at, i.thumb_path, i.remark, i.remote_object_name, qa.quality
+             FROM images i
+             LEFT JOIN qiniu_assets qa ON qa.id = i.id
+             WHERE i.order_id = ?1 ORDER BY i.created_at ASC",
         )?;
         let mut images: Vec<OrderImage> = statement
             .query_map(params![id], |row| {
@@ -676,6 +711,8 @@ impl Store {
                     source: row.get(7)?,
                     created_at: row.get(8)?,
                     remark: row.get(10)?,
+                    remote_object_name: row.get(11)?,
+                    source_quality: row.get(12)?,
                     templates: Vec::new(),
                 })
             })?
@@ -696,6 +733,96 @@ impl Store {
         drop(template_statement);
 
         Ok(Some(OrderDetail { images, ..order }))
+    }
+
+    /// 一次性查询所有订单摘要与素材详情，避免前端列表每轮 N+1 IPC 查询。
+    pub fn list_order_entries(&self) -> Result<Vec<OrderEntry>, rusqlite::Error> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        let mut order_stmt = conn.prepare(
+            "SELECT o.id, o.order_number, o.created_at, o.updated_at, o.metadata
+             FROM orders o
+             ORDER BY o.updated_at DESC",
+        )?;
+        let summaries: Vec<OrderSummary> = order_stmt
+            .query_map([], |row| {
+                Ok(OrderSummary {
+                    id: row.get(0)?,
+                    order_number: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                    image_count: 0,
+                    metadata: row.get(4)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+
+        let mut tpl_stmt = conn.prepare(
+            "SELECT image_id, template_id, quantity FROM image_templates ORDER BY template_id ASC",
+        )?;
+        let mut templates_by_image: std::collections::HashMap<String, Vec<TemplateQty>> =
+            std::collections::HashMap::new();
+        let tpl_rows = tpl_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                TemplateQty {
+                    template_id: row.get(1)?,
+                    quantity: row.get(2)?,
+                },
+            ))
+        })?;
+        for item in tpl_rows {
+            let (image_id, qty) = item?;
+            templates_by_image.entry(image_id).or_default().push(qty);
+        }
+
+        let mut img_stmt = conn.prepare(
+            "SELECT i.id, i.order_id, i.file_path, i.original_name, i.byte_length, i.width, i.height,
+                    i.source, i.created_at, i.thumb_path, i.remark, i.remote_object_name, qa.quality
+             FROM images i
+             LEFT JOIN qiniu_assets qa ON qa.id = i.id
+             ORDER BY i.created_at ASC",
+        )?;
+        let mut images_by_order: std::collections::HashMap<String, Vec<OrderImage>> =
+            std::collections::HashMap::new();
+        let img_rows = img_stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let order_id: String = row.get(1)?;
+            Ok((
+                order_id.clone(),
+                OrderImage {
+                    id,
+                    order_id,
+                    file_path: row.get(2)?,
+                    thumb_path: row.get(9)?,
+                    original_name: row.get(3)?,
+                    byte_length: row.get(4)?,
+                    width: row.get(5)?,
+                    height: row.get(6)?,
+                    source: row.get(7)?,
+                    created_at: row.get(8)?,
+                    remark: row.get(10)?,
+                    remote_object_name: row.get(11)?,
+                    source_quality: row.get(12)?,
+                    templates: Vec::new(),
+                },
+            ))
+        })?;
+        for item in img_rows {
+            let (order_id, mut img) = item?;
+            if let Some(tpls) = templates_by_image.remove(&img.id) {
+                img.templates = tpls;
+            }
+            images_by_order.entry(order_id).or_default().push(img);
+        }
+
+        Ok(summaries
+            .into_iter()
+            .map(|mut summary| {
+                let images = images_by_order.remove(&summary.id).unwrap_or_default();
+                summary.image_count = images.len() as i64;
+                OrderEntry { summary, images }
+            })
+            .collect())
     }
 
     /// 更新图片的模板关联与份数（全量替换；份数 <1 视为取消）。
@@ -1152,18 +1279,50 @@ impl Store {
         image_id: Option<&str>,
         file_path: &Path,
     ) -> Result<(), rusqlite::Error> {
+        let size = std::fs::metadata(file_path).map(|m| m.len() as i64).unwrap_or(0);
+        let original_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("production.png");
+        let original_name = original_name
+            .strip_prefix(&format!("{id}_"))
+            .unwrap_or(original_name);
         let conn = self.conn.lock().expect("store mutex poisoned");
         conn.execute(
-            "INSERT OR IGNORE INTO productions(id, order_number, image_id, file_path, created_at) VALUES(?1, ?2, ?3, ?4, ?5)",
-            params![id, order_number, image_id, file_path.to_string_lossy(), now()],
+            "INSERT OR IGNORE INTO productions(id, order_number, image_id, file_path, created_at, byte_length, original_name)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, order_number, image_id, file_path.to_string_lossy(), now(), size, original_name],
         )?;
         Ok(())
+    }
+
+    pub fn get_production(&self, id: &str) -> Result<Option<ProductionRow>, rusqlite::Error> {
+        let conn = self.conn.lock().expect("store mutex poisoned");
+        conn.query_row(
+            "SELECT id, order_number, image_id, file_path, created_at, remote_object_name, byte_length, original_name
+             FROM productions WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(ProductionRow {
+                    id: row.get(0)?,
+                    order_number: row.get(1)?,
+                    image_id: row.get(2)?,
+                    file_path: row.get(3)?,
+                    created_at: row.get(4)?,
+                    remote_object_name: row.get(5)?,
+                    byte_length: row.get(6)?,
+                    original_name: row.get(7)?,
+                })
+            },
+        )
+        .optional()
     }
 
     pub fn list_productions(&self, order_number: &str) -> Result<Vec<ProductionRow>, rusqlite::Error> {
         let conn = self.conn.lock().expect("store mutex poisoned");
         let mut statement = conn.prepare(
-            "SELECT id, order_number, image_id, file_path, created_at FROM productions
+            "SELECT id, order_number, image_id, file_path, created_at, remote_object_name, byte_length, original_name
+             FROM productions
              WHERE order_number = ?1 ORDER BY created_at ASC",
         )?;
         let rows = statement.query_map(params![order_number], |row| {
@@ -1173,6 +1332,9 @@ impl Store {
                 image_id: row.get(2)?,
                 file_path: row.get(3)?,
                 created_at: row.get(4)?,
+                remote_object_name: row.get(5)?,
+                byte_length: row.get(6)?,
+                original_name: row.get(7)?,
             })
         })?;
         rows.collect()

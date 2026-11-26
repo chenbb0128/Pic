@@ -1,10 +1,11 @@
 import { reactive } from 'vue'
 import { toast as notify } from 'vue-sonner'
 import * as api from '../lib/tauri'
-import type { AppInfo, OrderDetail, OrderSummary, PaidanEvent, QiniuStatus, WorkflowOrder, WorkflowSettings } from '../types'
+import type { AppInfo, OrderDetail, OrderEntry, OrderSummary, PaidanEvent, QiniuStatus, WorkflowOrder, WorkflowSettings } from '../types'
 
 interface State {
   orders: OrderSummary[]
+  entries: OrderEntry[] | null
   selectedId: string | null
   detail: OrderDetail | null
   info: AppInfo | null
@@ -17,6 +18,7 @@ interface State {
 
 const state = reactive<State>({
   orders: [],
+  entries: null,
   selectedId: null,
   detail: null,
   info: null,
@@ -56,6 +58,28 @@ export async function refreshWorkflowOrders() {
 export async function loadOrders(selectId?: string) {
   state.loading = true
   try {
+    if (typeof api.listOrderEntries === 'function') {
+      const entries = await api.listOrderEntries()
+      state.entries = entries
+      state.orders = entries.map(entry => entry.summary)
+      const target = selectId ?? state.selectedId
+      const chosen = (target && entries.find(e => e.summary.id === target)) ?? entries[0] ?? null
+      if (chosen) {
+        state.selectedId = chosen.summary.id
+        state.detail = {
+          id: chosen.summary.id,
+          orderNumber: chosen.summary.orderNumber,
+          createdAt: chosen.summary.createdAt,
+          updatedAt: chosen.summary.updatedAt,
+          images: chosen.images,
+        }
+      } else {
+        state.selectedId = null
+        state.detail = null
+      }
+      return
+    }
+    state.entries = null
     state.orders = await api.listOrders()
     const target = selectId ?? state.selectedId
     if (target && state.orders.some(o => o.id === target)) {
@@ -129,16 +153,25 @@ async function registerEvents(): Promise<() => void> {
       )
       await loadOrders().catch(error => toast('error', `刷新同步订单失败：${error}`))
     }))
+    if (typeof api.onWorkflowChanged === 'function') {
+      unlisteners.push(await api.onWorkflowChanged(async outcome => {
+        await Promise.all([
+          loadOrders().catch(() => {}),
+          refreshWorkflowOrders().catch(() => {}),
+          outcome.templatesUpdated ? loadInfo().catch(() => {}) : Promise.resolve(),
+        ])
+      }))
+    }
   } catch (error) {
     unlisteners.forEach(stop => stop())
     throw error
   }
-  // 事件兜底：定时轮询订单列表（事件丢失也能刷出来）
+  // 事件兜底：低频轮询本地状态（单次聚合 IPC，不再触发 N+1 查库）
   const pollTimer = setInterval(() => {
     void loadOrders().catch(() => {})
     void refreshQiniuStatus().catch(() => {})
     void refreshWorkflowOrders().catch(() => {})
-  }, 5000)
+  }, 15000)
   let stopped = false
   return () => {
     if (stopped) return

@@ -78,12 +78,25 @@ pub struct ImageDto {
     pub created_at: String,
     pub remark: String,
     pub templates: Vec<TemplateQtyDto>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub remote_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_quality: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_error: Option<String>,
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrderEntryDto {
+    pub summary: OrderDto,
+    pub images: Vec<ImageDto>,
 }
 
 #[derive(Serialize)]
@@ -127,7 +140,8 @@ fn image_to_dto(image: &crate::store::OrderImage) -> ImageDto {
         source: image.source.clone(),
         created_at: image.created_at.clone(),
         remark: image.remark.clone(),
-        source_quality: None,
+        remote_only: image.file_path.is_empty() && image.remote_object_name.is_some(),
+        source_quality: image.source_quality.clone(),
         sync_status: None,
         sync_error: None,
         templates: image
@@ -139,6 +153,21 @@ fn image_to_dto(image: &crate::store::OrderImage) -> ImageDto {
             })
             .collect(),
     }
+}
+
+#[tauri::command]
+pub fn list_order_entries(state: State<'_, AppState>) -> Result<Vec<OrderEntryDto>, String> {
+    let entries = state
+        .store
+        .list_order_entries()
+        .map_err(|error| error.to_string())?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| OrderEntryDto {
+            summary: order_to_dto(&entry.summary),
+            images: entry.images.iter().map(image_to_dto).collect(),
+        })
+        .collect())
 }
 
 fn detail_to_dto(order: OrderDetail) -> OrderDetailDto {
@@ -252,6 +281,10 @@ pub struct ProductionDto {
     pub image_id: Option<String>,
     pub file_path: String,
     pub created_at: String,
+    pub original_name: String,
+    pub byte_length: i64,
+    #[serde(skip_serializing_if = "is_false")]
+    pub remote_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -325,6 +358,9 @@ pub async fn save_production(
         image_id,
         file_path: path.to_string_lossy().to_string(),
         created_at: crate::store::now(),
+        original_name: file_name,
+        byte_length: bytes.len() as i64,
+        remote_only: false,
         sync_status: None,
         sync_error: None,
     })
@@ -338,9 +374,16 @@ pub fn list_productions(
     let rows = state.store.list_productions(&order_number).map_err(|e| e.to_string())?;
     rows.into_iter().map(|row| {
         let sync = state.store.qiniu_asset_state(&row.id).map_err(|e| e.to_string())?;
+        let remote_only = row.file_path.is_empty() && row.remote_object_name.is_some();
         Ok(ProductionDto {
-            id: row.id, order_number: row.order_number, image_id: row.image_id,
-            file_path: row.file_path, created_at: row.created_at,
+            id: row.id,
+            order_number: row.order_number,
+            image_id: row.image_id,
+            file_path: row.file_path,
+            created_at: row.created_at,
+            original_name: row.original_name,
+            byte_length: row.byte_length,
+            remote_only,
             sync_status: sync.as_ref().map(|status| status.state.clone()),
             sync_error: sync.and_then(|status| status.error),
         })

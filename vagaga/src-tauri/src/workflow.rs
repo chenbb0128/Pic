@@ -8,7 +8,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::mysql::{MyClient, OrderIndex, SharedOrder};
+use crate::mysql::{ClaimResult, MyClient, OrderIndex, SharedOrder, SharedOrderRow};
 use crate::store::{random_hex_pub, Store};
 use crate::workflow_db::{self as db, ImportAction, ImportedAsset, OrderState, Task};
 use crate::workflow_storage::Backend;
@@ -32,21 +32,21 @@ impl SharedState {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Template {
     template_id: String,
     quantity: i64,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum AssetKind {
     Original,
     Production,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Asset {
     id: String,
@@ -82,7 +82,7 @@ impl Asset {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OrderData {
     order_number: String,
@@ -351,6 +351,12 @@ fn snapshot(
         }) {
             asset.object_name.clone_from(&stored.object_name);
             asset.bytes = stored.bytes;
+        } else if image.file_path.is_empty() {
+            let Some(remote_obj) = image.remote_object_name.as_ref() else {
+                return Err(format!("素材 {} 尚未下载到本机。", asset.name));
+            };
+            asset.object_name.clone_from(remote_obj);
+            asset.bytes = u64::try_from(image.byte_length).unwrap_or(0);
         } else {
             let source = record_asset(
                 &root,
@@ -366,7 +372,16 @@ fn snapshot(
     if kind != "publish" {
         for product in store.list_productions(number).map_err(display)? {
             let path = Path::new(&product.file_path);
-            let mut name = file_name(path, "production.png");
+            let fallback_name = if product.original_name.is_empty() {
+                "production.png"
+            } else {
+                product.original_name.as_str()
+            };
+            let mut name = if product.file_path.is_empty() {
+                fallback_name.to_owned()
+            } else {
+                file_name(path, fallback_name)
+            };
             let id = db::remote_id(store, &product.id).map_err(display)?;
             if let Some(stripped) = name
                 .strip_prefix(&format!("{}_", product.id))
@@ -399,9 +414,25 @@ fn snapshot(
             }) {
                 asset.image_id = None;
             }
-            let source = record_asset(&root, &mut asset, path, order_directory.as_deref())
-                .map_err(|error| format!("读取 {} 失败：{error}", asset.name))?;
-            sources.insert(asset.id.clone(), source);
+            if let Some(stored) = previous.and_then(|order| {
+                order
+                    .assets
+                    .iter()
+                    .find(|candidate| candidate.id == asset.id && candidate.production())
+            }) {
+                asset.object_name.clone_from(&stored.object_name);
+                asset.bytes = stored.bytes;
+            } else if product.file_path.is_empty() {
+                let Some(remote_obj) = product.remote_object_name.as_ref() else {
+                    continue;
+                };
+                asset.object_name.clone_from(remote_obj);
+                asset.bytes = u64::try_from(product.byte_length).unwrap_or(0);
+            } else {
+                let source = record_asset(&root, &mut asset, path, order_directory.as_deref())
+                    .map_err(|error| format!("读取 {} 失败：{error}", asset.name))?;
+                sources.insert(asset.id.clone(), source);
+            }
             assets.push(asset);
         }
     }
@@ -441,11 +472,13 @@ pub(crate) struct Preview {
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Outcome {
-    updated: usize,
-    completed: usize,
-    uploaded_order_numbers: Vec<String>,
-    conflicts: Vec<Preview>,
-    errors: Vec<String>,
+    pub(crate) updated: usize,
+    pub(crate) completed: usize,
+    pub(crate) claims_changed: usize,
+    pub(crate) templates_updated: usize,
+    pub(crate) uploaded_order_numbers: Vec<String>,
+    pub(crate) conflicts: Vec<Preview>,
+    pub(crate) errors: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -454,6 +487,24 @@ pub(crate) struct Settings {
     role: String,
     target: Option<String>,
     storage_provider: Option<&'static str>,
+    device_id: String,
+    device_name: String,
+    auto_sync: bool,
+    poll_seconds: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ClaimResponse {
+    pub(crate) ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) claimed_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) message: Option<String>,
 }
 
 fn preview(store: &Store, order: &OrderData, reference: String) -> Result<Preview, String> {
@@ -520,13 +571,32 @@ pub(crate) fn selected(state: &AppState) -> Result<Backend, String> {
         .ok_or_else(|| "请先在设置 → 共享存储中选择服务并保存配置。".into())
 }
 
+pub(crate) fn auto_sync_config(store: &Store) -> (bool, u64) {
+    let enabled = db::setting(store, "auto-sync")
+        .ok()
+        .flatten()
+        .is_none_or(|val| val != "false");
+    let poll = db::setting(store, "poll-seconds")
+        .ok()
+        .flatten()
+        .and_then(|val| val.parse::<u64>().ok())
+        .unwrap_or(15)
+        .clamp(10, 60);
+    (enabled, poll)
+}
+
 #[tauri::command]
 pub(crate) fn workflow_settings(state: State<'_, AppState>) -> Result<Settings, String> {
     let storage = crate::workflow_storage::Configuration::load(&state.store, &state.data_root)?;
+    let (auto_sync, poll_seconds) = auto_sync_config(&state.store);
     Ok(Settings {
         role: db::role(&state.store),
         target: storage.as_ref().and_then(|configuration| configuration.target()),
         storage_provider: storage.as_ref().map(|configuration| configuration.provider()),
+        device_id: db::device_id(&state.store)?,
+        device_name: db::device_name(&state.store)?,
+        auto_sync,
+        poll_seconds,
     })
 }
 
@@ -539,6 +609,36 @@ pub(crate) fn workflow_set_role(
         return Err("请选择有效的设备角色。".into());
     }
     db::put_setting(&state.store, "role", &role).map_err(display)?;
+    workflow_settings(state)
+}
+
+#[tauri::command]
+pub(crate) fn workflow_set_device_name(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<Settings, String> {
+    db::set_device_name(&state.store, &name)?;
+    workflow_settings(state)
+}
+
+#[tauri::command]
+pub(crate) fn workflow_set_auto_sync(
+    state: State<'_, AppState>,
+    enabled: bool,
+    poll_seconds: Option<u64>,
+) -> Result<Settings, String> {
+    db::put_setting(
+        &state.store,
+        "auto-sync",
+        if enabled { "true" } else { "false" },
+    )
+    .map_err(display)?;
+    if let Some(secs) = poll_seconds {
+        if !(10..=60).contains(&secs) {
+            return Err("自动同步间隔应在 10 到 60 秒之间。".into());
+        }
+        db::put_setting(&state.store, "poll-seconds", &secs.to_string()).map_err(display)?;
+    }
     workflow_settings(state)
 }
 
@@ -761,6 +861,193 @@ async fn check_upload_storage(
     Ok(())
 }
 
+fn normalized_templates(templates: &[Template]) -> Vec<(&str, i64)> {
+    let mut list: Vec<(&str, i64)> = templates
+        .iter()
+        .map(|t| (t.template_id.as_str(), t.quantity))
+        .collect();
+    list.sort_by(|a, b| a.0.cmp(b.0));
+    list
+}
+
+fn normalized_remark(remark: Option<&str>) -> &str {
+    remark.map(str::trim).unwrap_or("")
+}
+
+fn same_original_edits(left: &Asset, right: &Asset) -> bool {
+    normalized_templates(&left.templates) == normalized_templates(&right.templates)
+        && normalized_remark(left.remark.as_deref()) == normalized_remark(right.remark.as_deref())
+}
+
+fn merge_metadata_maps(
+    remote: Option<&serde_json::Map<String, serde_json::Value>>,
+    local: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    match (remote, local) {
+        (None, None) => None,
+        (Some(r), None) => Some(r.clone()),
+        (None, Some(l)) => Some(l.clone()),
+        (Some(r), Some(l)) => {
+            let remote_str = serde_json::Value::Object(r.clone()).to_string();
+            let local_str = serde_json::Value::Object(l.clone()).to_string();
+            let merged = crate::store::merge_order_metadata(Some(&remote_str), &local_str);
+            let mut map = db::metadata(Some(&merged));
+            for (k, v) in r {
+                map.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+            Some(map)
+        }
+    }
+}
+
+/// 尝试将本机待上传订单与远端待制作订单按素材粒度无损合并。
+/// 返回 `Some(merged)` 表示可安全自动合并；返回 `None` 表示存在同一素材的并发冲突修改，需人工确认。
+fn merge_publish_data(
+    local: &OrderData,
+    remote: &OrderData,
+    base: Option<&OrderData>,
+) -> Option<OrderData> {
+    if remote.state != SharedState::Pending {
+        return None;
+    }
+    let remote_originals: BTreeMap<&str, &Asset> = remote
+        .assets
+        .iter()
+        .filter(|a| !a.production())
+        .map(|a| (a.id.as_str(), a))
+        .collect();
+    let local_originals: BTreeMap<&str, &Asset> = local
+        .assets
+        .iter()
+        .filter(|a| !a.production())
+        .map(|a| (a.id.as_str(), a))
+        .collect();
+
+    let mut merged_assets = Vec::new();
+    match base {
+        None => {
+            // 本机尚未同步过该订单：仅当本机新增的素材 ID 与远端完全不重叠时（如另一台排单机补抓新图）自动追加合并。
+            if local_originals.is_empty()
+                || local_originals
+                    .keys()
+                    .any(|id| remote_originals.contains_key(id))
+            {
+                return None;
+            }
+            merged_assets.extend(remote.assets.iter().filter(|a| !a.production()).cloned());
+            merged_assets.extend(local.assets.iter().filter(|a| !a.production()).cloned());
+        }
+        Some(base_order) => {
+            let base_originals: BTreeMap<&str, &Asset> = base_order
+                .assets
+                .iter()
+                .filter(|a| !a.production())
+                .map(|a| (a.id.as_str(), a))
+                .collect();
+
+            // 检查本机是否确实相对基准有修改，若本机无任何修改则不主动覆盖远端新版本。
+            let local_changed_assets = local_originals.len() != base_originals.len()
+                || local_originals.iter().any(|(id, l)| {
+                    base_originals
+                        .get(id)
+                        .is_none_or(|b| !same_original_edits(l, b))
+                });
+            let local_changed_meta = local.metadata != base_order.metadata;
+            if !local_changed_assets && !local_changed_meta {
+                return None;
+            }
+
+            let mut ordered_ids: Vec<&str> = Vec::new();
+            let mut seen_ids = std::collections::HashSet::new();
+            for item in remote
+                .assets
+                .iter()
+                .chain(local.assets.iter())
+                .filter(|a| !a.production())
+            {
+                if seen_ids.insert(item.id.as_str()) {
+                    ordered_ids.push(item.id.as_str());
+                }
+            }
+
+            for id in ordered_ids {
+                match (
+                    base_originals.get(id),
+                    local_originals.get(id),
+                    remote_originals.get(id),
+                ) {
+                    (None, Some(l), None) => merged_assets.push((*l).clone()),
+                    (None, None, Some(r)) => merged_assets.push((*r).clone()),
+                    (None, Some(l), Some(r)) => {
+                        if same_original_edits(l, r) {
+                            merged_assets.push((*r).clone());
+                        } else {
+                            return None;
+                        }
+                    }
+                    (Some(b), None, Some(r)) => {
+                        // 本机删除了该图：仅当远端未修改该图时才允许删除，否则走冲突确认。
+                        if !same_original_edits(b, r) {
+                            return None;
+                        }
+                    }
+                    (Some(b), Some(l), None) => {
+                        // 远端删除了该图：仅当本机未修改该图时才允许删除，否则走冲突确认。
+                        if !same_original_edits(b, l) {
+                            return None;
+                        }
+                    }
+                    (Some(b), Some(l), Some(r)) => {
+                        let b_tpl = normalized_templates(&b.templates);
+                        let l_tpl = normalized_templates(&l.templates);
+                        let r_tpl = normalized_templates(&r.templates);
+                        let templates = if l_tpl == b_tpl {
+                            r.templates.clone()
+                        } else if r_tpl == b_tpl || l_tpl == r_tpl {
+                            l.templates.clone()
+                        } else {
+                            return None;
+                        };
+
+                        let b_rem = normalized_remark(b.remark.as_deref());
+                        let l_rem = normalized_remark(l.remark.as_deref());
+                        let r_rem = normalized_remark(r.remark.as_deref());
+                        let remark = if l_rem == b_rem {
+                            r.remark.clone()
+                        } else if r_rem == b_rem || l_rem == r_rem {
+                            l.remark.clone()
+                        } else {
+                            return None;
+                        };
+
+                        let mut combined = (*r).clone();
+                        combined.templates = templates;
+                        combined.remark = remark;
+                        merged_assets.push(combined);
+                    }
+                    (_, None, None) => {}
+                }
+            }
+        }
+    }
+
+    // 保留远端可能已存在的历史返工成品引用
+    merged_assets.extend(remote.assets.iter().filter(|a| a.production()).cloned());
+    if merged_assets.iter().all(|a| a.production()) {
+        return None;
+    }
+
+    Some(OrderData {
+        order_number: local.order_number.clone(),
+        operation_id: local.operation_id.clone(),
+        state: SharedState::Pending,
+        metadata: merge_metadata_maps(remote.metadata.as_ref(), local.metadata.as_ref()),
+        assets: merged_assets,
+        updated_at: local.updated_at.clone(),
+        completed_at: None,
+    })
+}
+
 async fn upload_one(
     state: &AppState,
     index: &mut OrderIndex,
@@ -789,7 +1076,7 @@ async fn upload_one(
                 .map_err(display)?
                 .is_some())
     {
-        return Err("这笔订单已标记完成。".into());
+        return Err("这笔订单已标记完成。如需修改请先点击「返工重开」。".into());
     }
     let backend = match local.target.as_deref() {
         Some(target) => Backend::bound(&state.store, &state.data_root, target)?,
@@ -803,10 +1090,65 @@ async fn upload_one(
         return Err("共享数据库里没有这笔订单，请在排单端重新上传后再交付。".into());
     }
     let expected = local.remote_operation_id.as_deref();
+    let operation = random_hex_pub(16);
     if !current_matches(previous.as_ref(), expected) {
+        if kind == "publish" {
+            if let Some(remote) = previous.as_ref() {
+                if remote.state == SharedState::Pending {
+                    let base = db::synced_snapshot(&state.store, number)
+                        .map_err(display)?
+                        .and_then(|raw| OrderData::parse(raw.as_bytes()).ok());
+                    let (local_draft, sources) = snapshot(
+                        &state.store,
+                        &state.data_root,
+                        number,
+                        kind,
+                        Some(remote),
+                        backend.uses_order_directory(),
+                        &operation,
+                    )?;
+                    if let Some(merged) = merge_publish_data(&local_draft, remote, base.as_ref()) {
+                        crate::templates::require_shared(state, &backend, merged.template_ids())
+                            .await?;
+                        let payload = serde_json::to_string(&merged).map_err(display)?;
+                        let task = Task {
+                            number: number.into(),
+                            target: target.clone(),
+                            kind: kind.into(),
+                            expected_operation_id: Some(remote.operation_id.clone()),
+                            generation: local.generation,
+                            payload: payload.clone(),
+                            source_files: Some(serde_json::to_string(&sources).map_err(display)?),
+                        };
+                        db::insert_task(&state.store, &task, &local.version())?;
+                        let outcome = run_task(state, &backend, index, &task).await?;
+                        if outcome.is_none() {
+                            // 将合并后的远端其他客服素材同步回本机（排单端使用懒加载占位，二合一端按需补齐）
+                            let eager_originals = db::role(&state.store) != "customer";
+                            let downloaded =
+                                prepare_import_assets(state, &backend, &merged, eager_originals)
+                                    .await?;
+                            let refreshed_version = db::order_state(&state.store, number)
+                                .map_err(display)?
+                                .map(|s| s.version());
+                            apply_download(
+                                &state.store,
+                                &merged,
+                                downloaded,
+                                ImportAction::Sync,
+                                refreshed_version.as_deref(),
+                                Some(&target),
+                                Some(&payload),
+                                None,
+                            )?;
+                        }
+                        return Ok(outcome);
+                    }
+                }
+            }
+        }
         return shared_conflict(&state.store, &target, previous.as_ref()).map(Some);
     }
-    let operation = random_hex_pub(16);
     let (order, sources) = snapshot(
         &state.store,
         &state.data_root,
@@ -936,19 +1278,61 @@ fn display_file_name(name: &str, fallback: &str) -> String {
 }
 
 struct Download {
-    directory: tempfile::TempDir,
+    directory: Option<tempfile::TempDir>,
     assets: Vec<ImportedAsset>,
 }
 
-async fn download(
+fn lazy_import_asset(asset: &Asset) -> ImportedAsset {
+    let name = display_file_name(
+        &asset.name,
+        if asset.production() {
+            "production.png"
+        } else {
+            "photo.png"
+        },
+    );
+    ImportedAsset {
+        remote_id: asset.id.clone(),
+        image_id: asset.image_id.clone(),
+        name,
+        path: PathBuf::new(),
+        thumb: None,
+        remote_object_name: Some(asset.object_name.clone()),
+        production: asset.production(),
+        bytes: asset.bytes,
+        width: asset.width.unwrap_or(0),
+        height: asset.height.unwrap_or(0),
+        quality: asset.quality.clone(),
+        remark: asset.remark.clone(),
+        templates: asset
+            .templates
+            .iter()
+            .map(|t| (t.template_id.clone(), t.quantity))
+            .collect(),
+    }
+}
+
+async fn prepare_import_assets(
     state: &AppState,
     backend: &Backend,
     order: &OrderData,
+    eager_originals: bool,
 ) -> Result<Download, String> {
-    crate::templates::fetch_missing(state, backend, order.template_ids()).await?;
-    let directory = download_directory(&state.data_root)?;
-    let mut assets = Vec::new();
+    if eager_originals {
+        crate::templates::fetch_missing(state, backend, order.template_ids()).await?;
+    }
+    let existing = db::existing_remote_files(&state.store, &order.order_number).map_err(display)?;
+    let mut directory: Option<tempfile::TempDir> = None;
+    let mut assets = Vec::with_capacity(order.assets.len());
     for asset in &order.assets {
+        if asset.production() || !eager_originals || existing.contains_key(&asset.id) {
+            assets.push(lazy_import_asset(asset));
+            continue;
+        }
+        let dir = match &directory {
+            Some(dir) => dir,
+            None => directory.insert(download_directory(&state.data_root)?),
+        };
         let bytes = backend
             .get_image(asset.folder(), &asset.object_name)
             .await?
@@ -956,9 +1340,17 @@ async fn download(
         if bytes.len() as u64 != asset.bytes {
             return Err(format!("共享文件校验失败：{}", asset.name));
         }
-        assets.push(write_import_file(directory.path(), asset, &bytes)?);
+        assets.push(write_import_file(dir.path(), asset, &bytes)?);
     }
     Ok(Download { directory, assets })
+}
+
+async fn download(
+    state: &AppState,
+    backend: &Backend,
+    order: &OrderData,
+) -> Result<Download, String> {
+    prepare_import_assets(state, backend, order, true).await
 }
 
 fn download_directory(root: &Path) -> Result<tempfile::TempDir, String> {
@@ -1004,6 +1396,7 @@ fn write_import_file(
         name,
         path,
         thumb,
+        remote_object_name: Some(asset.object_name.clone()),
         production: asset.production(),
         bytes: asset.bytes,
         width,
@@ -1048,7 +1441,10 @@ pub(crate) fn import_legacy(
             let bytes = sources[&asset.id].read(&source_root, asset.bytes)?;
             assets.push(write_import_file(directory.path(), asset, &bytes)?);
         }
-        let download = Download { directory, assets };
+        let download = Download {
+            directory: Some(directory),
+            assets,
+        };
         let new_images = download
             .assets
             .iter()
@@ -1062,12 +1458,15 @@ pub(crate) fn import_legacy(
             ImportAction::Sync,
             None,
             None,
+            None,
+            None,
         )?;
         notices.push((number, new_images, new_productions));
     }
     Ok(notices)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_download(
     store: &Store,
     order: &OrderData,
@@ -1075,6 +1474,8 @@ fn apply_download(
     action: ImportAction,
     expected: Option<&str>,
     target: Option<&str>,
+    raw_payload: Option<&str>,
+    claim: Option<(Option<&str>, Option<&str>, Option<i64>)>,
 ) -> Result<(), String> {
     let metadata = order
         .metadata
@@ -1091,16 +1492,87 @@ fn apply_download(
             completed: target.is_none() && order.state == SharedState::Completed,
             action,
             assets: &request.assets,
+            raw_payload,
+            claim,
         },
     )?;
-    let _ = request.directory.keep();
+    if let Some(dir) = request.directory {
+        let _ = dir.keep();
+    }
     Ok(())
 }
 
+fn originals_unchanged_since_sync(store: &Store, number: &str) -> bool {
+    let Ok(Some(raw)) = db::synced_snapshot(store, number) else {
+        return false;
+    };
+    let Ok(base) = OrderData::parse(raw.as_bytes()) else {
+        return false;
+    };
+    let Ok(Some(detail)) = store.get_order_by_number(number) else {
+        return false;
+    };
+    let base_originals: Vec<&Asset> = base.assets.iter().filter(|a| !a.production()).collect();
+    if detail.images.len() != base_originals.len() {
+        return false;
+    }
+    for img in &detail.images {
+        let Ok(rid) = db::remote_id(store, &img.id) else {
+            return false;
+        };
+        let Some(base_asset) = base_originals.iter().find(|a| a.id == rid) else {
+            return false;
+        };
+        let mut sorted_local: Vec<(&str, i64)> = img
+            .templates
+            .iter()
+            .map(|t| (t.template_id.as_str(), t.quantity))
+            .collect();
+        sorted_local.sort_by(|a, b| a.0.cmp(b.0));
+        if sorted_local != normalized_templates(&base_asset.templates)
+            || img.remark.trim() != normalized_remark(base_asset.remark.as_deref())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn active_order_originals_preserved(store: &Store, number: &str, incoming: &OrderData) -> bool {
+    let Ok(Some(detail)) = store.get_order_by_number(number) else {
+        return true;
+    };
+    let incoming_ids: std::collections::HashSet<&str> = incoming
+        .assets
+        .iter()
+        .filter(|a| !a.production())
+        .map(|a| a.id.as_str())
+        .collect();
+    detail.images.iter().all(|img| {
+        db::remote_id(store, &img.id)
+            .map(|rid| incoming_ids.contains(rid.as_str()))
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(test)]
 async fn apply_shared_order(
     state: &AppState,
     backend: &Backend,
     order: OrderData,
+    active_order: Option<&str>,
+    result: &mut Outcome,
+) -> Result<(), String> {
+    let payload = serde_json::to_string(&order).map_err(display)?;
+    apply_shared_order_with_meta(state, backend, order, &payload, None, active_order, result).await
+}
+
+async fn apply_shared_order_with_meta(
+    state: &AppState,
+    backend: &Backend,
+    order: OrderData,
+    raw_payload: &str,
+    claim: Option<(Option<&str>, Option<&str>, Option<i64>)>,
     active_order: Option<&str>,
     result: &mut Outcome,
 ) -> Result<(), String> {
@@ -1113,20 +1585,71 @@ async fn apply_shared_order(
             local.remote_operation_id.as_deref() == Some(order.operation_id.as_str())
         })
     {
-        return Ok(());
-    }
-    if order.state == SharedState::Completed {
-        if same_target
-            && db::mark_remote_complete(&state.store, number, &target, &order.operation_id)
+        if let Some((cb, cn, ca)) = claim {
+            if local.as_ref().is_some_and(|st| {
+                st.claimed_by.as_deref() != cb
+                    || st.claimed_name.as_deref() != cn
+                    || st.claimed_at != ca
+            }) && db::update_claim_local(&state.store, number, Some(&target), cb, cn, ca)
                 .map_err(display)?
-        {
-            result.completed += 1;
+            {
+                result.claims_changed += 1;
+            }
         }
         return Ok(());
     }
-    if active_order == Some(number)
+    let role = db::role(&state.store);
+    if order.state == SharedState::Completed {
+        if local
+            .as_ref()
+            .is_some_and(|st| !same_target && st.target.is_some())
+        {
+            return Ok(());
+        }
+        let was_complete = local.as_ref().is_some_and(|st| {
+            st.local_completed || st.shared_state.as_deref() == Some("completed")
+        });
+        let version = local.as_ref().map(OrderState::version);
+        let lazy_assets = prepare_import_assets(state, backend, &order, false).await?;
+        apply_download(
+            &state.store,
+            &order,
+            lazy_assets,
+            ImportAction::Sync,
+            version.as_deref(),
+            Some(&target),
+            Some(raw_payload),
+            Some((None, None, None)),
+        )?;
+        if !was_complete {
+            result.completed += 1;
+        } else {
+            result.updated += 1;
+        }
+        return Ok(());
+    }
+
+    let local_only_production_progress = local.as_ref().is_some_and(|st| {
+        same_target
+            && !st.local_completed
+            && st.generation != st.synced_generation
+            && originals_unchanged_since_sync(&state.store, number)
+    });
+    let safe_while_active = active_order != Some(number)
+        || (local
+            .as_ref()
+            .is_some_and(|st| same_target && !st.local_completed)
+            && (local
+                .as_ref()
+                .is_some_and(|st| st.generation == st.synced_generation)
+                || local_only_production_progress)
+            && active_order_originals_preserved(&state.store, number, &order));
+
+    if !safe_while_active
         || local.as_ref().is_some_and(|local| {
-            !same_target || local.generation != local.synced_generation || local.local_completed
+            !same_target
+                || (local.generation != local.synced_generation && !local_only_production_progress)
+                || local.local_completed
         })
     {
         result
@@ -1135,7 +1658,8 @@ async fn apply_shared_order(
         return Ok(());
     }
     let version = local.as_ref().map(OrderState::version);
-    let downloaded = download(state, backend, &order).await?;
+    let eager_originals = role != "customer" || local.is_some();
+    let downloaded = prepare_import_assets(state, backend, &order, eager_originals).await?;
     apply_download(
         &state.store,
         &order,
@@ -1143,9 +1667,399 @@ async fn apply_shared_order(
         ImportAction::Sync,
         version.as_deref(),
         Some(&target),
+        Some(raw_payload),
+        claim,
     )?;
     result.updated += 1;
     Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn workflow_claim_order(
+    state: State<'_, AppState>,
+    order_number: String,
+    force: Option<bool>,
+) -> Result<ClaimResponse, String> {
+    let _operation = state.workflow_operations.lock().await;
+    let local = db::order_state(&state.store, &order_number)
+        .map_err(display)?
+        .ok_or("订单不存在。")?;
+    if local.local_completed || local.shared_state.as_deref() == Some("completed") {
+        return Ok(ClaimResponse {
+            ok: false,
+            claimed_by: None,
+            claimed_name: None,
+            claimed_at: None,
+            message: Some("这笔订单已完成，如需修改请先点击「返工重开」。".into()),
+        });
+    }
+    let my_id = db::device_id(&state.store)?;
+    let my_name = db::device_name(&state.store)?;
+    let now_ms = db::now_ms();
+    let Some(target) = local.target.as_deref() else {
+        db::update_claim_local(
+            &state.store,
+            &order_number,
+            None,
+            Some(&my_id),
+            Some(&my_name),
+            Some(now_ms),
+        )
+        .map_err(display)?;
+        return Ok(ClaimResponse {
+            ok: true,
+            claimed_by: Some(my_id),
+            claimed_name: Some(my_name),
+            claimed_at: Some(now_ms),
+            message: None,
+        });
+    };
+    let mut index = shared_database(&state.data_root).await?;
+    match index
+        .claim(
+            target,
+            &order_number,
+            &my_id,
+            &my_name,
+            now_ms,
+            db::CLAIM_LEASE_MS,
+            force.unwrap_or(false),
+        )
+        .await?
+    {
+        ClaimResult::Claimed | ClaimResult::NotFound => {
+            db::update_claim_local(
+                &state.store,
+                &order_number,
+                Some(target),
+                Some(&my_id),
+                Some(&my_name),
+                Some(now_ms),
+            )
+            .map_err(display)?;
+            Ok(ClaimResponse {
+                ok: true,
+                claimed_by: Some(my_id),
+                claimed_name: Some(my_name),
+                claimed_at: Some(now_ms),
+                message: None,
+            })
+        }
+        ClaimResult::HeldByOther {
+            device_id,
+            device_name,
+            claimed_at,
+        } => {
+            db::update_claim_local(
+                &state.store,
+                &order_number,
+                Some(target),
+                Some(&device_id),
+                Some(&device_name),
+                Some(claimed_at),
+            )
+            .map_err(display)?;
+            Ok(ClaimResponse {
+                ok: false,
+                claimed_by: Some(device_id),
+                claimed_name: Some(device_name.clone()),
+                claimed_at: Some(claimed_at),
+                message: Some(format!("该订单正由「{device_name}」制作中")),
+            })
+        }
+        ClaimResult::Completed => {
+            if let Some(remote) = index.get(target, &order_number).await? {
+                let _ = db::mark_remote_complete(
+                    &state.store,
+                    &order_number,
+                    target,
+                    &remote.operation_id,
+                );
+            }
+            Ok(ClaimResponse {
+                ok: false,
+                claimed_by: None,
+                claimed_name: None,
+                claimed_at: None,
+                message: Some("该订单已在其他设备标记完成。".into()),
+            })
+        }
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn workflow_release_order(
+    state: State<'_, AppState>,
+    order_number: String,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let _operation = state.workflow_operations.lock().await;
+    let local = db::order_state(&state.store, &order_number)
+        .map_err(display)?
+        .ok_or("订单不存在。")?;
+    let my_id = db::device_id(&state.store)?;
+    if let Some(target) = local.target.as_deref() {
+        if crate::mysql::load_config(&state.data_root).valid() {
+            let mut index = shared_database(&state.data_root).await?;
+            let _ = index
+                .release_claim(target, &order_number, &my_id, force.unwrap_or(false))
+                .await?;
+        }
+    }
+    db::update_claim_local(&state.store, &order_number, local.target.as_deref(), None, None, None)
+        .map_err(display)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) async fn workflow_reopen(
+    state: State<'_, AppState>,
+    order_number: String,
+) -> Result<(), String> {
+    let _operation = state.workflow_operations.lock().await;
+    let local = db::order_state(&state.store, &order_number)
+        .map_err(display)?
+        .ok_or("订单不存在。")?;
+    if db::task(&state.store, &order_number, "publish")
+        .map_err(display)?
+        .is_some()
+    {
+        return Err("这笔订单有待确认的上传任务，请先处理。".into());
+    }
+    if let Some(target) = local.target.as_deref() {
+        let mut index = shared_database(&state.data_root).await?;
+        if let Some(current_record) = index.get(target, &order_number).await? {
+            let expected_op = current_record.operation_id.clone();
+            let mut order = OrderData::from_record(current_record)?;
+            let new_op = random_hex_pub(16);
+            order.operation_id.clone_from(&new_op);
+            order.state = SharedState::Pending;
+            order.completed_at = None;
+            order.updated_at = crate::store::now();
+            let payload = serde_json::to_string(&order).map_err(display)?;
+            let shared = order.record(payload.clone());
+            if !index.reopen(target, &expected_op, &shared).await? {
+                return Err("共享订单状态已变化，请先同步后重试。".into());
+            }
+            db::reopen_local(
+                &state.store,
+                &order_number,
+                Some(target),
+                Some(&new_op),
+                Some(&payload),
+            )
+            .map_err(display)?;
+            return Ok(());
+        }
+    }
+    db::reopen_local(&state.store, &order_number, None, None, None).map_err(display)
+}
+
+#[tauri::command]
+pub(crate) async fn workflow_download_production(
+    state: State<'_, AppState>,
+    production_id: String,
+) -> Result<crate::commands::ProductionDto, String> {
+    let _operation = state.workflow_operations.lock().await;
+    let row = state
+        .store
+        .get_production(&production_id)
+        .map_err(display)?
+        .ok_or("找不到该成品记录。")?;
+    if !row.file_path.is_empty() && Path::new(&row.file_path).is_file() {
+        return Ok(crate::commands::ProductionDto {
+            id: row.id,
+            order_number: row.order_number,
+            image_id: row.image_id,
+            file_path: row.file_path,
+            created_at: row.created_at,
+            original_name: row.original_name,
+            byte_length: row.byte_length,
+            remote_only: false,
+            sync_status: None,
+            sync_error: None,
+        });
+    }
+    let remote_obj = row
+        .remote_object_name
+        .as_deref()
+        .ok_or("该成品缺少共享存储路径，无法下载。")?;
+    let order_state = db::order_state(&state.store, &row.order_number).map_err(display)?;
+    let backend = match order_state.and_then(|st| st.target) {
+        Some(target) => Backend::bound(&state.store, &state.data_root, &target)?,
+        None => selected(&state)?,
+    };
+    let bytes = backend
+        .get_image("production", remote_obj)
+        .await?
+        .ok_or("共享存储中未找到该成品文件。")?;
+    if row.byte_length > 0 && bytes.len() as i64 != row.byte_length {
+        return Err("下载的成品文件大小与记录不一致。".into());
+    }
+    let safe_dir = row
+        .order_number
+        .replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "_");
+    let safe_dir = safe_dir.trim_end_matches([' ', '.']);
+    let folder = state
+        .data_root
+        .join("productions")
+        .join(if safe_dir.is_empty() { "共享成品" } else { safe_dir });
+    std::fs::create_dir_all(&folder).map_err(display)?;
+    let clean_name = display_file_name(&row.original_name, "production.png");
+    let file_path = folder.join(format!("{}_{}", row.id, clean_name));
+    std::fs::write(&file_path, &bytes).map_err(display)?;
+    db::save_downloaded_production(&state.store, &row.id, &file_path, bytes.len() as u64)
+        .map_err(display)?;
+    Ok(crate::commands::ProductionDto {
+        id: row.id,
+        order_number: row.order_number,
+        image_id: row.image_id,
+        file_path: file_path.to_string_lossy().into_owned(),
+        created_at: row.created_at,
+        original_name: clean_name,
+        byte_length: bytes.len() as i64,
+        remote_only: false,
+        sync_status: None,
+        sync_error: None,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn workflow_download_image(
+    state: State<'_, AppState>,
+    image_id: String,
+) -> Result<crate::commands::ImageDto, String> {
+    let _operation = state.workflow_operations.lock().await;
+    let (order_id, order_number, remote_obj, expected_bytes, original_name): (
+        String,
+        String,
+        Option<String>,
+        i64,
+        String,
+    ) = {
+        let conn = state.store.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT i.order_id, o.order_number, i.remote_object_name, i.byte_length, i.original_name
+             FROM images i JOIN orders o ON o.id = i.order_id WHERE i.id = ?1",
+            [&image_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .map_err(display)?
+    };
+    if let Some(detail) = state.store.get_order(&order_id).map_err(display)? {
+        if let Some(existing) = detail.images.iter().find(|img| img.id == image_id) {
+            if !existing.file_path.is_empty() && Path::new(&existing.file_path).is_file() {
+                return Ok(crate::commands::OrderEntryDto {
+                    summary: crate::commands::OrderDto {
+                        id: detail.id,
+                        order_number: detail.order_number,
+                        image_count: detail.images.len() as i64,
+                        created_at: detail.created_at,
+                        updated_at: detail.updated_at,
+                        metadata: None,
+                    },
+                    images: Vec::new(),
+                }
+                .images
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| crate::commands::ImageDto {
+                    id: existing.id.clone(),
+                    file_path: existing.file_path.clone(),
+                    thumbnail_path: existing.thumb_path.clone(),
+                    original_name: existing.original_name.clone(),
+                    byte_length: existing.byte_length,
+                    width: existing.width,
+                    height: existing.height,
+                    source: existing.source.clone(),
+                    created_at: existing.created_at.clone(),
+                    remark: existing.remark.clone(),
+                    remote_only: false,
+                    source_quality: existing.source_quality.clone(),
+                    sync_status: None,
+                    sync_error: None,
+                    templates: existing
+                        .templates
+                        .iter()
+                        .map(|t| crate::commands::TemplateQtyDto {
+                            template_id: t.template_id.clone(),
+                            quantity: t.quantity,
+                        })
+                        .collect(),
+                }));
+            }
+        }
+    }
+    let remote_obj = remote_obj.ok_or("该素材缺少共享存储路径，无法下载。")?;
+    let order_state = db::order_state(&state.store, &order_number).map_err(display)?;
+    let backend = match order_state.and_then(|st| st.target) {
+        Some(target) => Backend::bound(&state.store, &state.data_root, &target)?,
+        None => selected(&state)?,
+    };
+    let bytes = backend
+        .get_image("original", &remote_obj)
+        .await?
+        .ok_or("共享存储中未找到该原图文件。")?;
+    if expected_bytes > 0 && bytes.len() as i64 != expected_bytes {
+        return Err("下载的原图文件大小与记录不一致。".into());
+    }
+    let decoded = image::load_from_memory(&bytes).map_err(display)?;
+    let dir = state.store.cloud_import_directory(&order_number);
+    std::fs::create_dir_all(&dir).map_err(display)?;
+    let clean_name = display_file_name(&original_name, "photo.png");
+    let file_path = dir.join(format!("{image_id}_{clean_name}"));
+    std::fs::write(&file_path, &bytes).map_err(display)?;
+    let thumb_path = dir.join(format!("{image_id}.thumb.jpg"));
+    let saved_thumb = decoded
+        .thumbnail(320, 320)
+        .into_rgb8()
+        .save(&thumb_path)
+        .ok()
+        .map(|_| thumb_path);
+    db::save_downloaded_image(
+        &state.store,
+        &image_id,
+        &file_path,
+        saved_thumb.as_deref(),
+        decoded.width(),
+        decoded.height(),
+        bytes.len() as u64,
+    )
+    .map_err(display)?;
+    let detail = state
+        .store
+        .get_order(&order_id)
+        .map_err(display)?
+        .ok_or("订单不存在。")?;
+    let updated = detail
+        .images
+        .into_iter()
+        .find(|img| img.id == image_id)
+        .ok_or("素材不存在。")?;
+    Ok(crate::commands::ImageDto {
+        id: updated.id,
+        file_path: updated.file_path,
+        thumbnail_path: updated.thumb_path,
+        original_name: updated.original_name,
+        byte_length: updated.byte_length,
+        width: updated.width,
+        height: updated.height,
+        source: updated.source,
+        created_at: updated.created_at,
+        remark: updated.remark,
+        remote_only: false,
+        source_quality: updated.source_quality,
+        sync_status: None,
+        sync_error: None,
+        templates: updated
+            .templates
+            .into_iter()
+            .map(|t| crate::commands::TemplateQtyDto {
+                template_id: t.template_id,
+                quantity: t.quantity,
+            })
+            .collect(),
+    })
 }
 
 #[tauri::command]
@@ -1161,26 +2075,98 @@ pub(crate) async fn synchronize(
     active_order: Option<&str>,
 ) -> Result<Outcome, String> {
     let _operation = state.workflow_operations.lock().await;
-    if db::role(&state.store) == "customer" {
-        return Err("当前是排单端，请在制作端或二合一设备同步订单。".into());
+    synchronize_locked(state, active_order, true).await
+}
+
+pub(crate) async fn background_poll(state: &AppState) -> Option<Outcome> {
+    let (auto_sync, _) = auto_sync_config(&state.store);
+    if !auto_sync || !crate::mysql::load_config(&state.data_root).valid() {
+        return None;
     }
+    if Backend::configured_target(&state.store, &state.data_root)
+        .ok()
+        .flatten()
+        .is_none()
+    {
+        return None;
+    }
+    let Ok(_guard) = state.workflow_operations.try_lock() else {
+        return None;
+    };
+    synchronize_locked(state, None, true).await.ok()
+}
+
+async fn synchronize_locked(
+    state: &AppState,
+    active_order: Option<&str>,
+    include_templates: bool,
+) -> Result<Outcome, String> {
     let mut index = shared_database(&state.data_root).await?;
     let backend = selected(state)?;
     backend.check_connection().await?;
+    let target = backend.target();
     let mut response = Outcome::default();
-    for record in index.read(&backend.target()).await? {
-        let number = record.number.clone();
-        let order = match OrderData::from_record(record) {
-            Ok(order) => order,
-            Err(error) => {
-                response.errors.push(format!("{number}：{error}"));
-                continue;
+    if include_templates {
+        response.templates_updated = crate::templates::sync_shared_quiet(state, &backend).await;
+    }
+    let mut cursor = db::sync_cursor(&state.store, &target).map_err(display)?;
+    let mut can_advance_cursor = true;
+    loop {
+        let batch: Vec<SharedOrderRow> = index.read_since(&target, cursor, 200).await?;
+        if batch.is_empty() {
+            break;
+        }
+        let batch_len = batch.len();
+        let mut last_seen_seq = cursor;
+        for row in batch {
+            last_seen_seq = row.change_seq;
+            let number = row.order.number.clone();
+            let raw_payload = row.order.payload.clone();
+            let claim_tuple = (
+                row.claimed_by.as_deref(),
+                row.claimed_name.as_deref(),
+                row.claimed_at,
+            );
+            let order = match OrderData::from_record(row.order) {
+                Ok(order) => order,
+                Err(error) => {
+                    response.errors.push(format!("{number}：{error}"));
+                    can_advance_cursor = false;
+                    continue;
+                }
+            };
+            match apply_shared_order_with_meta(
+                state,
+                &backend,
+                order,
+                &raw_payload,
+                Some(claim_tuple),
+                active_order,
+                &mut response,
+            )
+            .await
+            {
+                Ok(()) => {
+                    if can_advance_cursor && response.conflicts.is_empty() {
+                        cursor = row.change_seq;
+                        let _ = db::set_sync_cursor(&state.store, &target, cursor);
+                    } else {
+                        can_advance_cursor = false;
+                    }
+                }
+                Err(error) => {
+                    response.errors.push(format!("{number}：{error}"));
+                    can_advance_cursor = false;
+                }
             }
-        };
-        if let Err(error) =
-            apply_shared_order(state, &backend, order, active_order, &mut response).await
-        {
-            response.errors.push(format!("{number}：{error}"));
+        }
+        if batch_len < 200 || last_seen_seq == 0 {
+            break;
+        }
+        // When a conflict or error blocked advancing the persistent cursor, continue scanning
+        // newer items in this run using `last_seen_seq` without persisting past the blocked item.
+        if !can_advance_cursor {
+            cursor = last_seen_seq;
         }
     }
     Ok(response)
@@ -1219,7 +2205,8 @@ pub(crate) async fn workflow_resolve_conflict(
     }
     let downloaded = download(&state, &backend, &order).await?;
     let latest = remote_order(&mut index, &target, &number).await?;
-    reviewed_order(latest, &operation_id)?;
+    let order = reviewed_order(latest, &operation_id)?;
+    let raw_payload = serde_json::to_string(&order).map_err(display)?;
     apply_download(
         &state.store,
         &order,
@@ -1227,6 +2214,8 @@ pub(crate) async fn workflow_resolve_conflict(
         ImportAction::Replace,
         local_version.as_deref(),
         Some(&target),
+        Some(&raw_payload),
+        None,
     )
 }
 
@@ -1731,5 +2720,142 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.updated, 1);
+    }
+
+    #[test]
+    fn multi_customer_merge_combines_disjoint_uploads_and_detects_true_conflicts() {
+        let make_asset = |id: &str, tpl: &str, qty: i64, remark: &str| Asset {
+            id: id.into(),
+            kind: AssetKind::Original,
+            name: "photo.png".into(),
+            object_name: format!("001/{id}.png"),
+            bytes: 128,
+            image_id: None,
+            width: Some(10),
+            height: Some(10),
+            quality: Some("original".into()),
+            remark: Some(remark.into()),
+            templates: vec![Template {
+                template_id: tpl.into(),
+                quantity: qty,
+            }],
+        };
+        let a1 = random_hex_pub(16);
+        let a2 = random_hex_pub(16);
+        let remote = OrderData {
+            order_number: "001".into(),
+            operation_id: random_hex_pub(16),
+            state: SharedState::Pending,
+            metadata: Some(db::metadata(Some(r#"{"amount":"19.90"}"#))),
+            assets: vec![make_asset(&a1, "模板爱心.png", 1, "客服A备注")],
+            updated_at: "2026-11-26T00:00:00Z".into(),
+            completed_at: None,
+        };
+        let local_new = OrderData {
+            order_number: "001".into(),
+            operation_id: random_hex_pub(16),
+            state: SharedState::Pending,
+            metadata: Some(db::metadata(Some(r#"{"layoutNumber":"ch-888"}"#))),
+            assets: vec![make_asset(&a2, "草莓.png", 2, "客服B补图")],
+            updated_at: "2026-11-26T00:01:00Z".into(),
+            completed_at: None,
+        };
+        // Disjoint uploads without base merge cleanly.
+        let merged = merge_publish_data(&local_new, &remote, None).expect("disjoint merge");
+        assert_eq!(merged.assets.len(), 2);
+        assert_eq!(merged.metadata.as_ref().unwrap()["amount"], "19.90");
+        assert_eq!(merged.metadata.as_ref().unwrap()["layoutNumber"], "ch-888");
+
+        // With base = merged, non-overlapping edits on a1 (remote) and a2 (local) merge cleanly.
+        let mut remote_v2 = merged.clone();
+        remote_v2.operation_id = random_hex_pub(16);
+        remote_v2.assets[0].remark = Some("客服A更新备注".into());
+
+        let mut local_v2 = merged.clone();
+        local_v2.operation_id = random_hex_pub(16);
+        local_v2.assets[1].templates[0].quantity = 5;
+
+        let merged_v2 =
+            merge_publish_data(&local_v2, &remote_v2, Some(&merged)).expect("3-way merge");
+        assert_eq!(merged_v2.assets[0].remark.as_deref(), Some("客服A更新备注"));
+        assert_eq!(merged_v2.assets[1].templates[0].quantity, 5);
+
+        // Concurrent conflicting edit on the SAME asset's templates triggers manual conflict resolution.
+        let mut local_conflict = merged.clone();
+        local_conflict.assets[0].templates[0].quantity = 3;
+        let mut remote_conflict = merged.clone();
+        remote_conflict.assets[0].templates[0].quantity = 4;
+        assert!(merge_publish_data(&local_conflict, &remote_conflict, Some(&merged)).is_none());
+    }
+
+    #[tokio::test]
+    async fn completed_order_syncs_to_customer_with_lazy_productions_and_can_reopen() {
+        let customer_dir = tempfile::tempdir().unwrap();
+        let customer = workstation(&customer_dir);
+        db::put_setting(&customer.store, "role", "customer").unwrap();
+        let config = crate::cloud::CloudConfig {
+            enabled: true,
+            endpoint: "http://127.0.0.1:1".into(),
+            bucket: "fixture".into(),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        };
+        let backend = Backend::Nas(config.clone(), config.client().unwrap());
+        let orig_id = random_hex_pub(16);
+        let prod_id = random_hex_pub(16);
+        let completed_order = OrderData {
+            order_number: "DONE-100".into(),
+            operation_id: random_hex_pub(16),
+            state: SharedState::Completed,
+            metadata: Some(db::metadata(Some(r#"{"layoutNumber":"yy-100"}"#))),
+            assets: vec![
+                Asset {
+                    id: orig_id.clone(),
+                    kind: AssetKind::Original,
+                    name: "buyer.png".into(),
+                    object_name: format!("DONE-100/{orig_id}.png"),
+                    bytes: 200,
+                    image_id: None,
+                    width: Some(100),
+                    height: Some(100),
+                    quality: Some("original".into()),
+                    remark: None,
+                    templates: Vec::new(),
+                },
+                Asset {
+                    id: prod_id.clone(),
+                    kind: AssetKind::Production,
+                    name: "ch-20261126-100_成品.png".into(),
+                    object_name: format!("DONE-100/{prod_id}.png"),
+                    bytes: 4096,
+                    image_id: Some(orig_id),
+                    width: None,
+                    height: None,
+                    quality: None,
+                    remark: None,
+                    templates: Vec::new(),
+                },
+            ],
+            updated_at: "2026-11-26T01:00:00Z".into(),
+            completed_at: Some("2026-11-26T01:05:00Z".into()),
+        };
+        let mut outcome = Outcome::default();
+        // Endpoint is unreachable (127.0.0.1:1), proving zero network download happens for completed sync!
+        apply_shared_order(&customer, &backend, completed_order, None, &mut outcome)
+            .await
+            .unwrap();
+        assert_eq!(outcome.completed, 1);
+        let prods = customer.store.list_productions("DONE-100").unwrap();
+        assert_eq!(prods.len(), 1);
+        assert!(prods[0].file_path.is_empty());
+        assert_eq!(prods[0].byte_length, 4096);
+        assert!(prods[0].remote_object_name.is_some());
+
+        // Local reopen resets completed state back to pending.
+        db::reopen_local(&customer.store, "DONE-100", None, None, None).unwrap();
+        let reopened = db::order_state(&customer.store, "DONE-100").unwrap().unwrap();
+        assert!(!reopened.local_completed);
+        assert_eq!(reopened.shared_state.as_deref(), Some("pending"));
     }
 }

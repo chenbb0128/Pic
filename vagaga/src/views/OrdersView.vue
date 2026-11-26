@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, Boxes, Check, CircleCheck, Clock3, Download, GripVertical, PanelsTopLeft, RefreshCw, Search, X } from '@lucide/vue'
+import { ArrowDown, ArrowUp, Boxes, Check, CircleCheck, Clock3, CloudDownload, Download, GripVertical, PanelsTopLeft, RefreshCw, RotateCcw, Search, X } from '@lucide/vue'
 import OptionSelect from '../components/OptionSelect.vue'
 import TemplateSaveDialog from '../components/TemplateSaveDialog.vue'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
-import { useOrdersStore, loadOrders, toast } from '../stores/orders'
+import { useOrdersStore, loadOrders, refreshWorkflowOrders, toast } from '../stores/orders'
 import { mountEditorExportControls } from '../lib/editor-export-controls'
 import { connectTemplateEditor } from '../lib/template-editor'
 import {
@@ -19,11 +19,16 @@ import {
   getOrderSort,
   listOrders,
   listProductions,
+  openPath,
   saveOrderImage,
   saveOrderSort,
   saveProduction,
   setImageRemark,
   setImageTemplates,
+  workflowClaimOrder,
+  workflowDownloadImage,
+  workflowDownloadProduction,
+  workflowReleaseOrder,
   workflowResolveConflict,
   workflowSetLayout,
 } from '../lib/tauri'
@@ -35,7 +40,7 @@ const props = defineProps<{
   uploadSelection?: string[]
   workflowBusy?: boolean
 }>()
-const emit = defineEmits<{ finish: [orderNumber: string]; toggleUpload: [orderNumber: string, checked: boolean] }>()
+const emit = defineEmits<{ finish: [orderNumber: string]; reopen: [orderNumber: string]; toggleUpload: [orderNumber: string, checked: boolean] }>()
 const store = useOrdersStore()
 const canDelete = computed(() => store.workflow.role !== 'production')
 const canFinish = computed(() => store.workflow.role !== 'customer')
@@ -63,11 +68,84 @@ function qualityLabel(img: OrderImage) {
 }
 
 function makeBlockReason(img: OrderImage) {
-  if (img.syncStatus === 'downloading') return '原图正在下载'
+  if (img.syncStatus === 'downloading' || downloadingImageIds.has(img.id)) return '原图正在下载'
+  if (img.remoteOnly && !img.filePath) return '云端原图尚未下载，请先点击左侧缩略卡下载'
   if (!img.filePath) return '本机原图尚不可用'
   if (img.sourceQuality === 'scaled') return '制作需要原图，请先获取原图'
   if (img.sourceQuality === 'unknown') return '制作需要来源已确认的原图'
   return ''
+}
+
+const downloadingImageIds = reactive(new Set<string>())
+const downloadingProdIds = reactive(new Set<string>())
+const claimBusyOrders = reactive(new Set<string>())
+
+function claimBadge(number: string) {
+  if (isOrderComplete(number)) return null
+  const state = store.workflowOrders[number]
+  if (!state?.claimedBy) return null
+  const holder = state.claimedName || state.claimedBy
+  return {
+    mine: Boolean(state.claimedByMe),
+    holder,
+    label: state.claimedByMe ? '本机制作中' : `制作中 · ${holder}`,
+  }
+}
+
+async function ensureClaimBeforeMake(orderNumber: string): Promise<boolean> {
+  if (!canFinish.value || typeof workflowClaimOrder !== 'function') return true
+  const existing = store.workflowOrders[orderNumber]
+  let force = false
+  if (existing?.claimedBy && !existing.claimedByMe) {
+    const holder = existing.claimedName || existing.claimedBy
+    if (!confirm(`订单 ${orderNumber} 正由「${holder}」制作中，是否强制接手制作？`)) {
+      return false
+    }
+    force = true
+  }
+  try {
+    let res = await workflowClaimOrder(orderNumber, force)
+    if (!res.ok) {
+      if (res.claimedBy) {
+        if (!confirm(`${res.message ?? '该订单正由其他设备制作中'}，是否强制接手制作？`)) {
+          status.value = res.message ?? '已取消接手。'
+          await refreshWorkflowOrders().catch(() => {})
+          return false
+        }
+        res = await workflowClaimOrder(orderNumber, true)
+      }
+      if (!res.ok) {
+        toast('error', res.message ?? '无法认领该订单。')
+        await Promise.all([loadOrders(), refreshWorkflowOrders()]).catch(() => {})
+        return false
+      }
+    }
+    void refreshWorkflowOrders().catch(() => {})
+    return true
+  } catch {
+    // 单机或离线制作不阻断本地打开画板
+    return true
+  }
+}
+
+async function releaseClaim(orderNumber: string) {
+  if (claimBusyOrders.has(orderNumber) || typeof workflowReleaseOrder !== 'function') return
+  claimBusyOrders.add(orderNumber)
+  try {
+    await workflowReleaseOrder(orderNumber, false)
+    await refreshWorkflowOrders()
+    toast('ok', `已释放订单 ${orderNumber} 的制作状态。`)
+  } catch (error) {
+    toast('error', `释放失败：${error}`)
+  } finally {
+    claimBusyOrders.delete(orderNumber)
+  }
+}
+
+function requestReopen(orderNumber: string) {
+  if (props.workflowBusy) return
+  if (!confirm(`确认将已完成订单 ${orderNumber} 返工重开为待制作？重开后可继续补图或重新交付成品。`)) return
+  emit('reopen', orderNumber)
 }
 
 /* ---------- 左栏数据：订单 + 素材树 ---------- */
@@ -232,6 +310,18 @@ function matchesOrder(order: OrderSummary) {
 let sourcesRequest = 0
 async function refreshSources(summaries?: OrderSummary[]) {
   const request = ++sourcesRequest
+  if (store.entries !== null) {
+    if (!summaries) {
+      entries.value = store.entries.filter(entry => matchesOrder(entry.summary))
+      return
+    }
+    const byId = new Map(store.entries.map(entry => [entry.summary.id, entry.images]))
+    entries.value = summaries.filter(matchesOrder).map(summary => ({
+      summary,
+      images: byId.get(summary.id) ?? [],
+    }))
+    return
+  }
   const orders = summaries ?? await listOrders()
   const next = await Promise.all(
     orders.filter(matchesOrder).map(async summary => ({
@@ -519,6 +609,10 @@ function requestFinish(orderNumber: string) {
     toast('error', '成品正在导出或保存，请稍后再点击标记完成。')
     return
   }
+  const claim = claimBadge(orderNumber)
+  if (claim && !claim.mine) {
+    if (!confirm(`该订单正由「${claim.holder}」制作中，确认由本机标记完成并交付？`)) return
+  }
   emit('finish', orderNumber)
 }
 
@@ -593,6 +687,7 @@ async function injectImage(img: OrderImage, order: Pick<OrderSummary, 'id' | 'or
     status.value = '成品正在保存，请稍后再制作。'
     return
   }
+  if (!(await ensureClaimBeforeMake(orderNumber))) return
   const layoutNumber = parseMeta(metadata)?.layoutNumber ?? null
   const template = templateId ? webIdOf(templateId) : ''
   busyImageId.value = img.id
@@ -769,22 +864,55 @@ function onFrameLoad() {
 }
 
 function productionName(production: Production) {
-  const fileName = production.filePath.split(/[\\/]/).pop() || '成品图片'
+  const fileName = production.filePath.split(/[\\/]/).pop() || production.originalName || '成品图片'
   const archivePrefix = production.id + '_'
   return fileName.startsWith(archivePrefix) ? fileName.slice(archivePrefix.length) : fileName
 }
 
+async function openOrDownloadProduction(prod: Production) {
+  if (prod.filePath) {
+    await showMaterial(prod)
+    return
+  }
+  if (downloadingProdIds.has(prod.id) || typeof workflowDownloadProduction !== 'function') return
+  downloadingProdIds.add(prod.id)
+  try {
+    const downloaded = await workflowDownloadProduction(prod.id)
+    const list = productionsByOrder.value[prod.orderNumber] ?? []
+    productionsByOrder.value[prod.orderNumber] = list.map(item => item.id === prod.id ? downloaded : item)
+    await showMaterial(downloaded)
+  } catch (error) {
+    toast('error', `下载云端成品失败：${error}`)
+  } finally {
+    downloadingProdIds.delete(prod.id)
+  }
+}
+
+async function downloadCloudImage(img: OrderImage) {
+  if (downloadingImageIds.has(img.id) || typeof workflowDownloadImage !== 'function') return
+  downloadingImageIds.add(img.id)
+  try {
+    const downloaded = await workflowDownloadImage(img.id)
+    await loadOrders()
+    await showMaterial(downloaded)
+  } catch (error) {
+    toast('error', `下载云端原图失败：${error}`)
+  } finally {
+    downloadingImageIds.delete(img.id)
+  }
+}
+
 const materialDialog = ref<HTMLDialogElement | null>(null)
 const previewMaterial = ref<OrderImage | Production | null>(null)
-const previewOrderImage = computed(() => {
+const previewOrderImage = computed((): OrderImage | null => {
   const image = previewMaterial.value
-  return image && 'originalName' in image ? image : null
+  return image && 'templates' in image ? image : null
 })
 const materialPath = computed(() => previewMaterial.value?.filePath || previewOrderImage.value?.thumbnailPath || '')
 const materialName = computed(() => {
   const image = previewMaterial.value
   if (!image) return ''
-  return 'originalName' in image ? image.originalName : productionName(image)
+  return 'templates' in image ? image.originalName : productionName(image)
 })
 const materialPreviewFailed = ref(false)
 const productionSize = ref('')
@@ -1011,14 +1139,30 @@ function orderProductions(orderNumber: string): Production[] {
                   role="img" :aria-label="workflowLabel(entry.summary.orderNumber)"
                   :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">!</span>
               </div>
-              <div v-if="entry.amount !== null || parseMeta(entry.summary.metadata)?.layoutNumber || (orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
+              <div v-if="entry.amount !== null || parseMeta(entry.summary.metadata)?.layoutNumber || claimBadge(entry.summary.orderNumber) || isOrderComplete(entry.summary.orderNumber) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
                 <div class="orderDescriptors">
                   <span v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</span>
                   <span v-if="entry.amount !== null" class="orderPrice">¥{{ entry.amount.toFixed(2) }}</span>
+                  <span v-if="claimBadge(entry.summary.orderNumber)" class="claimTag" :class="{ mine: claimBadge(entry.summary.orderNumber)?.mine }">
+                    {{ claimBadge(entry.summary.orderNumber)?.label }}
+                    <button v-if="claimBadge(entry.summary.orderNumber)?.mine" type="button" class="claimRelease"
+                      :disabled="claimBusyOrders.has(entry.summary.orderNumber)" title="释放领单锁"
+                      @click.stop="releaseClaim(entry.summary.orderNumber)">释放</button>
+                  </span>
                   <span v-if="orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)" class="orderDone">已完成</span>
                 </div>
                 <Button
-                  v-if="finishLabel(entry.summary.orderNumber)"
+                  v-if="isOrderComplete(entry.summary.orderNumber)"
+                  variant="outline"
+                  size="xs"
+                  class="finishBtn"
+                  type="button"
+                  :disabled="workflowBusy"
+                  title="将已完成订单重开为待制作，以便补图或重新交付成品"
+                  @click.stop="requestReopen(entry.summary.orderNumber)"
+                ><RotateCcw aria-hidden="true" />返工重开</Button>
+                <Button
+                  v-else-if="finishLabel(entry.summary.orderNumber)"
                   variant="outline"
                   size="xs"
                   class="finishBtn"
@@ -1054,8 +1198,15 @@ function orderProductions(orderNumber: string): Production[] {
                     :title="img.originalName" :aria-label="'预览素材 ' + img.originalName" @click="showMaterial(img)">
                     <img :src="assetUrl(img.thumbnailPath || img.filePath)" alt="" />
                   </button>
+                  <button v-else-if="img.remoteOnly" class="thumb thumbButton placeholder cloudThumb" type="button"
+                    :disabled="downloadingImageIds.has(img.id)"
+                    :title="'点击下载云端素材 ' + img.originalName"
+                    @click="downloadCloudImage(img)">
+                    <CloudDownload class="size-4 text-primary" aria-hidden="true" />
+                    <span>{{ downloadingImageIds.has(img.id) ? '下载中…' : '下载原图' }}</span>
+                  </button>
                   <span v-else class="thumb placeholder" aria-hidden="true">图</span>
-                  <div v-if="img.thumbnailPath || img.filePath" class="materialFacts">
+                  <div v-if="img.thumbnailPath || img.filePath || img.remoteOnly" class="materialFacts">
                     <span v-if="img.width > 0 && img.height > 0" :title="`${img.width} × ${img.height} px`">{{ img.width }}×{{ img.height }}</span>
                     <div class="materialFileActions">
                       <span>{{ formatBytes(img.byteLength) }}</span>
@@ -1158,8 +1309,17 @@ function orderProductions(orderNumber: string): Production[] {
                     :aria-label="'预览成品 ' + productionName(prod)" @click="showMaterial(prod)">
                     <img :src="assetUrl(prod.filePath)" alt="" />
                   </button>
+                  <button v-else-if="prod.remoteOnly" class="prodThumb placeholder cloudThumb" type="button"
+                    :disabled="downloadingProdIds.has(prod.id)"
+                    :title="'点击下载并查看云端成品 ' + productionName(prod)"
+                    :aria-label="'下载并预览成品 ' + productionName(prod)"
+                    @click="openOrDownloadProduction(prod)">
+                    <CloudDownload class="size-3.5 text-primary" aria-hidden="true" />
+                    <span>{{ downloadingProdIds.has(prod.id) ? '下载中' : '查看成品' }}</span>
+                  </button>
                   <span v-else class="prodThumb placeholder" aria-hidden="true">成品</span>
                   <span v-if="syncLabel(prod)" class="syncLabel" :class="prod.syncStatus">{{ syncLabel(prod) }}</span>
+                  <span v-else-if="prod.remoteOnly && prod.byteLength" class="syncLabel">{{ formatBytes(prod.byteLength) }}</span>
                 </div>
               </div>
             </div>
@@ -1253,6 +1413,10 @@ function orderProductions(orderNumber: string): Production[] {
             :aria-label="(previewOrderImage.sourceQuality === 'scaled' ? '下载缩略图 ' : '下载素材 ') + materialName"
             :disabled="!!savingImageId || !previewOrderImage.filePath || previewOrderImage.syncStatus === 'downloading'" @click="saveImage(previewOrderImage)">
             <Download aria-hidden="true" />
+          </Button>
+          <Button v-else-if="previewMaterial?.filePath" variant="outline" size="xs" type="button"
+            @click="openPath(previewMaterial.filePath).catch(err => toast('error', String(err)))">
+            打开成品文件
           </Button>
         </footer>
       </div>
@@ -1450,6 +1614,42 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
   color: #14704f;
   white-space: nowrap;
+}
+.claimTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 5px;
+  background: #fff4e5;
+  border: 1px solid #f7d59c;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: #9a5700;
+  white-space: nowrap;
+}
+.claimTag.mine {
+  background: #eef4ff;
+  border-color: #c5d9ff;
+  color: #1d4ed8;
+}
+.claimRelease {
+  border: none;
+  background: transparent;
+  padding: 0 2px;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cloudThumb {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--accent);
 }
 .orderWarning {
   flex-shrink: 0;

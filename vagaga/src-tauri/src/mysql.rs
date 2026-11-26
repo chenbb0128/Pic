@@ -72,9 +72,77 @@ pub struct SharedOrder {
     pub completed: bool,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SharedOrderRow {
+    pub order: SharedOrder,
+    pub change_seq: u64,
+    pub claimed_by: Option<String>,
+    pub claimed_name: Option<String>,
+    pub claimed_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClaimResult {
+    Claimed,
+    HeldByOther {
+        device_id: String,
+        device_name: String,
+        claimed_at: i64,
+    },
+    Completed,
+    NotFound,
+}
+
 pub struct OrderIndex(Conn);
 
 pub(crate) struct TemplateIndex(Conn);
+
+async fn ensure_column(conn: &mut Conn, table: &str, definition: &str) -> Result<(), String> {
+    match conn
+        .query_drop(format!("ALTER TABLE {table} ADD COLUMN {definition}"))
+        .await
+    {
+        Ok(()) => Ok(()),
+        // 1060 = Duplicate column name in MySQL
+        Err(mysql_async::Error::Server(error)) if error.code == 1060 => Ok(()),
+        Err(error) => Err(mysql_error(error)),
+    }
+}
+
+async fn ensure_index(conn: &mut Conn, sql: &str) -> Result<(), String> {
+    match conn.query_drop(sql).await {
+        Ok(()) => Ok(()),
+        // 1061 = Duplicate key name in MySQL
+        Err(mysql_async::Error::Server(error)) if error.code == 1061 => Ok(()),
+        Err(error) => Err(mysql_error(error)),
+    }
+}
+
+async fn init_sequences(conn: &mut Conn) -> Result<(), String> {
+    conn.query_drop(
+        "CREATE TABLE IF NOT EXISTS sync_sequences (
+            name VARCHAR(64) CHARACTER SET ascii NOT NULL PRIMARY KEY,
+            seq BIGINT UNSIGNED NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+    )
+    .await
+    .map_err(mysql_error)
+}
+
+async fn next_sequence(conn: &mut Conn, name: &str) -> Result<u64, String> {
+    conn.exec_drop(
+        "INSERT INTO sync_sequences(name, seq) VALUES (?, 1)
+         ON DUPLICATE KEY UPDATE seq = LAST_INSERT_ID(seq + 1)",
+        (name,),
+    )
+    .await
+    .map_err(mysql_error)?;
+    let seq: Option<u64> = conn
+        .query_first("SELECT LAST_INSERT_ID()")
+        .await
+        .map_err(mysql_error)?;
+    Ok(seq.unwrap_or(1))
+}
 
 pub(crate) async fn connect_template_index(root: &Path) -> Result<TemplateIndex, String> {
     let config = load_config(root);
@@ -132,8 +200,23 @@ impl TemplateIndex {
     ) -> Result<(), String> {
         if exists {
             self.0.exec_drop(
-                "UPDATE templates SET name=?,enabled=?,updated_at=? WHERE storage_id=? AND id=? AND updated_at<=?",
-                (&template.name, template.enabled, template.updated_at, storage, &template.id, template.updated_at),
+                "UPDATE templates
+                 SET name=?,width=?,height=?,dpi=?,layout=?,enabled=?,updated_at=?,background_key=?,preview_key=?
+                 WHERE storage_id=? AND id=? AND updated_at<=?",
+                (
+                    &template.name,
+                    template.width,
+                    template.height,
+                    template.dpi,
+                    &template.layout,
+                    template.enabled,
+                    template.updated_at,
+                    template.background_key(),
+                    template.preview_key(),
+                    storage,
+                    &template.id,
+                    template.updated_at,
+                ),
             ).await.map_err(mysql_error)?;
             if self.0.affected_rows() == 0
                 && self.get(storage, &template.id).await?.is_none_or(|current| current.updated_at > template.updated_at)
@@ -157,14 +240,36 @@ impl TemplateIndex {
     }
 }
 
+fn parse_template_rev<'a>(key: &'a str, suffix: &str) -> Option<&'a str> {
+    let rest = key.strip_prefix("templates/")?;
+    let rev = rest.strip_suffix(suffix)?;
+    crate::templates::is_saved_id(rev).then_some(rev)
+}
+
 fn shared_template(
     (id, code, name, width, height, dpi, layout, enabled, updated_at, background, preview): TemplateRow,
 ) -> Result<crate::templates::SavedTemplate, String> {
-    let template = crate::templates::SavedTemplate { id, code, name, width, height, dpi, layout, enabled, updated_at };
-    if background != template.background_key() || preview != template.preview_key() {
-        return Err(format!("共享模板 {} 的图片路径无效。", template.code));
+    let Some(bg_rev) = parse_template_rev(&background, "/background.png") else {
+        return Err(format!("共享模板 {} 的图片路径无效。", code));
+    };
+    let Some(pv_rev) = parse_template_rev(&preview, "/preview.webp") else {
+        return Err(format!("共享模板 {} 的图片路径无效。", code));
+    };
+    if bg_rev != pv_rev {
+        return Err(format!("共享模板 {} 的图片版本不一致。", code));
     }
-    Ok(template)
+    Ok(crate::templates::SavedTemplate {
+        id,
+        code,
+        name,
+        width,
+        height,
+        dpi,
+        layout,
+        enabled,
+        updated_at,
+        image_rev: bg_rev.to_owned(),
+    })
 }
 
 impl MyClient {
@@ -198,6 +303,7 @@ impl MyClient {
 
     pub async fn order_index(&self) -> Result<OrderIndex, String> {
         let mut conn = self.conn().await?;
+        init_sequences(&mut conn).await?;
         conn.query_drop(
             "CREATE TABLE IF NOT EXISTS orders (
                 storage_id VARBINARY(1024) NOT NULL,
@@ -205,46 +311,97 @@ impl MyClient {
                 operation_id CHAR(32) CHARACTER SET ascii NOT NULL,
                 payload JSON NOT NULL,
                 completed BOOLEAN NOT NULL,
+                change_seq BIGINT UNSIGNED NOT NULL DEFAULT 0,
+                claimed_by VARCHAR(128) NULL,
+                claimed_name VARCHAR(128) NULL,
+                claimed_at BIGINT NULL,
                 PRIMARY KEY (storage_id, order_number)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
         )
         .await
         .map_err(mysql_error)?;
+        ensure_column(&mut conn, "orders", "change_seq BIGINT UNSIGNED NOT NULL DEFAULT 0").await?;
+        ensure_column(&mut conn, "orders", "claimed_by VARCHAR(128) NULL").await?;
+        ensure_column(&mut conn, "orders", "claimed_name VARCHAR(128) NULL").await?;
+        ensure_column(&mut conn, "orders", "claimed_at BIGINT NULL").await?;
+        ensure_index(&mut conn, "CREATE INDEX idx_orders_change_seq ON orders (change_seq)").await?;
+
+        // Backfill legacy rows with change_seq = 0 so incremental cursors never miss pre-existing orders.
+        let legacy: Vec<(Vec<u8>, Vec<u8>)> = conn
+            .query("SELECT storage_id, order_number FROM orders WHERE change_seq = 0 LIMIT 500")
+            .await
+            .map_err(mysql_error)?;
+        for (storage_id, order_number) in legacy {
+            let seq = next_sequence(&mut conn, "orders").await?;
+            conn.exec_drop(
+                "UPDATE orders SET change_seq = ? WHERE storage_id = ? AND order_number = ? AND change_seq = 0",
+                (seq, storage_id, order_number),
+            )
+            .await
+            .map_err(mysql_error)?;
+        }
         Ok(OrderIndex(conn))
     }
 }
 
+type OrderRowTuple = (String, String, String, bool, u64, Option<String>, Option<String>, Option<i64>);
+const ORDER_SELECT_COLUMNS: &str = "order_number, operation_id, payload, completed, change_seq, claimed_by, claimed_name, claimed_at";
+
 impl OrderIndex {
+    async fn next_seq(&mut self) -> Result<u64, String> {
+        next_sequence(&mut self.0, "orders").await
+    }
+
     pub async fn write(
         &mut self,
         storage: &str,
         expected_operation: Option<&str>,
         order: &SharedOrder,
     ) -> Result<bool, String> {
+        let seq = self.next_seq().await?;
         if let Some(expected) = expected_operation {
-            self.0
-                .exec_drop(
-                    "UPDATE orders SET operation_id=?,payload=?,completed=?
-                 WHERE storage_id=? AND order_number=? AND operation_id=? AND NOT completed",
-                    (
-                        &order.operation_id,
-                        &order.payload,
-                        order.completed,
-                        storage,
-                        &order.number,
-                        expected,
-                    ),
-                )
-                .await
-                .map_err(mysql_error)?;
+            if order.completed {
+                self.0
+                    .exec_drop(
+                        "UPDATE orders SET operation_id=?,payload=?,completed=TRUE,change_seq=?,
+                         claimed_by=NULL,claimed_name=NULL,claimed_at=NULL
+                         WHERE storage_id=? AND order_number=? AND operation_id=? AND NOT completed",
+                        (
+                            &order.operation_id,
+                            &order.payload,
+                            seq,
+                            storage,
+                            &order.number,
+                            expected,
+                        ),
+                    )
+                    .await
+                    .map_err(mysql_error)?;
+            } else {
+                self.0
+                    .exec_drop(
+                        "UPDATE orders SET operation_id=?,payload=?,completed=FALSE,change_seq=?
+                         WHERE storage_id=? AND order_number=? AND operation_id=? AND NOT completed",
+                        (
+                            &order.operation_id,
+                            &order.payload,
+                            seq,
+                            storage,
+                            &order.number,
+                            expected,
+                        ),
+                    )
+                    .await
+                    .map_err(mysql_error)?;
+            }
             if self.0.affected_rows() != 0 {
                 return Ok(true);
             }
         } else if !order.completed {
             let result = self.0.exec_drop(
-                "INSERT INTO orders(storage_id,order_number,operation_id,payload,completed)
-                 VALUES(?,?,?,?,FALSE)",
-                (storage, &order.number, &order.operation_id, &order.payload),
+                "INSERT INTO orders(storage_id,order_number,operation_id,payload,completed,change_seq)
+                 VALUES(?,?,?,?,FALSE,?)",
+                (storage, &order.number, &order.operation_id, &order.payload, seq),
             ).await;
             match result {
                 Ok(()) => return Ok(true),
@@ -260,44 +417,206 @@ impl OrderIndex {
             .is_some_and(|current| current.operation_id == order.operation_id))
     }
 
+    pub async fn reopen(
+        &mut self,
+        storage: &str,
+        expected_operation: &str,
+        order: &SharedOrder,
+    ) -> Result<bool, String> {
+        let seq = self.next_seq().await?;
+        self.0
+            .exec_drop(
+                "UPDATE orders SET operation_id=?,payload=?,completed=FALSE,change_seq=?,
+                 claimed_by=NULL,claimed_name=NULL,claimed_at=NULL
+                 WHERE storage_id=? AND order_number=? AND operation_id=?",
+                (
+                    &order.operation_id,
+                    &order.payload,
+                    seq,
+                    storage,
+                    &order.number,
+                    expected_operation,
+                ),
+            )
+            .await
+            .map_err(mysql_error)?;
+        if self.0.affected_rows() != 0 {
+            return Ok(true);
+        }
+        Ok(self
+            .get(storage, &order.number)
+            .await?
+            .is_some_and(|current| current.operation_id == order.operation_id && !current.completed))
+    }
+
+    pub async fn claim(
+        &mut self,
+        storage: &str,
+        number: &str,
+        device_id: &str,
+        device_name: &str,
+        now_ms: i64,
+        lease_ms: i64,
+        force: bool,
+    ) -> Result<ClaimResult, String> {
+        let seq = self.next_seq().await?;
+        let expired_before = now_ms.saturating_sub(lease_ms);
+        if force {
+            self.0
+                .exec_drop(
+                    "UPDATE orders SET claimed_by=?,claimed_name=?,claimed_at=?,change_seq=?
+                     WHERE storage_id=? AND order_number=? AND NOT completed",
+                    (device_id, device_name, now_ms, seq, storage, number),
+                )
+                .await
+                .map_err(mysql_error)?;
+        } else {
+            self.0
+                .exec_drop(
+                    "UPDATE orders SET claimed_by=?,claimed_name=?,claimed_at=?,change_seq=?
+                     WHERE storage_id=? AND order_number=? AND NOT completed
+                     AND (claimed_by IS NULL OR claimed_by=? OR claimed_at IS NULL OR claimed_at<?)",
+                    (
+                        device_id,
+                        device_name,
+                        now_ms,
+                        seq,
+                        storage,
+                        number,
+                        device_id,
+                        expired_before,
+                    ),
+                )
+                .await
+                .map_err(mysql_error)?;
+        }
+        if self.0.affected_rows() != 0 {
+            return Ok(ClaimResult::Claimed);
+        }
+        let Some(current) = self.get_row(storage, number).await? else {
+            return Ok(ClaimResult::NotFound);
+        };
+        if current.order.completed {
+            return Ok(ClaimResult::Completed);
+        }
+        if current.claimed_by.as_deref() == Some(device_id) {
+            return Ok(ClaimResult::Claimed);
+        }
+        Ok(ClaimResult::HeldByOther {
+            device_id: current.claimed_by.unwrap_or_default(),
+            device_name: current.claimed_name.unwrap_or_else(|| "其他设备".into()),
+            claimed_at: current.claimed_at.unwrap_or(now_ms),
+        })
+    }
+
+    pub async fn release_claim(
+        &mut self,
+        storage: &str,
+        number: &str,
+        device_id: &str,
+        force: bool,
+    ) -> Result<bool, String> {
+        let seq = self.next_seq().await?;
+        if force {
+            self.0
+                .exec_drop(
+                    "UPDATE orders SET claimed_by=NULL,claimed_name=NULL,claimed_at=NULL,change_seq=?
+                     WHERE storage_id=? AND order_number=? AND claimed_by IS NOT NULL",
+                    (seq, storage, number),
+                )
+                .await
+                .map_err(mysql_error)?;
+        } else {
+            self.0
+                .exec_drop(
+                    "UPDATE orders SET claimed_by=NULL,claimed_name=NULL,claimed_at=NULL,change_seq=?
+                     WHERE storage_id=? AND order_number=? AND claimed_by=?",
+                    (seq, storage, number, device_id),
+                )
+                .await
+                .map_err(mysql_error)?;
+        }
+        Ok(self.0.affected_rows() != 0)
+    }
+
+    pub async fn get_row(
+        &mut self,
+        storage: &str,
+        number: &str,
+    ) -> Result<Option<SharedOrderRow>, String> {
+        let row: Option<OrderRowTuple> = self
+            .0
+            .exec_first(
+                format!(
+                    "SELECT {ORDER_SELECT_COLUMNS} FROM orders
+                     WHERE storage_id=? AND order_number=?"
+                ),
+                (storage, number),
+            )
+            .await
+            .map_err(mysql_error)?;
+        Ok(row.map(shared_order_row))
+    }
+
     pub async fn get(
         &mut self,
         storage: &str,
         number: &str,
     ) -> Result<Option<SharedOrder>, String> {
-        let row: Option<(String, String, String, bool)> = self
-            .0
-            .exec_first(
-                "SELECT order_number, operation_id, payload, completed FROM orders
-             WHERE storage_id=? AND order_number=?",
-                (storage, number),
-            )
-            .await
-            .map_err(mysql_error)?;
-        Ok(row.map(shared_order))
+        Ok(self.get_row(storage, number).await?.map(|row| row.order))
     }
 
     pub async fn read(&mut self, storage: &str) -> Result<Vec<SharedOrder>, String> {
+        let rows: Vec<SharedOrderRow> = self
+            .0
+            .exec_map(
+                format!(
+                    "SELECT {ORDER_SELECT_COLUMNS} FROM orders
+                     WHERE storage_id=? ORDER BY change_seq ASC"
+                ),
+                (storage,),
+                shared_order_row,
+            )
+            .await
+            .map_err(mysql_error)?;
+        Ok(rows.into_iter().map(|row| row.order).collect())
+    }
+
+    pub async fn read_since(
+        &mut self,
+        storage: &str,
+        after_seq: u64,
+        limit: u32,
+    ) -> Result<Vec<SharedOrderRow>, String> {
         self.0
             .exec_map(
-                "SELECT order_number, operation_id, payload, completed FROM orders
-             WHERE storage_id=?",
-                (storage,),
-                shared_order,
+                format!(
+                    "SELECT {ORDER_SELECT_COLUMNS} FROM orders
+                     WHERE storage_id=? AND change_seq>?
+                     ORDER BY change_seq ASC LIMIT ?"
+                ),
+                (storage, after_seq, limit.max(1)),
+                shared_order_row,
             )
             .await
             .map_err(mysql_error)
     }
 }
 
-fn shared_order(
-    (number, operation_id, payload, completed): (String, String, String, bool),
-) -> SharedOrder {
-    SharedOrder {
-        number,
-        operation_id,
-        payload,
-        completed,
+fn shared_order_row(
+    (number, operation_id, payload, completed, change_seq, claimed_by, claimed_name, claimed_at): OrderRowTuple,
+) -> SharedOrderRow {
+    SharedOrderRow {
+        order: SharedOrder {
+            number,
+            operation_id,
+            payload,
+            completed,
+        },
+        change_seq,
+        claimed_by,
+        claimed_name,
+        claimed_at,
     }
 }
 
