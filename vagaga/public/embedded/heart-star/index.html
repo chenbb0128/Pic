@@ -223,7 +223,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
    <div class="thumbs" id="thumbs"></div>
     <div class="editor-cutout-actions" id="editorCutoutActions"></div>
    <details class="editor-suboptions"><summary>人像补光</summary>
-   <div id="photoLightingCompact"><div class="label"><span>补光强度</span><output data-light-value>未补光</output></div><input id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="0" aria-label="补光强度"><div class="photo-lighting-compact-actions"><button type="button" class="btn primary" data-light-auto>一键补光</button><button type="button" class="btn" data-light-reset>恢复原图</button></div><p data-light-status role="status" aria-live="polite"></p></div><button type="button" class="btn" id="cancelPhotoLighting" hidden disabled style="width:100%;height:36px;margin-top:8px;font-size:12px">取消补光处理</button>
+   <div id="photoLightingCompact"><div class="label"><span>补光强度</span><output data-light-value>15%</output></div><input id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="15" aria-label="补光强度"><div class="photo-lighting-compact-actions"><button type="button" class="btn primary" data-light-auto>一键补光</button><button type="button" class="btn" data-light-reset>恢复原图</button></div><p data-light-status role="status" aria-live="polite"></p></div><button type="button" class="btn" id="cancelPhotoLighting" hidden disabled style="width:100%;height:36px;margin-top:8px;font-size:12px">取消补光处理</button>
    </details>
    </div>
    <div class="field"><div class="label"><span id="selectionTitle">选择图形</span> <span class="small" id="selectedCount">已选 1 个</span></div><label class="check multi-check"><input id="multiMode" type="checkbox"><span id="multiModeLabel">多选图案并统一控制</span></label><div class="selection-actions"><button type="button" class="btn" id="selectAll">全选</button><button type="button" class="btn" id="clearSelection">清空选择</button></div><select class="select" id="slotSelect"></select><div id="replacePhotoActions"><button type="button" class="btn copy-apply replace-photo" id="replacePhoto" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg><span>替换所选图片</span></button><input id="replacePhotoFile" type="file" accept="image/*" hidden><button type="button" class="btn" id="removeSelectedPhoto" style="width:100%;height:36px;margin-top:8px;font-size:12px" title="仅删除所选位置的照片，保留图案轮廓和背景" disabled>删除所选照片</button></div><div class="small" id="slotInfo" style="margin-top:7px">开启多选后，可在预览中逐个点选图形</div></div>
@@ -309,7 +309,7 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
  <details class="editor-options" id="editorPhotoHelp">
   <summary>操作说明</summary>
   <div class="editor-options-body">
-   <div class="hint">先在预览中选择图案，再选择照片或将图片拖入右侧预览区；只替换选中位置，其他图案不变。未启用裁剪时，照片等比完整放入图案内部的预设区域并留安全边距，可手动缩放、移动。多选可批量替换，点击“全选”后才替换全部。多张照片按选中位置的排版顺序循环填入。图片只在当前浏览器中处理，导入后默认不补光，可在“人像补光”中手动调节。</div>
+   <div class="hint">先在预览中选择图案，再选择照片或将图片拖入右侧预览区；只替换选中位置，其他图案不变。未启用裁剪时，照片等比完整放入图案内部的预设区域并留安全边距，可手动缩放、移动。多选可批量替换，点击“全选”后才替换全部。多张照片按选中位置的排版顺序循环填入。图片只在当前浏览器中处理，导入后默认补光 15%，可在“人像补光”中手动调节或恢复原图。</div>
   </div>
  </details>
  </div>
@@ -657,7 +657,7 @@ function loadTemplate(){
  const image=new Image();base=image;
  const ready=()=>{
   if(sel.value!==name||base!==image)return;
-  states=cfg.text?ensureCopyStates():cfg.slots.map((_,i)=>HeartStarPreset.initialState(cfg,i));
+  states=cfg.text?ensureCopyStates():cfg.slots.map((_,i)=>({...HeartStarPreset.initialState(cfg,i),photoLight:15}));
   selectedSlot=0;selectedSlots=new Set(cfg.slots.map((_,i)=>i));multiMode=selectedSlots.size>1;
   document.getElementById('multiMode').checked=multiMode;document.getElementById('empty').hidden=true;canvas.hidden=false;
   buildSlotSelect();updateControls();if(updateCanvasSize())draw();
@@ -735,8 +735,8 @@ async function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
  if(request!==replacementRequest||target.template!==sel.value||target.states!==states){discard();return false}
  replacementBusy=false;
  if(loaded.includes(false)){discard();say('图片读取失败，原图片已保留，请重新选择。',true);draw();return false}
- ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;delete states[id].photoLight;if(!templates[sel.value].savedTemplate&&!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
- releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。默认不补光，可手动调节。`);draw();
+ ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;states[id].photoLight=15;if(!templates[sel.value].savedTemplate&&!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
+ releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。默认补光 15%，可手动调节或恢复原图。`);draw();
  return true;
 }
 function applySolidPhotos(items){
@@ -959,7 +959,7 @@ function loadCustomImage(id){
  if(!customImageCache.has(id))customImageCache.set(id,new Promise((resolve,reject)=>{const image=new Image();image.onload=()=>resolve(image);image.onerror=()=>{customImageCache.delete(id);reject(new Error('图案载入失败，请重新应用排版。'))};image.src=customAssets[id].src}));
  return customImageCache.get(id);
 }
-function customInitialState(){return{size:.62,dx:0,dy:0,shape:'template',imageScale:1,imageDx:0,imageDy:0}}
+function customInitialState(){return{size:.62,dx:0,dy:0,shape:'template',imageScale:1,imageDx:0,imageDy:0,photoLight:15}}
 async function applyCustomLayout(selectAll=false){
  clearTimeout(customTimer);const name=sel.value;if(!templates[name].custom)return;const request=++customRequest;let layout;
  window.__picTemplateLoaded=false;
@@ -1164,9 +1164,14 @@ async function loadDesktopTemplate(id,{keepPhotos=false,reset=false}={}){
 }
 function setDesktopTemplateCatalog(catalog){
  desktopTemplates.clear();
+ const builtInTemplates=new Map(catalog.filter(template=>!template.custom).map(template=>[template.webId,template]));
  for(const template of catalog){if(template.custom)desktopTemplates.set(template.webId,template)}
  for(const option of [...sel.options]){
-  if(!Object.hasOwn(option.dataset,'localTemplate'))continue;
+  if(!Object.hasOwn(option.dataset,'localTemplate')){
+   const item=builtInTemplates.get(option.value);
+   if(item)option.textContent=item.code+' '+option.textContent.replace(/^A\d+\s+/,'');
+   continue;
+  }
   const item=desktopTemplates.get(option.value);
   if(option.value!==sel.value&&(!item||item.enabled===false))option.remove();
   else if(item)option.textContent=item.code+' '+item.name;

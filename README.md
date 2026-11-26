@@ -4,6 +4,8 @@
 
 ## 目录
 
+商品规格与编辑器模板的完整对应见 [模板编号对照表](docs/template-catalog.md)。
+
 ```text
 web/                         Vue + Vite 前端
   public/embedded/heart-star/ 爱心星星编辑器和内置图案

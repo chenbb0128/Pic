@@ -43,11 +43,11 @@ describe('heart-star selected photo upload', () => {
     expect(toolHtml).not.toContain('id="photoLightingField"')
     expect(toolHtml).toContain('id="photoLightingCompact"')
     expect(toolHtml).toContain('data-light-strength')
-    expect(toolHtml).toContain('id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="0"')
+    expect(toolHtml).toContain('id="photoLightStrength" data-light-strength type="range" min="0" max="200" step="1" value="15"')
     expect(toolHtml).toContain('id="cancelPhotoLighting"')
     expect(toolHtml).toContain('photoLightingEditor?.cancel?.()')
     expect(toolHtml).toContain("previewPanel.addEventListener('drop',onPreviewDrop)")
-    expect(toolHtml).toContain('导入后默认不补光')
+    expect(toolHtml).toContain('导入后默认补光 15%')
     expect(toolHtml).toContain("replacePhotoActions.addEventListener('drop',onReplacePhotoDrop)")
     expect(toolHtml).toContain('replaceSelectedPhoto(file)')
   })
@@ -106,6 +106,7 @@ describe('heart-star selected photo upload', () => {
 
   it.each(['transparent', 'outline', 'cropped'])('keeps the existing transforms in the separate %s mode', type => {
     const s = setup([1])
+    Object.assign(s.states[1]!, { photoLight: 15 })
     if (type === 'cropped') Object.assign(s.states[1]!, { clip: true })
     else Object.assign(s.states[1]!, { background: { type } })
     const before = structuredClone(s.states)
@@ -123,20 +124,26 @@ describe('heart-star selected photo upload', () => {
     expect(s.states[0]).toEqual({ imageScale: 2, imageDx: 7 })
   })
 
-  it('keeps imported positions at original brightness until lighting is requested', () => {
+  it('applies 15 percent lighting only to imported positions after all photos are loaded', () => {
     const s = setup([1, 3])
     s.upload([s.file('a'), s.file('b')])
     s.images[1].onload()
+    expect(s.states[1]).not.toHaveProperty('photoLight')
+    expect(s.states[3]).not.toHaveProperty('photoLight')
     expect(s.lightCalls).toEqual([])
     s.images[0].onload()
+    expect(s.states[1]).toHaveProperty('photoLight', 15)
+    expect(s.states[3]).toHaveProperty('photoLight', 15)
+    expect(s.states[0]).not.toHaveProperty('photoLight')
+    expect(s.states[2]).not.toHaveProperty('photoLight')
     expect(s.lightCalls).toEqual([])
   })
 
-  it('clears the old lighting when replacing a portrait and retains lighting on other positions', () => {
+  it('resets a replaced portrait to 15 percent lighting and retains lighting on other positions', () => {
     const s = setup([1])
     Object.assign(s.states[0]!, { photoLight: 70 }); Object.assign(s.states[1]!, { photoLight: 150 })
     s.upload([s.file('new')]); s.images[0].onload()
-    expect(s.states[1]).not.toHaveProperty('photoLight')
+    expect(s.states[1]).toHaveProperty('photoLight', 15)
     expect(s.states[0]).toHaveProperty('photoLight', 70)
   })
 
