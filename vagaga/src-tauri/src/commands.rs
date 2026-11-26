@@ -263,6 +263,12 @@ pub fn copy_image_to_clipboard(state: State<'_, AppState>, image_id: String) -> 
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+pub fn copy_order_number(order_number: String) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
+    clipboard.set_text(order_number).map_err(|error| error.to_string())
+}
+
 /// 系统默认程序打开本地文件（成品图查看）。
 #[tauri::command]
 pub fn open_path(app: tauri::AppHandle, path: String) -> Result<(), String> {
@@ -448,11 +454,16 @@ pub struct CutoutDto {
 pub async fn cutout_image_bytes(
     state: State<'_, AppState>,
     data_b64: String,
+    remove_watermark: Option<bool>,
 ) -> Result<CutoutDto, String> {
     let bytes = B64.decode(&data_b64).map_err(|error| format!("图片数据解码失败：{error}"))?;
     let config = crate::cutout::load_config(&state.data_root);
     let client = crate::cutout::CutoutClient::new(&config, state.data_root.join("cutout"));
-    let result = client.cutout(bytes).await?;
+    let result = if remove_watermark.unwrap_or(false) {
+        client.remove_watermark(bytes).await?
+    } else {
+        client.cutout(bytes).await?
+    };
     Ok(CutoutDto { png_b64: result.png_b64, cached: result.cached })
 }
 

@@ -154,6 +154,7 @@ pub fn run() {
             templates::publish_template,
             templates::sync_templates,
             commands::copy_image_to_clipboard,
+            commands::copy_order_number,
             commands::make_page,
             commands::cutout_image_bytes,
             commands::get_cloud_config,

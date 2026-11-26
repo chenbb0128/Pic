@@ -83,9 +83,9 @@
         }
         const action = document.createElement('button'); action.type = 'button'; action.className = 'photo-thumb-action';
         const restorable = canRestore(item.image), unavailable = item.processed && !restorable;
-        action.textContent = item.processed ? restorable ? '恢复原图' : '已处理' : '一键去底';
+        action.textContent = item.processed ? restorable ? '恢复原图' : '已处理' : '去水印';
         action.disabled = !board.ready || unavailable;
-        action.title = unavailable ? '重新加载的作品已保留去底结果，如需恢复请重新上传原图。' : '仅处理这张照片，不改变排版位置';
+        action.title = unavailable ? '重新加载的作品已保留处理结果，如需恢复请重新上传原图。' : '仅处理这张照片，不改变排版位置';
         action.setAttribute('aria-label', `照片 ${index + 1}：${action.textContent}，${item.ids.length} 处使用`);
         const token = board.token;
         action.addEventListener('click', () => {

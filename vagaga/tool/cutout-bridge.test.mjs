@@ -29,7 +29,7 @@ function bridge() {
     'globalThis.HeartStarAICutout = { mount, tauriCutout };',
   ), scope)
   return {
-    request: () => scope.HeartStarAICutout.tauriCutout('input'),
+    request: (watermark = false) => scope.HeartStarAICutout.tauriCutout('input', watermark),
     send(data) { for (const listener of [...listeners]) listener({ data }) },
     advance(ms) {
       now += ms
@@ -38,10 +38,20 @@ function bridge() {
       }
     },
     get id() { return requests.at(-1).id },
+    get lastRequest() { return requests.at(-1) },
     get listeners() { return listeners.size },
     get timers() { return timers.size },
   }
 }
+
+test('a watermark request carries its operation to the desktop bridge', async () => {
+  const b = bridge()
+  const result = b.request(true)
+  assert.equal(b.lastRequest.type, 'pic-cutout-request')
+  assert.equal(b.lastRequest.removeWatermark, true)
+  b.send({ type: 'pic-cutout-response', id: b.id, pngB64: 'result' })
+  assert.equal(await result, 'result')
+})
 
 test('a 45-second cutout succeeds instead of being discarded at 30 seconds', async () => {
   const b = bridge()

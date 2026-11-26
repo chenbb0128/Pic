@@ -55,7 +55,7 @@ describe('manual photo background controls in upload thumbnails', () => {
     const s = setup(); s.feature.update()
     expect(s.container.children).toHaveLength(2)
     expect(s.processedIds).toEqual([])
-    expect(s.text()).toContain('一键去底')
+    expect(s.text()).toContain('去水印')
     expect(s.text()).not.toContain('已处理')
     s.button(s.container.children[0]!).click()
     expect(s.processedIds).toEqual([[0, 1]])
@@ -118,7 +118,7 @@ describe('manual photo background controls in upload thumbnails', () => {
     // Huge photos are drawn capped to 2048 px on the long edge.
     s.photos.push({ width: 4096, height: 2048 }); s.feature.update()
     const huge = s.container.children[2]!
-    expect(huge.children[1]!.textContent === '一键去底').toBe(true)
+    expect(huge.children[1]!.textContent).toBe('去水印')
     huge.children[0]!.click()
     const canvas = dialog().children[1]!.children[1]!.children[1]!
     expect([canvas.width, canvas.height]).toEqual([2048, 1024])

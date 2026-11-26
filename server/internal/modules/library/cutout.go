@@ -44,11 +44,24 @@ func (e *upstreamError) Error() string { return e.message }
 type segmentResult struct {
 	data          []byte
 	width, height int
+	mime          string
 }
 
 func (h *handler) cutout(w http.ResponseWriter, r *http.Request) {
+	h.processPhoto(w, r, false)
+}
+
+func (h *handler) removeWatermark(w http.ResponseWriter, r *http.Request) {
+	h.processPhoto(w, r, true)
+}
+
+func (h *handler) processPhoto(w http.ResponseWriter, r *http.Request, watermark bool) {
+	label := "AI 抠图"
+	if watermark {
+		label = "去水印"
+	}
 	if h.opts.PicWishAPIKey == "" {
-		h.fail(w, http.StatusServiceUnavailable, "AI 抠图未配置服务密钥，请联系店家")
+		h.fail(w, http.StatusServiceUnavailable, label+"未配置服务密钥，请联系店家")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxImageBytes+(1<<20))
@@ -81,12 +94,16 @@ func (h *handler) cutout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cfg.Width > cutoutMaxSide || cfg.Height > cutoutMaxSide {
-		h.fail(w, http.StatusBadRequest, "AI 抠图最大支持 4096×4096 像素，请先缩小图片")
+		h.fail(w, http.StatusBadRequest, label+"最大支持 4096×4096 像素，请先缩小图片")
 		return
 	}
 	// Content-addressed cache: identical photo bytes never bill twice.
-	sum := sha256.Sum256(data)
-	id := hex.EncodeToString(sum[:16])
+	hash := sha256.New()
+	if watermark {
+		hash.Write([]byte("picwish:remove-watermark\x00"))
+	}
+	hash.Write(data)
+	id := hex.EncodeToString(hash.Sum(nil)[:16])
 	if asset, err := h.store.Asset(r.Context(), id); err == nil {
 		if _, statErr := os.Stat(filepath.Join(h.opts.DataDir, id)); statErr == nil {
 			h.reply(w, http.StatusOK, cutoutResult{Asset: asset, Cached: true})
@@ -94,7 +111,7 @@ func (h *handler) cutout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !h.reserveCutout() {
-		h.fail(w, http.StatusTooManyRequests, "今日 AI 抠图次数已用完，请明天再试或联系店家")
+		h.fail(w, http.StatusTooManyRequests, "今日 "+label+"次数已用完，请明天再试或联系店家")
 		return
 	}
 	select {
@@ -102,10 +119,10 @@ func (h *handler) cutout(w http.ResponseWriter, r *http.Request) {
 		defer func() { <-h.cutoutSem }()
 	case <-r.Context().Done():
 		h.releaseCutout()
-		h.fail(w, http.StatusGatewayTimeout, "AI 抠图排队超时，请稍后重试")
+		h.fail(w, http.StatusGatewayTimeout, label+"排队超时，请稍后重试")
 		return
 	}
-	result, err := h.picWishSegment(r.Context(), data, format)
+	result, err := h.picWishProcess(r.Context(), data, format, label, watermark)
 	if err != nil {
 		h.releaseCutout()
 		var upstream *upstreamError
@@ -114,16 +131,16 @@ func (h *handler) cutout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slog.Error("cutout upstream failed", "error", err)
-		h.fail(w, http.StatusBadGateway, "AI 抠图暂时不可用，请稍后重试")
+		h.fail(w, http.StatusBadGateway, label+"暂时不可用，请稍后重试")
 		return
 	}
 	path := filepath.Join(h.opts.DataDir, id)
 	if writeErr := writeAssetFile(path, result.data); writeErr != nil && !errors.Is(writeErr, os.ErrExist) {
 		slog.Error("cutout result write failed", "error", writeErr)
-		h.fail(w, http.StatusInternalServerError, "AI 抠图结果保存失败，请稍后重试")
+		h.fail(w, http.StatusInternalServerError, label+"结果保存失败，请稍后重试")
 		return
 	}
-	asset := Asset{ID: id, MIME: "image/png", Size: int64(len(result.data)), Width: result.width, Height: result.height}
+	asset := Asset{ID: id, MIME: result.mime, Size: int64(len(result.data)), Width: result.width, Height: result.height}
 	if err := h.store.CreateAsset(r.Context(), asset); err != nil {
 		// A racing request may have inserted the same cache row first; that is a hit.
 		if existing, lookupErr := h.store.Asset(r.Context(), id); lookupErr == nil {
@@ -131,7 +148,7 @@ func (h *handler) cutout(w http.ResponseWriter, r *http.Request) {
 		} else {
 			os.Remove(path)
 			slog.Error("cutout asset record failed", "error", err)
-			h.fail(w, http.StatusInternalServerError, "AI 抠图结果保存失败，请稍后重试")
+			h.fail(w, http.StatusInternalServerError, label+"结果保存失败，请稍后重试")
 			return
 		}
 	}
@@ -160,20 +177,29 @@ type picWishSegmentResponse struct {
 	Data    struct {
 		State int    `json:"state"`
 		Image string `json:"image"`
+		File  string `json:"file"`
 	} `json:"data"`
 }
 
-func (h *handler) picWishSegment(ctx context.Context, data []byte, format string) (segmentResult, error) {
+func (h *handler) picWishProcess(ctx context.Context, data []byte, format, label string, watermark bool) (segmentResult, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	file, err := writer.CreateFormFile("image_file", "photo."+extName(format))
+	field := "image_file"
+	path := "/api/tasks/visual/segmentation"
+	fields := map[string]string{"sync": "1", "type": "person", "return_type": "1", "output_type": "2", "crop": "1", "format": "png"}
+	if watermark {
+		field = "file"
+		path = "/api/tasks/visual/external/watermark-remove"
+		fields = map[string]string{"sync": "1"}
+	}
+	file, err := writer.CreateFormFile(field, "photo."+extName(format))
 	if err != nil {
 		return segmentResult{}, err
 	}
 	if _, err = file.Write(data); err != nil {
 		return segmentResult{}, err
 	}
-	for field, value := range map[string]string{"sync": "1", "type": "person", "return_type": "1", "output_type": "2", "crop": "1", "format": "png"} {
+	for field, value := range fields {
 		if err = writer.WriteField(field, value); err != nil {
 			return segmentResult{}, err
 		}
@@ -181,7 +207,7 @@ func (h *handler) picWishSegment(ctx context.Context, data []byte, format string
 	if err = writer.Close(); err != nil {
 		return segmentResult{}, err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, h.opts.PicWishURL+"/api/tasks/visual/segmentation", &body)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, h.opts.PicWishURL+path, &body)
 	if err != nil {
 		return segmentResult{}, err
 	}
@@ -189,33 +215,40 @@ func (h *handler) picWishSegment(ctx context.Context, data []byte, format string
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	response, err := h.picWish.Do(request)
 	if err != nil {
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图服务连接失败，请稍后重试"}
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "服务连接失败，请稍后重试"}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
 		switch response.StatusCode {
-		case http.StatusUnauthorized:
-			return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图服务密钥无效，请联系店家"}
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "服务密钥无效，请联系店家"}
 		case http.StatusTooManyRequests:
-			return segmentResult{}, &upstreamError{status: http.StatusTooManyRequests, message: "AI 抠图请求过于频繁，请稍后再试"}
+			return segmentResult{}, &upstreamError{status: http.StatusTooManyRequests, message: label + "请求过于频繁，请稍后再试"}
 		case http.StatusRequestEntityTooLarge:
-			return segmentResult{}, &upstreamError{status: http.StatusRequestEntityTooLarge, message: "图片过大，AI 抠图最多支持 25 MB"}
+			return segmentResult{}, &upstreamError{status: http.StatusRequestEntityTooLarge, message: "图片过大，" + label + "最多支持 25 MB"}
 		default:
-			return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图服务暂时不可用，请稍后重试"}
+			return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "服务暂时不可用，请稍后重试"}
 		}
 	}
 	var parsed picWishSegmentResponse
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&parsed); err != nil || parsed.Data.State != 1 || parsed.Data.Image == "" {
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图处理失败，请重试或更换图片"}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&parsed); err != nil || parsed.Data.State != 1 || (watermark && parsed.Status != 200) {
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "处理失败，请重试或更换图片"}
 	}
-	return h.picWishDownload(ctx, parsed.Data.Image)
+	link := parsed.Data.Image
+	if watermark {
+		link = parsed.Data.File
+	}
+	if link == "" {
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "处理失败，请重试或更换图片"}
+	}
+	return h.picWishDownload(ctx, link, label)
 }
 
-func (h *handler) picWishDownload(ctx context.Context, link string) (segmentResult, error) {
+func (h *handler) picWishDownload(ctx context.Context, link, label string) (segmentResult, error) {
 	parsed, err := url.Parse(link)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图返回的结果无效，请重试"}
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "返回的结果无效，请重试"}
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
@@ -223,22 +256,22 @@ func (h *handler) picWishDownload(ctx context.Context, link string) (segmentResu
 	}
 	response, err := h.picWish.Do(request)
 	if err != nil {
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图结果下载失败，请稍后重试"}
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "结果下载失败，请稍后重试"}
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图结果下载失败，请稍后重试"}
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "结果下载失败，请稍后重试"}
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, picWishMaxResultBytes+1))
 	if err != nil || len(data) == 0 || len(data) > picWishMaxResultBytes {
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图结果下载失败，请稍后重试"}
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "结果下载失败，请稍后重试"}
 	}
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil || cfg.Width < 1 || cfg.Height < 1 {
-		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: "AI 抠图返回的结果无效，请重试"}
+		return segmentResult{}, &upstreamError{status: http.StatusBadGateway, message: label + "返回的结果无效，请重试"}
 	}
-	return segmentResult{data: data, width: cfg.Width, height: cfg.Height}, nil
+	return segmentResult{data: data, width: cfg.Width, height: cfg.Height, mime: "image/" + format}, nil
 }
 
 func extName(format string) string {

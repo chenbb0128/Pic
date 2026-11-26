@@ -11,6 +11,7 @@ import { mountEditorExportControls } from '../lib/editor-export-controls'
 import { connectTemplateEditor } from '../lib/template-editor'
 import {
   assetUrl,
+  copyOrderNumberToClipboard,
   cutoutImageBytes,
   deleteImage,
   deleteOrder,
@@ -369,6 +370,15 @@ async function refreshProductions(orderNumber: string) {
 function chooseOrder(id: string) {
   void persistLayout().catch(reportLayoutError)
   expandedOrderId.value = expandedOrderId.value === id ? null : id
+}
+
+async function copyOrderNumber(orderNumber: string) {
+  try {
+    await copyOrderNumberToClipboard(orderNumber)
+    toast('ok', '订单号已复制')
+  } catch (error) {
+    toast('error', `复制订单号失败：${error}`)
+  }
 }
 
 /* ---------- 模板编号映射 ---------- */
@@ -768,6 +778,7 @@ async function onMessage(event: MessageEvent) {
         type?: string
         id?: string
         dataB64?: string
+        removeWatermark?: boolean
         b64?: string
         fileName?: string
         orderNumber?: string | null
@@ -781,7 +792,8 @@ async function onMessage(event: MessageEvent) {
     return
   }
   if (data?.type === 'pic-cutout-request') {
-    status.value = 'AI 抠图处理中；耗时和接口结果记录在“设置 → AI 抠图”的日志中。'
+    const action = data.removeWatermark === true ? '去水印' : 'AI 抠图'
+    status.value = action + '处理中…'
     try {
       const config = await getCutoutConfig()
       const timeoutSecs = config.timeoutSecs >= 30 ? config.timeoutSecs : 90
@@ -789,16 +801,16 @@ async function onMessage(event: MessageEvent) {
         { type: 'pic-cutout-started', id: data.id, timeoutMs: timeoutSecs * 2000 + 15000 },
         '*',
       )
-      const result = await cutoutImageBytes(data.dataB64 ?? '')
+      const result = await cutoutImageBytes(data.dataB64 ?? '', data.removeWatermark === true)
       if (editor !== frame.value?.contentWindow) return
-      status.value = result.cached ? 'AI 抠图完成（缓存命中）。' : 'AI 抠图完成。'
+      status.value = action + (result.cached ? '完成（缓存命中）。' : '完成。')
       editor.postMessage(
         { type: 'pic-cutout-response', id: data.id, pngB64: result.pngB64, cached: result.cached },
         '*',
       )
     } catch (error) {
       if (editor !== frame.value?.contentWindow) return
-      status.value = `AI 抠图失败：${error}`
+      status.value = `${action}失败：${error}`
       editor.postMessage(
         { type: 'pic-cutout-response', id: data.id, error: String(error) },
         '*',
@@ -1140,7 +1152,9 @@ function orderProductions(orderNumber: string): Production[] {
             <svg class="chevron" :class="{ open: expandedOrderId === entry.summary.id }" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             <div class="itemMain">
               <div class="orderHeading">
-                <span class="num" :title="entry.summary.orderNumber">{{ entry.summary.orderNumber }}</span>
+                <button type="button" class="num" :title="'点击复制订单号 ' + entry.summary.orderNumber"
+                  :aria-label="'复制订单号 ' + entry.summary.orderNumber"
+                  @click.stop="copyOrderNumber(entry.summary.orderNumber)">{{ entry.summary.orderNumber }}</button>
                 <time class="orderTime" :datetime="entry.placedAt ?? entry.summary.createdAt"
                   :title="(entry.placedAt ? '下单时间 ' : '入库时间 ') + (entry.placedAt ?? entry.summary.createdAt)"
                 >{{ fmtTime(entry.placedAt ?? entry.summary.createdAt).slice(0, 11) }}</time>
@@ -1574,11 +1588,20 @@ function orderProductions(orderNumber: string): Production[] {
 }
 .num {
   min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 700;
   font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.num:hover, .num:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
 }
 .orderTime {
   flex-shrink: 0;

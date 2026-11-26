@@ -52,16 +52,20 @@ describe('heart-star selected photo upload', () => {
     expect(toolHtml).toContain('replaceSelectedPhoto(file)')
   })
 
-  it('refreshes lighting controls after background removal finishes', () => {
-    expect(toolHtml).toContain('HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw})')
-    expect(toolHtml).toContain('HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw})')
+  it('refreshes the editor after watermark removal or AI cutout', () => {
+    expect(toolHtml).toContain('HeartStarAICutout.mount({button:watermarkButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw,removeWatermark:true')
+    expect(toolHtml).toContain('HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw,blocked:')
   })
 
   it('persists the processed badge only after applying and clears it when restoring, uploading, or deleting', () => {
     const s = setup([1]), result = { name: 'transparent' }
+    s.applySolid([{ id: 1, image: result, processed: true, operation: 'watermark' }])
+    expect(s.states[1]).toHaveProperty('photoWatermarkRemoved', true)
+    expect(s.states[1]).not.toHaveProperty('photoBackgroundRemoved')
     s.applySolid([{ id: 1, image: result, processed: true }])
     expect(s.states[1]).toHaveProperty('photoBackgroundRemoved', true)
     s.applySolid([{ id: 1, image: s.old.image, processed: false }])
+    expect(s.states[1]).not.toHaveProperty('photoWatermarkRemoved')
     expect(s.states[1]).not.toHaveProperty('photoBackgroundRemoved')
     s.applySolid([{ id: 1, image: result, processed: true }])
     s.upload([s.file('new')]); s.images[0].onload()

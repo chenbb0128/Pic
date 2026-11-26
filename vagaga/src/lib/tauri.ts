@@ -70,12 +70,16 @@ export function copyImageToClipboard(imageId: string): Promise<void> {
   return invoke('copy_image_to_clipboard', { imageId })
 }
 
+export function copyOrderNumberToClipboard(orderNumber: string): Promise<void> {
+  return invoke('copy_order_number', { orderNumber })
+}
+
 export function makePage(imageId: string, templateId: string): Promise<void> {
   return invoke('make_page', { imageId, templateId })
 }
 
-export function cutoutImageBytes(dataB64: string): Promise<{ pngB64: string; cached: boolean }> {
-  return invoke('cutout_image_bytes', { dataB64 })
+export function cutoutImageBytes(dataB64: string, removeWatermark = false): Promise<{ pngB64: string; cached: boolean }> {
+  return invoke('cutout_image_bytes', { dataB64, removeWatermark })
 }
 
 export function getCloudConfig(): Promise<CloudConfig> {

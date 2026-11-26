@@ -31,7 +31,7 @@ function stubGlobals(fetch: ReturnType<typeof vi.fn>) {
   vi.stubGlobal('Image', FakeImage)
 }
 
-function mountEditor(fetch: ReturnType<typeof vi.fn>, image: any) {
+function mountEditor(fetch: ReturnType<typeof vi.fn>, image: any, removeWatermark = false) {
   const button: any = { disabled: false, textContent: '', click: null as null | (() => void) }
   button.addEventListener = (_type: string, handler: () => void) => { button.click = handler }
   const applied: unknown[] = []
@@ -45,7 +45,7 @@ function mountEditor(fetch: ReturnType<typeof vi.fn>, image: any) {
     cancel: vi.fn(),
   }
   const report = vi.fn()
-  const editor = loadModule().mount({ button, store, getBoard: () => ({ ready: true, ids: [0], photoAt: (id: number) => (id === 0 ? image : null) }), report, changed: () => {} })
+  const editor = loadModule().mount({ button, store, getBoard: () => ({ ready: true, ids: [0], photoAt: (id: number) => (id === 0 ? image : null) }), report, changed: () => {}, removeWatermark })
   return { editor, button, store, report, applied }
 }
 
@@ -61,6 +61,20 @@ function defaultFetch(image: any, cutout: any) {
 const okCutout = { ok: true, json: async () => ({ code: 0, data: { id: 'a'.repeat(32), mime: 'image/png', cached: false } }) }
 
 describe('heart-star AI cutout', () => {
+  it('sends the chosen photo to watermark removal and applies the returned asset', async () => {
+    const image = { src: 'blob:watermarked', naturalWidth: 32, naturalHeight: 24 }
+    const base = defaultFetch(image, okCutout)
+    const fetch = vi.fn((url: string) => url === '/api/v1/photos/remove-watermark' ? Promise.resolve(okCutout) : base(url))
+    stubGlobals(fetch)
+    const { button, editor, applied, store } = mountEditor(fetch, image, true)
+    expect(button.textContent).toBe('去水印（所选照片）')
+    await editor.process([0])
+    expect(fetch).toHaveBeenCalledWith('/api/v1/photos/remove-watermark', expect.objectContaining({ method: 'POST', credentials: 'same-origin' }))
+    expect(fetch).not.toHaveBeenCalledWith('/api/v1/photos/cutout', expect.anything())
+    expect(store.begin).toHaveBeenCalledWith([0])
+    expect(applied[0]).toMatchObject({ width: 32, height: 24 })
+  })
+
   it('uploads the original photo and replaces it with the fetched result canvas', async () => {
     const image = { src: 'blob:photo', naturalWidth: 3000, naturalHeight: 2000 }
     const fetch = defaultFetch(image, okCutout)

@@ -320,10 +320,9 @@ body{height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidd
 </main>
 <dialog class="custom-picker" id="customPicker" aria-labelledby="customPickerTitle"><div class="custom-picker-head"><strong id="customPickerTitle">选择完整图案</strong><button type="button" class="preview-tool" id="closeCustomPicker" aria-label="关闭图案选择">✕</button></div><div class="custom-picker-grid"></div></dialog>
 <script src="./slot-background.js?v=christmas-clip-1"></script>
-<script src="./solid-background.js?v=solid-3"></script>
-<script src="./solid-background-quick.js?v=quick-1"></script>
-<script src="./ai-cutout.js?v=ai-1"></script>
-<script src="./photo-thumbnails.js?v=thumbs-4"></script>
+<script src="./solid-background.js?v=solid-4"></script>
+<script src="./ai-cutout.js?v=watermark-1"></script>
+<script src="./photo-thumbnails.js?v=watermark-1"></script>
 <script src="./photo-lighting.js?v=1"></script>
 <script src="./photo-lighting-controls.js?v=1"></script>
 <script src="./preview-watermark.js?v=picture-preview-4"></script>
@@ -388,7 +387,7 @@ const pictureDialog=document.createElement('dialog');pictureDialog.className='pi
 HeartStarWatermark.createDialog({button:picturePreviewButton,dialog:pictureDialog,close:pictureDialog.querySelector('button'),content:pictureDialog.querySelector('.picture-dialog-content'),render:picturePreviewSnapshot,onError:message=>say(message,true)});
 function picturePreviewSnapshot(){const cfg=templates[sel.value];if(canvas.hidden||exportBusy||photoLightingEditor?.busy()||photoUploadBusy||replacementBusy||slotBackgrounds.busy()||motifEditor.busy()||(cfg.custom&&(customBusy||customDirty))||(cfg.text&&fontBusy))throw new Error('请等待模板和图片准备完成后再预览。');if(!outputConfig())throw new Error('请输入有效的宽度和高度。');try{draw(false);return HeartStarWatermark.preview(canvas,document.getElementById('watermarkEnabled').checked)}finally{draw()}}
 function productPreviewSnapshot(){
- if(!selectionBoard().ready||fontBusy||solidBackgroundEditor?.busy()||aiCutoutEditor?.busy())throw new Error('请等待模板和图片准备完成后再生成商品展示图。');
+ if(!selectionBoard().ready||fontBusy||watermarkEditor?.busy()||aiCutoutEditor?.busy())throw new Error('请等待模板和图片准备完成后再生成商品展示图。');
  if(templates[sel.value].text&&!states.some(state=>state.text?.trim()))throw new Error('请先输入并应用文案。');
  try{
   draw(false);const d=renderConfig(),source=document.createElement('canvas');source.width=d.contentPxW;source.height=d.contentPxH;
@@ -482,7 +481,7 @@ function removeSelectedPhotos(){
  const ids=[...selectedSlots].filter(i=>states[i]&&slotPhoto(i));if(!ids.length)return;
  finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementTarget=null;photoUploadTarget=null;replacePhotoFile.value='';filesEl.value='';
  // Keep an explicit empty photo so the original shared source cannot fill this slot again.
- ids.forEach(i=>{replacedPhotos.set(i,{image:null,url:null});delete states[i].photoBackgroundRemoved;delete states[i].photoLight});
+ ids.forEach(i=>{replacedPhotos.set(i,{image:null,url:null});delete states[i].photoBackgroundRemoved;delete states[i].photoWatermarkRemoved;delete states[i].photoLight});
  releaseUnusedReplacementUrls();updatePhotoControls();draw();say(`已删除所选 ${ids.length} 张照片，图案轮廓和背景保持不变。`);
 }
 function selectedPhotoTarget(){return{template:sel.value,states,request:replacementRequest,ids:[...selectedSlots].filter(i=>states[i]).sort((a,b)=>a-b)}}
@@ -711,7 +710,7 @@ function draw(showSelection=true,fullResolution=false,includePhotos=true,include
   }
   if(showSelection&&selectedSlots.has(i)){ctx.save();ctx.strokeStyle='#ff377d';ctx.lineWidth=Math.max(4,cfg.w/500);ctx.setLineDash([12,8]);ctx.strokeRect(x-w*.53,y-h*.53,w*1.06,h*1.06);ctx.restore()}
  });
- ctx.restore();if(includeFooter)drawFooter(d);updatePhotoControls();backgroundDrag.update();solidBackgroundEditor?.update();aiCutoutEditor?.update();photoLightingEditor?.update();photoThumbnails?.update();if(typeof updateAutoLightingCancelButton==='function')updateAutoLightingCancelButton();
+ ctx.restore();if(includeFooter)drawFooter(d);updatePhotoControls();backgroundDrag.update();watermarkEditor?.update();aiCutoutEditor?.update();photoLightingEditor?.update();photoThumbnails?.update();if(typeof updateAutoLightingCancelButton==='function')updateAutoLightingCancelButton();
  download.disabled=exportBusy||pendingOrderExports>0||photoLightingEditor?.busy()||motifEditor.busy()||(cfg.custom&&(customDirty||customBusy))||(cfg.text?fontBusy||!states.some(st=>st.text&&st.text.trim()):photoUploadBusy||replacementBusy||slotBackgrounds.busy()||(!hasSlotPhotos()&&!slotBackgrounds.hasAny()));
  watermarkDownload.disabled=download.disabled;
  sharedLibrary?.changed();
@@ -735,13 +734,13 @@ async function setFiles(list,target=photoUploadTarget||selectedPhotoTarget()){
  if(request!==replacementRequest||target.template!==sel.value||target.states!==states){discard();return false}
  replacementBusy=false;
  if(loaded.includes(false)){discard();say('图片读取失败，原图片已保留，请重新选择。',true);draw();return false}
- ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;states[id].photoLight=15;if(!templates[sel.value].savedTemplate&&!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
+ ids.forEach((id,index)=>{const item=items[index%items.length];replacedPhotos.set(id,{image:item.image,url:item.url});delete states[id].photoBackgroundRemoved;delete states[id].photoWatermarkRemoved;states[id].photoLight=15;if(!templates[sel.value].savedTemplate&&!states[id].clip&&!HeartStarBackground.photoOnly(states[id]))Object.assign(states[id],{size:.62,dx:0,dy:0,imageScale:1,imageDx:0,imageDy:0})});
  releaseUnusedReplacementUrls();renderThumbs(picked);updateControls();say(`已替换所选 ${ids.length} 个位置的图片，其他图案保持不变。默认补光 15%，可手动调节或恢复原图。`);draw();
  return true;
 }
 function applySolidPhotos(items){
  finishPhotoDrag();ignorePhotoClick=false;replacementRequest++;replacementTarget=null;photoUploadTarget=null;replacePhotoFile.value='';filesEl.value='';
- items.forEach(({id,image,processed})=>{replacedPhotos.set(id,{image,url:null});if(processed===true)states[id].photoBackgroundRemoved=true;else if(processed===false)delete states[id].photoBackgroundRemoved});
+ items.forEach(({id,image,processed,operation})=>{replacedPhotos.set(id,{image,url:null});if(processed===true)states[id][operation==='watermark'?'photoWatermarkRemoved':'photoBackgroundRemoved']=true;else if(processed===false){delete states[id].photoBackgroundRemoved;delete states[id].photoWatermarkRemoved}});
  releaseUnusedReplacementUrls();updateControls();draw();
 }
 function renderThumbs(){thumbUrls.forEach(URL.revokeObjectURL);thumbUrls=[];photoThumbnails?.update()}
@@ -999,7 +998,7 @@ function applyMotifRow(result,source){
  releaseUnusedReplacementUrls();motifTableKey='';buildSlotSelect();updateControls();
 }
 var rowControls=HeartStarRowControls.mount({field:document.getElementById('heartMotifField'),assets:customAssets,
- getBoard:()=>{const cfg=templates[sel.value];return{cfg,states,source:cfg.custom?cfg.background:base,catalog:motifEditor.catalog(),ids:motifEditor.selection(),width:Number(widthInput.value),height:Number(heightInput.value),ready:selectionBoard().ready&&!solidBackgroundEditor?.busy()}},
+ getBoard:()=>{const cfg=templates[sel.value];return{cfg,states,source:cfg.custom?cfg.background:base,catalog:motifEditor.catalog(),ids:motifEditor.selection(),width:Number(widthInput.value),height:Number(heightInput.value),ready:selectionBoard().ready&&!watermarkEditor?.busy()}},
  pickAsset:(onSelect,trigger)=>{filterCustomPicker();customPicker.querySelector('#customPickerTitle').textContent='整排图案 · 全部款式';customPickerTarget={trigger,onSelect:id=>{customPicker.close();onSelect(id)}};customPicker.showModal()},
  replaceRow:(ids,id,count)=>{const cfg=templates[sel.value],row=motifEditor.catalog()[ids[0]].row;return motifEditor.replaceRow(ids,id,count,{keyPrefix:cfg.custom?`${customRows[row].id}:${nextCustomId()}`:`row-${row}`})}});
 const backgroundDragMode=document.getElementById('backgroundDragMode');
@@ -1013,18 +1012,18 @@ HeartStarInteractions.createShortcuts({target:document,canClear:()=>selectedSlot
 function selectionBoard(){const cfg=templates[sel.value],d=renderConfig(),ready=!canvas.hidden&&!exportBusy&&!photoLightingEditor?.busy()&&!photoUploadBusy&&!replacementBusy&&!slotBackgrounds.busy()&&!motifEditor.busy()&&!(cfg.custom&&(customBusy||customDirty))&&(cfg.text||cfg.custom?cfg.text||!!cfg.background:base.complete&&!!base.naturalWidth)&&!!d;return{ready:!!ready,token:states,width:cfg.w,height:cfg.h,contentWidthRatio:d?d.contentPxW/d.pxW:1,contentRatio:d?d.contentPxH/d.pxH:1,slots:ready?currentSlots().map((_,i)=>slotFrame(i)):[],states}}
 function solidPhotoBoard(all=false){const cfg=templates[sel.value];return{token:states,
  ready:!cfg.text&&!canvas.hidden&&!exportBusy&&!photoUploadBusy&&!replacementBusy&&!slotBackgrounds.busy()&&!motifEditor.busy()&&!(cfg.custom&&(customBusy||customDirty)),
- ids:cfg.text?[]:all?states.map((_,i)=>i):[...selectedSlots],photoAt:slotPhoto,processedAt:i=>!!states[i]?.photoBackgroundRemoved}}
+ ids:cfg.text?[]:all?states.map((_,i)=>i):[...selectedSlots],photoAt:slotPhoto,processedAt:i=>!!(states[i]?.photoBackgroundRemoved||states[i]?.photoWatermarkRemoved)}}
 const cutoutPhotoBoard=(all=false)=>{const board=solidPhotoBoard(all);return{...board,ready:board.ready&&!photoLightingEditor?.busy()}};
-const solidBackgroundButton=document.createElement('button');solidBackgroundButton.type='button';solidBackgroundButton.id='removeSolidBackground';solidBackgroundButton.className='btn';document.getElementById('editorCutoutActions').append(solidBackgroundButton);
+const watermarkButton=document.createElement('button');watermarkButton.type='button';watermarkButton.id='removePhotoWatermark';watermarkButton.title='联网自动识别并去除照片水印';watermarkButton.className='btn';document.getElementById('editorCutoutActions').append(watermarkButton);
 const solidBackgroundStore=HeartStarSolidBackground.createStore({getBoard:cutoutPhotoBoard,apply:applySolidPhotos});
-var solidBackgroundEditor=HeartStarSolidBackgroundQuick.mount({button:solidBackgroundButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw});
-const aiCutoutButton=document.createElement('button');aiCutoutButton.type='button';aiCutoutButton.id='aiCutout';aiCutoutButton.className='btn';aiCutoutButton.title='联网调用 AI 抠图服务去除照片背景，同图重复处理免费';solidBackgroundButton.after(aiCutoutButton);
-var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw});
+var watermarkEditor=HeartStarAICutout.mount({button:watermarkButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw,removeWatermark:true,blocked:()=>!!aiCutoutEditor?.busy()});
+const aiCutoutButton=document.createElement('button');aiCutoutButton.type='button';aiCutoutButton.id='aiCutout';aiCutoutButton.className='btn';aiCutoutButton.title='联网调用 AI 抠图服务去除照片背景，同图重复处理免费';watermarkButton.after(aiCutoutButton);
+var aiCutoutEditor=HeartStarAICutout.mount({button:aiCutoutButton,store:solidBackgroundStore,getBoard:cutoutPhotoBoard,report:say,changed:draw,blocked:()=>watermarkEditor.busy()});
 var photoLightingEditor=HeartStarPhotoLightingControls.mount({root:document.getElementById('photoLightingCompact'),processor:photoLighting,
- getBoard:()=>{const board=solidPhotoBoard();return{...board,states,ready:board.ready&&!solidBackgroundEditor?.busy()&&!aiCutoutEditor?.busy()}},
+ getBoard:()=>{const board=solidPhotoBoard();return{...board,states,ready:board.ready&&!watermarkEditor?.busy()&&!aiCutoutEditor?.busy()}},
  apply:(ids,strength)=>{ids.forEach(id=>{if(strength)states[id].photoLight=strength;else delete states[id].photoLight});draw()},changed:draw,report:say});
 document.getElementById('thumbs').classList.add('photo-thumbnails');
-var photoThumbnails=HeartStarPhotoThumbnails.create({container:document.getElementById('thumbs'),getBoard:()=>({...cutoutPhotoBoard(true),ready:cutoutPhotoBoard(true).ready&&!solidBackgroundEditor.busy()&&!aiCutoutEditor.busy()}),displayImage:(image,id)=>photoLighting.source(image,states[id]?.photoLight||0,states[id]),isProcessed:solidBackgroundStore.isProcessed,canRestore:solidBackgroundStore.isProcessed,process:ids=>solidBackgroundEditor.process(ids),restore:ids=>solidBackgroundEditor.restore(ids)});
+var photoThumbnails=HeartStarPhotoThumbnails.create({container:document.getElementById('thumbs'),getBoard:()=>({...cutoutPhotoBoard(true),ready:cutoutPhotoBoard(true).ready&&!watermarkEditor.busy()&&!aiCutoutEditor.busy()}),displayImage:(image,id)=>photoLighting.source(image,states[id]?.photoLight||0,states[id]),isProcessed:solidBackgroundStore.isProcessed,canRestore:solidBackgroundStore.isProcessed,process:ids=>watermarkEditor.process(ids),restore:ids=>watermarkEditor.restore(ids)});
 HeartStarInteractions.createSelection({canvas,surface:previewPanel,getBoard:selectionBoard,isPhotoDrag:()=>photoDragMode.checked||backgroundDragMode.checked,onStart:()=>{ignorePhotoClick=false},onSelection:(ids,append)=>{selectedSlots=append?new Set([...selectedSlots,...ids]):new Set(ids);if(!selectedSlots.has(selectedSlot))selectedSlot=[...selectedSlots].sort((a,b)=>a-b)[0]??0;multiMode=selectedSlots.size>1;document.getElementById('multiMode').checked=multiMode;ignorePhotoClick=true;if(templates[sel.value].text)showCopyTab('edit');updateControls();requestPhotoDraw()},canResize:()=>selectionBoard().ready&&!templates[sel.value].text&&!!selectedSlots.size,onResize:delta=>{HeartStarInteractions.resizeSelection(states,selectedSlots,delta);updateControls();requestPhotoDraw()}});
 function hasImageTransfer(event){return [...(event.dataTransfer?.items||[])].some(item=>item.kind==='file'&&item.type.startsWith('image/'))||[...(event.dataTransfer?.files||[])].some(file=>file.type.startsWith('image/'))}
 function setPreviewDropState(active){previewPanel.classList.toggle('is-file-dragover',active)}

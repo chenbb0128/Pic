@@ -90,6 +90,7 @@ func NewHandler(store Store, opts Options) (http.Handler, error) {
 	mux.HandleFunc("POST /api/v1/assets", h.upload)
 	mux.HandleFunc("GET /api/v1/assets/{id}", h.download)
 	mux.HandleFunc("POST /api/v1/photos/cutout", h.cutout)
+	mux.HandleFunc("POST /api/v1/photos/remove-watermark", h.removeWatermark)
 	for _, collection := range []string{"projects", "templates"} {
 		kind := strings.TrimSuffix(collection, "s")
 		prefix := "/api/v1/" + collection

@@ -1,4 +1,4 @@
-//! AI 抠图客户端：直连 PicWish 分割服务，sha256 内容寻址本地缓存。
+//! PicWish 抠图和去水印，按图片内容与操作区分本地缓存。
 //!
 //! 语义对齐 server/internal/modules/library/cutout.go：
 //! 同图（字节级）命中缓存直接复用、不再计费；≤25MB 输入；PNG 落盘
@@ -30,7 +30,7 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    async fn fixture(fail: bool) -> (CutoutClient, PathBuf, tokio::task::JoinHandle<()>) {
+    async fn fixture(fail: bool, watermark: bool) -> (CutoutClient, PathBuf, tokio::task::JoinHandle<()>) {
         let root = std::env::temp_dir().join(format!(
             "paidan-cutout-{}",
             crate::store::random_hex_pub(12)
@@ -69,12 +69,22 @@ mod tests {
                 let (status, body) = if fail {
                     ("429 Too Many Requests", b"rate limited".to_vec())
                 } else if request.starts_with(b"POST ") {
+                    let result = if watermark {
+                        assert!(request.starts_with(b"POST /api/tasks/visual/external/watermark-remove "));
+                        assert!(String::from_utf8_lossy(&request).contains("name=\"file\";"));
+                        serde_json::json!({"status":200,"data":{"state":1,"file":result_url}})
+                    } else {
+                        serde_json::json!({"status":200,"data":{"state":1,"image":result_url}})
+                    };
                     (
                         "200 OK",
-                        serde_json::json!({"status":200,"data":{"state":1,"image":result_url}})
-                            .to_string()
-                            .into_bytes(),
+                        result.to_string().into_bytes(),
                     )
+                } else if watermark {
+                    let mut jpeg = std::io::Cursor::new(Vec::new());
+                    image::DynamicImage::new_rgb8(3, 2)
+                        .write_to(&mut jpeg, image::ImageFormat::Jpeg).unwrap();
+                    ("200 OK", jpeg.into_inner())
                 } else {
                     ("200 OK", b"fake-png-result".to_vec())
                 };
@@ -100,8 +110,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn watermark_uses_the_file_result_and_caches_png() {
+        let (client, _, server) = fixture(false, true).await;
+        let input = b"watermarked-photo".to_vec();
+        let first = client.remove_watermark(input.clone()).await.unwrap();
+        assert!(!first.cached);
+        let bytes = B64.decode(&first.png_b64).unwrap();
+        assert_eq!(image::guess_format(&bytes).unwrap(), image::ImageFormat::Png);
+        assert_eq!(image::load_from_memory(&bytes).unwrap().width(), 3);
+        server.await.unwrap();
+        assert!(client.remove_watermark(input).await.unwrap().cached);
+    }
+
+    #[tokio::test]
     async fn logs_request_stages_and_reuses_cached_result() {
-        let (client, root, server) = fixture(false).await;
+        let (client, root, server) = fixture(false, false).await;
         let first = client.cutout(b"original-photo".to_vec()).await.unwrap();
         assert!(!first.cached);
         assert_eq!(B64.decode(first.png_b64).unwrap(), b"fake-png-result");
@@ -128,7 +151,7 @@ mod tests {
 
     #[tokio::test]
     async fn logs_http_failures_without_caching_them() {
-        let (client, root, server) = fixture(true).await;
+        let (client, root, server) = fixture(true, false).await;
         let error = client
             .cutout(b"different-photo".to_vec())
             .await
@@ -277,12 +300,20 @@ impl CutoutClient {
 
     /// 主入口：字节 → 缓存查询 → 未命中调 PicWish → 写缓存 → 返回 PNG base64。
     pub async fn cutout(&self, bytes: Vec<u8>) -> Result<CutoutResult, String> {
+        self.process(bytes, false).await
+    }
+
+    pub async fn remove_watermark(&self, bytes: Vec<u8>) -> Result<CutoutResult, String> {
+        self.process(bytes, true).await
+    }
+
+    async fn process(&self, bytes: Vec<u8>, watermark: bool) -> Result<CutoutResult, String> {
         let trace = CutoutTrace::new(&self.cache_dir);
         trace.record(
             "request_start",
             &format!("input_bytes={} kind={}", bytes.len(), self.kind),
         );
-        let result = self.cutout_traced(bytes, &trace).await;
+        let result = self.process_traced(bytes, watermark, &trace).await;
         match &result {
             Ok(value) => trace.record("complete", &format!("cached={}", value.cached)),
             Err(error) => {
@@ -297,9 +328,10 @@ impl CutoutClient {
         result
     }
 
-    async fn cutout_traced(
+    async fn process_traced(
         &self,
         bytes: Vec<u8>,
+        watermark: bool,
         trace: &CutoutTrace,
     ) -> Result<CutoutResult, String> {
         if bytes.is_empty() {
@@ -313,6 +345,9 @@ impl CutoutClient {
         }
 
         let mut hasher = Sha256::new();
+        if watermark {
+            hasher.update(b"picwish:remove-watermark\0");
+        }
         hasher.update(&bytes);
         let digest = hasher.finalize();
         let cache_id: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
@@ -329,7 +364,7 @@ impl CutoutClient {
         }
 
         trace.record("cache_miss", "");
-        let png = self.request_picwish(bytes, trace).await?;
+        let png = self.request_picwish(bytes, watermark, trace).await?;
         // 原子写缓存：临时文件 + rename，避免并发写半截文件。
         let tmp = cache_path.with_extension("tmp");
         std::fs::write(&tmp, &png).map_err(|error| format!("缓存写入失败：{error}"))?;
@@ -343,24 +378,27 @@ impl CutoutClient {
     async fn request_picwish(
         &self,
         bytes: Vec<u8>,
+        watermark: bool,
         trace: &CutoutTrace,
     ) -> Result<Vec<u8>, String> {
-        let url = format!(
-            "{}/api/tasks/visual/segmentation",
-            self.base_url.trim_end_matches('/')
-        );
-        let kind = self.kind.clone();
-        let form = reqwest::multipart::Form::new()
-            .part(
-                "image_file",
-                reqwest::multipart::Part::bytes(bytes).file_name("photo.png"),
-            )
-            .text("sync", "1")
-            .text("type", kind)
-            .text("return_type", "1")
-            .text("output_type", "2")
-            .text("crop", "1")
-            .text("format", "png");
+        let (path, field, label) = if watermark {
+            ("external/watermark-remove", "file", "去水印")
+        } else {
+            ("segmentation", "image_file", "AI 抠图")
+        };
+        let url = format!("{}/api/tasks/visual/{path}", self.base_url.trim_end_matches('/'));
+        let extension = image::guess_format(&bytes)
+            .ok()
+            .and_then(|format| format.extensions_str().first().copied())
+            .unwrap_or("png");
+        let mut form = reqwest::multipart::Form::new()
+            .part(field, reqwest::multipart::Part::bytes(bytes).file_name(format!("photo.{extension}")))
+            .text("sync", "1");
+        if !watermark {
+            form = form.text("type", self.kind.clone())
+                .text("return_type", "1").text("output_type", "2")
+                .text("crop", "1").text("format", "png");
+        }
         let upstream_started = Instant::now();
         trace.record("upstream_start", "upload_and_processing");
         let response = self
@@ -370,7 +408,7 @@ impl CutoutClient {
             .multipart(form)
             .send()
             .await
-            .map_err(|error| format!("AI 抠图处理请求失败：{}", error.without_url()))?;
+            .map_err(|error| format!("{label}处理请求失败：{}", error.without_url()))?;
         trace.record(
             "upstream_response",
             &format!(
@@ -382,16 +420,16 @@ impl CutoutClient {
 
         if !response.status().is_success() {
             return Err(match response.status().as_u16() {
-                401 | 403 => "AI 抠图服务密钥无效，请在设置中检查配置。".to_string(),
-                429 => "AI 抠图请求过于频繁或今日次数已用完，请稍后再试。".to_string(),
-                code => format!("AI 抠图服务返回错误（HTTP {code}），请稍后重试。"),
+                401 | 403 => format!("{label}服务密钥无效，请在设置中检查配置。"),
+                429 => format!("{label}请求过于频繁或今日次数已用完，请稍后再试。"),
+                code => format!("{label}服务返回错误（HTTP {code}），请稍后重试。"),
             });
         }
 
         let payload: serde_json::Value = response
             .json()
             .await
-            .map_err(|error| format!("AI 抠图返回解析失败：{error}"))?;
+            .map_err(|error| format!("{label}返回解析失败：{error}"))?;
         let status = payload.get("status").and_then(|v| v.as_i64()).unwrap_or(0);
         let state = payload
             .pointer("/data/state")
@@ -405,15 +443,15 @@ impl CutoutClient {
             return Err(payload
                 .get("message")
                 .and_then(|v| v.as_str())
-                .unwrap_or("AI 抠图返回异常，请稍后重试。")
-                .to_string());
+                .map(str::to_owned)
+                .unwrap_or_else(|| format!("{label}返回异常，请稍后重试。")));
         }
         let image = payload
-            .pointer("/data/image")
+            .pointer(if watermark { "/data/file" } else { "/data/image" })
             .and_then(|v| v.as_str())
-            .ok_or_else(|| "AI 抠图未返回结果图片，请稍后重试。".to_string())?;
+            .ok_or_else(|| format!("{label}未返回结果图片，请稍后重试。"))?;
         if state != 1 {
-            return Err(format!("AI 抠图任务未完成（state={state}），请稍后重试。"));
+            return Err(format!("{label}任务未完成（state={state}），请稍后重试。"));
         }
 
         let download_started = Instant::now();
@@ -423,20 +461,20 @@ impl CutoutClient {
             .get(image)
             .send()
             .await
-            .map_err(|error| format!("AI 抠图结果下载失败：{}", error.without_url()))?;
+            .map_err(|error| format!("{label}结果下载失败：{}", error.without_url()))?;
         trace.record(
             "download_response",
             &format!("http={}", png.status().as_u16()),
         );
         if !png.status().is_success() {
-            return Err("AI 抠图结果下载失败，请稍后重试。".into());
+            return Err(format!("{label}结果下载失败，请稍后重试。"));
         }
         let body = png
             .bytes()
             .await
-            .map_err(|error| format!("AI 抠图结果读取失败：{error}"))?;
+            .map_err(|error| format!("{label}结果读取失败：{error}"))?;
         if body.len() as u64 > MAX_RESULT_BYTES {
-            return Err("AI 抠图结果超出大小上限。".into());
+            return Err(format!("{label}结果超出大小上限。"));
         }
         trace.record(
             "download_complete",
@@ -446,6 +484,14 @@ impl CutoutClient {
                 download_started.elapsed().as_millis()
             ),
         );
-        Ok(body.to_vec())
+        if !watermark {
+            return Ok(body.to_vec());
+        }
+        let image = image::load_from_memory(&body)
+            .map_err(|_| "去水印结果图片无效，请重试。".to_string())?;
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png)
+            .map_err(|_| "去水印结果转为 PNG 失败。".to_string())?;
+        Ok(png.into_inner())
     }
 }

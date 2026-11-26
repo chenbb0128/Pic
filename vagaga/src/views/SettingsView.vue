@@ -34,12 +34,13 @@ defineEmits<{ back: [] }>()
 
 const store = useOrdersStore()
 const props = defineProps<{ activeOrder: string | null }>()
+const defaultPollSeconds = 60
 const roleBusy = ref(false)
 const roleMessage = ref('')
 const role = ref<WorkflowRole>(store.workflow.role)
 const deviceName = ref(store.workflow.deviceName ?? '')
 const autoSync = ref(store.workflow.autoSync ?? true)
-const pollSeconds = ref(store.workflow.pollSeconds ?? 15)
+const pollSeconds = ref(store.workflow.pollSeconds ?? defaultPollSeconds)
 const deviceBusy = ref(false)
 const deviceMessage = ref('')
 const roles = [
@@ -79,7 +80,7 @@ async function saveDeviceAndSync() {
     store.workflow = updated
     deviceName.value = updated.deviceName ?? ''
     autoSync.value = updated.autoSync ?? true
-    pollSeconds.value = updated.pollSeconds ?? 15
+    pollSeconds.value = updated.pollSeconds ?? defaultPollSeconds
     deviceMessage.value = '工位名称与自动同步设置已保存。'
   } catch (error) {
     deviceMessage.value = String(error)
@@ -203,7 +204,7 @@ onMounted(async () => {
     role.value = store.workflow.role
     deviceName.value = store.workflow.deviceName ?? ''
     autoSync.value = store.workflow.autoSync ?? true
-    pollSeconds.value = store.workflow.pollSeconds ?? 15
+    pollSeconds.value = store.workflow.pollSeconds ?? defaultPollSeconds
   }).catch(error => {
     roleMessage.value = String(error)
   })
@@ -427,7 +428,7 @@ async function saveCutout() {
   try {
     await saveCutoutConfig(JSON.parse(JSON.stringify(cutc.value)))
     toast('ok', 'AI 抠图配置已保存')
-    cutMsg.value = '已保存。下次执行 AI 抠图 / 一键去底时按新配置调用。'
+    cutMsg.value = '已保存。下次执行 AI 抠图或去水印时按新配置调用。'
   } catch (error) {
     cutMsg.value = String(error)
   } finally {
@@ -688,7 +689,7 @@ async function openCutoutLogs() {
           <div v-show="activeSection === 'cutout'" class="card">
             <h3>AI 抠图（PicWish）</h3>
             <p class="hint">
-              「AI 抠图」「一键去底」共用此配置：识别类型决定抠图的主体；
+              「AI 抠图」与「去水印」共用此配置。识别类型用于 AI 抠图。
               API Key 留空时使用内置默认（也可用环境变量 PIC_PICWISH_API_KEY 覆盖）。
             </p>
             <div class="row">

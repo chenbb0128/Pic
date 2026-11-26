@@ -87,7 +87,7 @@
         }
         byImage.get(image).ids.push(id);
       }
-      if (!entries.length) throw Error('请先上传照片，并选中要去底的照片。');
+      if (!entries.length) throw Error('请先上传照片，并选中要处理的照片。');
       return { token: board.token, entries, cancelled: false };
     }
     function valid(session) {
@@ -96,15 +96,17 @@
         session.entries.every(entry => entry.ids.every(id => board.photoAt(id) === entry.image));
     }
     function check(session) { if (!valid(session)) throw Error('照片或模板已变化，处理已取消，请重新选择。'); }
-    async function commit(session, processor = processImage, progress = () => {}) {
+    async function commit(session, processor = processImage, progress = () => {}, operation) {
       check(session);
       const items = [];
       for (let i = 0; i < session.entries.length; i++) {
         const entry = session.entries[i]; progress(i + 1, session.entries.length);
-        const image = await processor(entry.original, entry.options, () => !valid(session));
+        const saved = originals.get(entry.image);
+        const input = !operation ? entry.original : saved?.operation === operation ? saved.input : entry.image;
+        const image = await processor(input, entry.options, () => !valid(session));
         check(session);
-        originals.set(image, { original: entry.original, options: { ...entry.options } });
-        entry.ids.forEach(id => items.push({ id, image, processed: true }));
+        originals.set(image, { original: entry.original, options: { ...entry.options }, operation, input });
+        entry.ids.forEach(id => items.push({ id, image, processed: true, ...(operation && { operation }) }));
       }
       check(session); apply(items); session.cancelled = true;
       return items.length;

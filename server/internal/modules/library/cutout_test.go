@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"image"
+	"image/jpeg"
 	"image/png"
 	"io"
 	"mime/multipart"
@@ -45,13 +46,17 @@ func newCutoutUpstream(t *testing.T) *cutoutUpstream {
 	up.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&up.hits, 1)
 		switch r.URL.Path {
-		case "/api/tasks/visual/segmentation":
+		case "/api/tasks/visual/segmentation", "/api/tasks/visual/external/watermark-remove":
 			_ = r.ParseMultipartForm(1 << 20)
+			field, resultKey, resultPath := "image_file", "image", "/result.png"
+			if r.URL.Path == "/api/tasks/visual/external/watermark-remove" {
+				field, resultKey, resultPath = "file", "file", "/result.jpg"
+			}
 			up.mu.Lock()
 			up.sawKey = r.Header.Get("X-API-KEY")
 			up.sawSync, up.sawType = r.FormValue("sync"), r.FormValue("type")
 			up.sawCrop = r.FormValue("crop")
-			up.sawFile = len(r.MultipartForm.File["image_file"]) > 0
+			up.sawFile = len(r.MultipartForm.File[field]) > 0
 			status, state := up.status, up.state
 			up.mu.Unlock()
 			if status != 0 && status != http.StatusOK {
@@ -60,7 +65,10 @@ func newCutoutUpstream(t *testing.T) *cutoutUpstream {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"status":200,"message":"success","data":{"state":` + jsonNumber(state) + `,"image":"` + up.server.URL + `/result.png","task_id":"t1"}}`))
+			_, _ = w.Write([]byte(`{"status":200,"message":"success","data":{"state":` + jsonNumber(state) + `,"` + resultKey + `":"` + up.server.URL + resultPath + `","task_id":"t1"}}`))
+		case "/result.jpg":
+			w.Header().Set("Content-Type", "image/jpeg")
+			_ = jpeg.Encode(w, image.NewRGBA(image.Rect(0, 0, 4, 3)), nil)
 		case "/result.png":
 			up.mu.Lock()
 			failGet := up.failGet
@@ -101,12 +109,16 @@ func setupCutout(t *testing.T, configure func(*Options)) (http.Handler, *memoryS
 }
 
 func postCutout(h http.Handler, cookie *http.Cookie, data []byte) *httptest.ResponseRecorder {
+	return postPhoto(h, "/api/v1/photos/cutout", cookie, data)
+}
+
+func postPhoto(h http.Handler, path string, cookie *http.Cookie, data []byte) *httptest.ResponseRecorder {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, _ := writer.CreateFormFile("file", "photo.png")
 	_, _ = part.Write(data)
 	_ = writer.Close()
-	r := httptest.NewRequest("POST", "/api/v1/photos/cutout", &body)
+	r := httptest.NewRequest("POST", path, &body)
 	r.Header.Set("Content-Type", writer.FormDataContentType())
 	r.Header.Set("Origin", "http://localhost:5173")
 	if cookie != nil {
@@ -132,6 +144,46 @@ func TestCutoutRequiresLogin(t *testing.T) {
 	h, _, _ := setupCutout(t, nil)
 	if w := postCutout(h, nil, tinyPNG(t, 2, 2)); w.Code != 401 {
 		t.Fatalf("expected 401 without cookie, got %d %s", w.Code, w.Body)
+	}
+}
+
+func TestWatermarkRemovalUsesItsOwnCacheAndDownloadsJPEG(t *testing.T) {
+	const endpoint = "/api/v1/photos/remove-watermark"
+	h, _, up := setupCutout(t, nil)
+	input := tinyPNG(t, 3, 2)
+	if w := postPhoto(h, endpoint, nil, input); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected authentication, got %d", w.Code)
+	}
+	cookie := login(t, h)
+	read := func(w *httptest.ResponseRecorder) cutoutReply {
+		t.Helper()
+		var result cutoutReply
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &result) != nil {
+			t.Fatalf("unexpected response: %d %s", w.Code, w.Body)
+		}
+		return result
+	}
+	cutout := read(postCutout(h, cookie, input))
+	first := read(postPhoto(h, endpoint, cookie, input))
+	cached := read(postPhoto(h, endpoint, cookie, input))
+	if first.Data.ID == cutout.Data.ID || first.Data.Cached || !cached.Data.Cached || cached.Data.ID != first.Data.ID {
+		t.Fatalf("watermark cache is not separate: %+v %+v", first, cached)
+	}
+	if first.Data.MIME != "image/jpeg" || first.Data.Width != 4 || first.Data.Height != 3 {
+		t.Fatalf("unexpected result: %+v", first)
+	}
+	if hits := atomic.LoadInt32(&up.hits); hits != 4 {
+		t.Fatalf("expected two calls per operation plus cache hit, got %d calls", hits)
+	}
+	if !up.sawFile || up.sawSync != "1" || up.sawType != "" || up.sawCrop != "" {
+		t.Fatal("wrong watermark multipart fields")
+	}
+	r := httptest.NewRequest("GET", "/api/v1/assets/"+first.Data.ID, nil)
+	r.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("watermark asset download failed: %d %s", w.Code, w.Header().Get("Content-Type"))
 	}
 }
 

@@ -580,7 +580,7 @@ pub(crate) fn auto_sync_config(store: &Store) -> (bool, u64) {
         .ok()
         .flatten()
         .and_then(|val| val.parse::<u64>().ok())
-        .unwrap_or(15)
+        .unwrap_or(60)
         .clamp(10, 60);
     (enabled, poll)
 }
