@@ -558,6 +558,36 @@ test('the order status filter can search across pending and completed orders', a
   assert.equal(ids(), 'finished')
 })
 
+test('the order hover card closes when its order is filtered out or removed on refresh', async t => {
+  const env = environment(t)
+  const row = order('hovered')
+  env.rows([row])
+  await env.store.loadOrders()
+  const view = await env.mountView()
+  const position = { clientX: 100, clientY: 120 }
+
+  view.onItemEnter(row.id, position)
+  await flush()
+  assert.equal(view.hoveredEntry.value?.summary.id, row.id)
+  view.orderSearch.value = 'missing'
+  assert.equal(view.hoveredEntry.value, undefined)
+  await flush()
+  assert.equal(view.hoverOrderId.value, null)
+
+  view.orderSearch.value = ''
+  assert.equal(view.visibleEntries.value.length, 1)
+  assert.equal(view.hoveredEntry.value, undefined)
+  view.onItemEnter(row.id, position)
+  await flush()
+  assert.equal(view.hoveredEntry.value?.summary.id, row.id)
+
+  env.rows([])
+  await env.store.loadOrders()
+  await flush()
+  assert.equal(view.hoveredEntry.value, undefined)
+  assert.equal(view.hoverOrderId.value, null)
+})
+
 test('sorts by placed time or numeric price and uses the local creation time when needed', async t => {
   const env = environment(t)
   env.rows([

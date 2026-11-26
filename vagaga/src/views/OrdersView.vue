@@ -1014,6 +1014,15 @@ function fmtTime(iso: string): string {
 /* ---------- 订单悬浮详情卡（千帆透传的状态/金额/规格） ---------- */
 const hoverOrderId = ref<string | null>(null)
 const hoverPos = ref({ x: 0, y: 0 })
+const hoveredEntry = computed(() => {
+  const id = hoverOrderId.value
+  if (!id || props.visible === false) return undefined
+  return visibleEntries.value.find(entry => entry.summary.id === id)
+})
+const hoveredMeta = computed(() => parseMeta(hoveredEntry.value?.summary.metadata))
+watch(hoveredEntry, entry => {
+  if (!entry) hoverOrderId.value = null
+})
 
 interface OrderMeta {
   status?: string
@@ -1360,31 +1369,27 @@ function orderProductions(orderNumber: string): Production[] {
 
     <!-- 订单悬浮详情卡 -->
     <div
-      v-if="hoverOrderId"
+      v-if="hoveredEntry"
       class="hoverCard"
       :style="{ left: hoverPos.x + 'px', top: hoverPos.y + 'px' }"
     >
-      <template v-for="entry in visibleEntries" :key="'hc-' + entry.summary.id">
-        <template v-if="entry.summary.id === hoverOrderId">
-          <div class="hcTitle">{{ entry.summary.orderNumber }}</div>
-          <template v-if="parseMeta(entry.summary.metadata)">
-            <div class="hcRow" v-if="parseMeta(entry.summary.metadata)!.status">
-              <span class="hcLabel">状态</span>{{ parseMeta(entry.summary.metadata)!.status }}
-            </div>
-            <div class="hcRow" v-if="entry.amount !== null">
-              <span class="hcLabel">金额</span>¥{{ entry.amount.toFixed(2) }}
-            </div>
-            <div class="hcRow" v-if="entry.placedAt">
-              <span class="hcLabel">下单</span>{{ fmtTime(entry.placedAt) }}
-            </div>
-            <div class="hcRow" v-if="parseMeta(entry.summary.metadata)!.specText">
-              <span class="hcLabel">规格</span>{{ parseMeta(entry.summary.metadata)!.specText }}
-            </div>
-          </template>
-          <div v-else class="hcRow dim">暂无千帆面板详情（该订单在功能上线前排单）</div>
-          <div class="hcRow"><span class="hcLabel">素材</span>{{ entry.images.length }} 张</div>
-        </template>
+      <div class="hcTitle">{{ hoveredEntry.summary.orderNumber }}</div>
+      <template v-if="hoveredMeta">
+        <div class="hcRow" v-if="hoveredMeta.status">
+          <span class="hcLabel">状态</span>{{ hoveredMeta.status }}
+        </div>
+        <div class="hcRow" v-if="hoveredEntry.amount !== null">
+          <span class="hcLabel">金额</span>¥{{ hoveredEntry.amount.toFixed(2) }}
+        </div>
+        <div class="hcRow" v-if="hoveredEntry.placedAt">
+          <span class="hcLabel">下单</span>{{ fmtTime(hoveredEntry.placedAt) }}
+        </div>
+        <div class="hcRow" v-if="hoveredMeta.specText">
+          <span class="hcLabel">规格</span>{{ hoveredMeta.specText }}
+        </div>
       </template>
+      <div v-else class="hcRow dim">暂无千帆面板详情（该订单在功能上线前排单）</div>
+      <div class="hcRow"><span class="hcLabel">素材</span>{{ hoveredEntry.images.length }} 张</div>
     </div>
 
     <dialog ref="materialDialog" class="materialDialog" aria-labelledby="material-preview-title"
