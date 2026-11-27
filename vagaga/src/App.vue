@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { ClipboardList, CloudDownload, CloudUpload, LayoutTemplate, LoaderCircle, Settings } from '@lucide/vue'
+import { BookOpen, ClipboardList, CloudDownload, CloudUpload, LayoutTemplate, LoaderCircle, Settings } from '@lucide/vue'
 import { Toaster } from 'vue-sonner'
 import 'vue-sonner/style.css'
 import TitleBar from './components/TitleBar.vue'
 import { Button } from './components/ui/button'
 import OrdersView from './views/OrdersView.vue'
 import WorkflowDialog from './components/WorkflowDialog.vue'
+import QuickStartDialog from './components/QuickStartDialog.vue'
 import SettingsView from './views/SettingsView.vue'
 import TemplatesView from './views/TemplatesView.vue'
-import { useOrdersStore, loadOrders, loadInfo, bindEvents, refreshQiniuStatus, refreshWorkflowOrders, refreshWorkflowSettings, toast } from './stores/orders'
+import { useOrdersStore, loadOrders, loadInfo, bindEvents, refreshQiniuStatus, refreshShops, refreshWorkflowOrders, refreshWorkflowSettings, toast } from './stores/orders'
+import { markQuickStartSeen } from './lib/tauri'
 import type { WorkflowPreview } from './types'
 
 const store = useOrdersStore()
@@ -21,6 +23,8 @@ const pages = [
 const view = ref<typeof pages[number]['id']>('orders')
 const ordersView = ref<InstanceType<typeof OrdersView> | null>(null)
 const workflow = ref<InstanceType<typeof WorkflowDialog> | null>(null)
+const quickStart = ref<InstanceType<typeof QuickStartDialog> | null>(null)
+const finishingOrder = ref<string | null>(null)
 const selectedUploadOrders = ref<string[]>([])
 const uploadableOrders = computed(() => new Set(store.workflow.role === 'production' ? [] :
   store.orders.filter(({ orderNumber, imageCount }) => {
@@ -49,6 +53,17 @@ function sync() {
   void workflow.value?.sync()
 }
 
+async function finish(orderNumber: string) {
+  const dialog = workflow.value
+  if (!dialog || dialog.operation || finishingOrder.value !== null) return
+  finishingOrder.value = orderNumber
+  try {
+    await dialog.finish(orderNumber)
+  } finally {
+    finishingOrder.value = null
+  }
+}
+
 function saveLayout() {
   return ordersView.value?.persistLayout() ?? Promise.resolve()
 }
@@ -59,6 +74,16 @@ function applySharedVersion(target: WorkflowPreview) {
 }
 let stopEvents: (() => void) | undefined
 let disposed = false
+let quickStartDismissed = false
+
+function dismissQuickStart() {
+  if (quickStartDismissed || store.workflow.quickStartSeen) return
+  quickStartDismissed = true
+  void markQuickStartSeen().catch(error => {
+    quickStartDismissed = false
+    toast('error', `保存操作帮助状态失败：${error}`)
+  })
+}
 
 async function saveLayoutBeforeClose() {
   try {
@@ -71,7 +96,10 @@ async function saveLayoutBeforeClose() {
 }
 
 onMounted(async () => {
-  void refreshWorkflowSettings().catch(() => {})
+  void refreshWorkflowSettings().then(() => {
+    if (!quickStartDismissed && store.workflow.quickStartSeen === false) quickStart.value?.open()
+  }).catch(() => {})
+  void refreshShops().catch(() => {})
   void refreshWorkflowOrders().catch(() => {})
   const stop = await bindEvents()
   if (disposed) { stop(); return }
@@ -104,6 +132,11 @@ onBeforeUnmount(() => {
         >
           <component :is="page.icon" class="size-5" aria-hidden="true" />
         </Button>
+        <Button type="button" variant="ghost" size="icon-lg"
+          class="text-muted-foreground hover:bg-primary/8 hover:text-primary"
+          aria-label="操作帮助" title="操作帮助" @click="quickStart?.open()">
+          <BookOpen class="size-5" aria-hidden="true" />
+        </Button>
       </nav>
       <main class="pages">
         <OrdersView
@@ -113,9 +146,11 @@ onBeforeUnmount(() => {
           :upload-selection="selectedUploadOrders"
           :uploadable-orders="uploadableOrders"
           :workflow-busy="!!workflow?.operation"
-          @finish="workflow?.finish($event)"
+          :finishing-order="finishingOrder"
+          @finish="finish"
           @reopen="workflow?.reopen($event)"
           @toggle-upload="toggleUpload"
+          @clear-uploads="selectedUploadOrders = []"
         >
           <template #workflow-actions>
             <Button v-if="store.workflow.role !== 'production'" type="button" size="xs"
@@ -144,6 +179,7 @@ onBeforeUnmount(() => {
       :save-layout="saveLayout"
       :apply-shared-version="applySharedVersion"
     />
+    <QuickStartDialog ref="quickStart" @close="dismissQuickStart" @settings="view = 'settings'" />
     <Toaster position="top-right" :offset="{ top: 54, right: 16 }" :duration="3200"
       rich-colors close-button container-aria-label="消息提醒"
       :toast-options="{ closeButtonAriaLabel: '关闭消息' }" />

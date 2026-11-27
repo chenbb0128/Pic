@@ -1,15 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowDown, ArrowUp, Boxes, Check, CircleCheck, Clock3, CloudDownload, Download, GripVertical, PanelsTopLeft, RefreshCw, RotateCcw, Search, X } from '@lucide/vue'
+import { Archive, ArrowDown, ArrowUp, Boxes, Check, CircleCheck, Clock3, CloudDownload, Download, GripVertical, LoaderCircle, PanelsTopLeft, RefreshCw, RotateCcw, Search, Store, X } from '@lucide/vue'
 import OptionSelect from '../components/OptionSelect.vue'
 import TemplateSaveDialog from '../components/TemplateSaveDialog.vue'
 import { Button } from '../components/ui/button'
 import { Checkbox } from '../components/ui/checkbox'
 import { Input } from '../components/ui/input'
-import { useOrdersStore, loadOrders, refreshWorkflowOrders, toast } from '../stores/orders'
+import { useOrdersStore, loadOrders, orderDisplay, orderIsArchived, orderShopId, orderShopName, platformOrderNumber, refreshWorkflowOrders, toast, updateShopCatalog } from '../stores/orders'
 import { mountEditorExportControls } from '../lib/editor-export-controls'
 import { connectTemplateEditor } from '../lib/template-editor'
 import {
+  assignLegacyShops,
   assetUrl,
   copyOrderNumberToClipboard,
   cutoutImageBytes,
@@ -26,6 +27,7 @@ import {
   saveProduction,
   setImageRemark,
   setImageTemplates,
+  setShopOrdersArchived,
   workflowClaimOrder,
   workflowDownloadImage,
   workflowDownloadProduction,
@@ -40,8 +42,9 @@ const props = defineProps<{
   uploadableOrders?: Set<string>
   uploadSelection?: string[]
   workflowBusy?: boolean
+  finishingOrder?: string | null
 }>()
-const emit = defineEmits<{ finish: [orderNumber: string]; reopen: [orderNumber: string]; toggleUpload: [orderNumber: string, checked: boolean] }>()
+const emit = defineEmits<{ finish: [orderNumber: string]; reopen: [orderNumber: string]; toggleUpload: [orderNumber: string, checked: boolean]; clearUploads: [] }>()
 const store = useOrdersStore()
 const canDelete = computed(() => store.workflow.role !== 'production')
 const canFinish = computed(() => store.workflow.role !== 'customer')
@@ -63,9 +66,7 @@ function syncLabel(asset: OrderImage | Production) {
 }
 
 function qualityLabel(img: OrderImage) {
-  if (img.sourceQuality === 'scaled') return '来源为缩图'
-  if (img.sourceQuality === 'unknown') return '原图来源未确认'
-  return ''
+  return img.sourceQuality === 'scaled' ? '来源为缩图' : ''
 }
 
 function makeBlockReason(img: OrderImage) {
@@ -73,7 +74,6 @@ function makeBlockReason(img: OrderImage) {
   if (img.remoteOnly && !img.filePath) return '云端原图尚未下载，请先点击左侧缩略卡下载'
   if (!img.filePath) return '本机原图尚不可用'
   if (img.sourceQuality === 'scaled') return '制作需要原图，请先获取原图'
-  if (img.sourceQuality === 'unknown') return '制作需要来源已确认的原图'
   return ''
 }
 
@@ -99,7 +99,7 @@ async function ensureClaimBeforeMake(orderNumber: string): Promise<boolean> {
   let force = false
   if (existing?.claimedBy && !existing.claimedByMe) {
     const holder = existing.claimedName || existing.claimedBy
-    if (!confirm(`订单 ${orderNumber} 正由「${holder}」制作中，是否强制接手制作？`)) {
+    if (!confirm(`订单 ${orderDisplay(orderNumber)} 正由「${holder}」制作中，是否强制接手制作？`)) {
       return false
     }
     force = true
@@ -135,7 +135,7 @@ async function releaseClaim(orderNumber: string) {
   try {
     await workflowReleaseOrder(orderNumber, false)
     await refreshWorkflowOrders()
-    toast('ok', `已释放订单 ${orderNumber} 的制作状态。`)
+    toast('ok', `已释放订单 ${orderDisplay(orderNumber)} 的制作状态。`)
   } catch (error) {
     toast('error', `释放失败：${error}`)
   } finally {
@@ -145,18 +145,70 @@ async function releaseClaim(orderNumber: string) {
 
 function requestReopen(orderNumber: string) {
   if (props.workflowBusy) return
-  if (!confirm(`确认将已完成订单 ${orderNumber} 返工重开为待制作？重开后可继续补图或重新交付成品。`)) return
+  if (!confirm(`确认将已完成订单 ${orderDisplay(orderNumber)} 返工重开为待制作？重开后可继续补图或重新交付成品。`)) return
   emit('reopen', orderNumber)
 }
 
 /* ---------- 左栏数据：订单 + 素材树 ---------- */
 const entries = ref<{ summary: OrderSummary; images: OrderImage[] }[]>([])
 const orderSearch = ref('')
-const orderFilter = ref<'pending' | 'completed' | 'all'>('pending')
+const orderFilter = ref<'pending' | 'completed' | 'all' | 'archived'>('pending')
+const shopFilter = ref('all')
+const shopFilterOptions = computed(() => [
+  { id: 'all', label: '全部店铺', icon: Boxes },
+  ...store.shopCatalog.shops.map(shop => ({
+    id: shop.id, label: shop.active ? shop.name : `${shop.name}（已停用）`, icon: Store,
+  })),
+  { id: 'unassigned', label: '待归属', icon: Store },
+])
+const assignmentShops = computed(() => store.shopCatalog.shops.filter(shop => shop.active))
+const assignmentDialog = ref<HTMLDialogElement | null>(null)
+const assignmentNumbers = ref<string[]>([])
+const assignmentShop = ref('')
+const assignmentError = ref('')
+const assigningShop = ref(false)
+const archiveDialog = ref<HTMLDialogElement | null>(null)
+const archiveShop = ref('')
+const archiveFrom = ref('')
+const archiveThrough = ref('')
+const archiveError = ref('')
+const archiving = ref(false)
+const selectedShop = computed(() => store.shopCatalog.shops.find(shop => shop.id === shopFilter.value))
+const archiveShopName = computed(() => store.shopCatalog.shops.find(shop => shop.id === archiveShop.value)?.name)
+
+watch(shopFilter, () => emit('clearUploads'))
+watch(shopFilterOptions, options => {
+  if (!options.some(option => option.id === shopFilter.value)) shopFilter.value = 'all'
+})
+
+function openAssignment(numbers: string[]) {
+  assignmentNumbers.value = numbers.filter(number => !orderShopId(number))
+  if (!assignmentNumbers.value.length) return
+  assignmentShop.value = ''
+  assignmentError.value = ''
+  assignmentDialog.value?.showModal()
+}
+
+async function confirmAssignment() {
+  if (assigningShop.value || !assignmentShop.value) return
+  assigningShop.value = true
+  assignmentError.value = ''
+  try {
+    const catalog = await assignLegacyShops(assignmentNumbers.value, assignmentShop.value)
+    updateShopCatalog(catalog)
+    assignmentDialog.value?.close()
+    toast('ok', `已分配 ${assignmentNumbers.value.length} 笔订单。`)
+  } catch (error) {
+    assignmentError.value = String(error)
+  } finally {
+    assigningShop.value = false
+  }
+}
 const orderFilters = [
   { id: 'pending', label: '待制作', detail: '查看还需要制作的订单', icon: Clock3 },
   { id: 'completed', label: '已完成', detail: '查看已标记完成的订单', icon: CircleCheck },
   { id: 'all', label: '全部订单', detail: '查看所有制作状态', icon: Boxes },
+  { id: 'archived', label: '已归档', detail: '查看归档的历史订单', icon: Archive },
 ] as const
 const orderSort = ref<OrderSort>({ mode: 'time-desc', manual: [] })
 const sortReady = ref(false)
@@ -193,6 +245,24 @@ function workflowLabel(number: string) {
   if (state?.sharedState === 'pending') return '已发布 · 待制作'
   return ''
 }
+
+const uploadBadges = computed(() => Object.fromEntries(
+  Object.entries(store.workflowOrders).map(([number, state]) => {
+    const uploaded = state.sharedState === 'pending' || state.sharedState === 'completed'
+    if (state.pendingOperation === 'publish') {
+      return [number, {
+        kind: state.error ? 'failed' : 'pending',
+        text: state.error ? (uploaded ? '更新上传失败' : '上传失败') : '上传待确认',
+        title: state.error || '再次点击上传可以确认上次结果',
+      }]
+    }
+    if (uploaded) {
+      return [number, { kind: 'uploaded', text: '已上传', title: '共享库里已有这笔订单，后续编辑需再次上传' }]
+    }
+    return [number, { kind: 'local', text: '未上传', title: '订单当前只保存在本机' }]
+  }),
+))
+
 const searchTerm = computed(() => orderSearch.value.trim().toLowerCase())
 const matchingOrders = computed(() => store.orders.filter(matchesOrder))
 const sortedOrders = computed(() => {
@@ -233,6 +303,63 @@ const visibleEntries = computed(() => {
     ...entry, images: byId.get(entry.summary.id) ?? [],
   }))
 })
+
+const archiveNumbers = computed(() => sortedOrders.value.flatMap(entry => {
+  const number = entry.summary.orderNumber
+  const workflow = store.workflowOrders[number]
+  const date = (entry.placedAt ?? entry.summary.createdAt).slice(0, 10)
+  const completed = workflow?.sharedState === 'completed'
+    || (workflow?.localCompleted && !workflow.sharedState && !workflow.pendingOperation)
+  if (orderShopId(number) !== archiveShop.value || !completed || orderIsArchived(number)
+    || (archiveFrom.value && date < archiveFrom.value)
+    || (archiveThrough.value && date > archiveThrough.value)) return []
+  return [number]
+}))
+
+function openArchive() {
+  if (!selectedShop.value) return
+  archiveShop.value = selectedShop.value.id
+  archiveFrom.value = ''
+  archiveThrough.value = ''
+  archiveError.value = ''
+  archiveDialog.value?.showModal()
+}
+
+async function changeArchive(shopId: string, numbers: string[], archived: boolean) {
+  const catalog = await setShopOrdersArchived(shopId, numbers, archived)
+  updateShopCatalog(catalog)
+  await refreshWorkflowOrders()
+}
+
+async function confirmArchive() {
+  if (archiving.value || !archiveNumbers.value.length) return
+  archiving.value = true
+  archiveError.value = ''
+  const numbers = archiveNumbers.value
+  try {
+    await changeArchive(archiveShop.value, numbers, true)
+    archiveDialog.value?.close()
+    toast('ok', `已归档 ${numbers.length} 笔订单。`)
+  } catch (error) {
+    archiveError.value = String(error)
+  } finally {
+    archiving.value = false
+  }
+}
+
+async function restoreArchived(number: string) {
+  const shop = orderShopId(number)
+  if (!shop || archiving.value || !confirm(`将 ${orderDisplay(number)} 恢复到「已完成」列表？`)) return
+  archiving.value = true
+  try {
+    await changeArchive(shop, [number], false)
+    toast('ok', '订单已恢复。')
+  } catch (error) {
+    toast('error', String(error))
+  } finally {
+    archiving.value = false
+  }
+}
 
 let sortWrites = Promise.resolve()
 function persistOrderSort(sort: OrderSort) {
@@ -302,9 +429,13 @@ function endOrderDrag() {
 }
 
 function matchesOrder(order: OrderSummary) {
-  if (orderFilter.value !== 'all' && (orderFilter.value === 'completed') !== isOrderComplete(order.orderNumber)) return false
+  const archived = orderIsArchived(order.orderNumber)
+  if (archived !== (orderFilter.value === 'archived')) return false
+  if ((orderFilter.value === 'pending' || orderFilter.value === 'completed')
+    && (orderFilter.value === 'completed') !== isOrderComplete(order.orderNumber)) return false
+  if (shopFilter.value !== 'all' && (orderShopId(order.orderNumber) ?? 'unassigned') !== shopFilter.value) return false
   const term = searchTerm.value
-  return !term || order.orderNumber.toLowerCase().includes(term)
+  return !term || platformOrderNumber(order.orderNumber).toLowerCase().includes(term)
     || (parseMeta(order.metadata)?.layoutNumber?.toLowerCase().includes(term) ?? false)
 }
 
@@ -351,8 +482,10 @@ watch(() => store.latestCapture, capture => {
   const order = store.orders.find(row => row.id === capture?.orderId)
   if (!order) return
   if (orderFilter.value !== 'all') {
-    orderFilter.value = isOrderComplete(order.orderNumber) ? 'completed' : 'pending'
+    orderFilter.value = orderIsArchived(order.orderNumber) ? 'archived'
+      : isOrderComplete(order.orderNumber) ? 'completed' : 'pending'
   }
+  if (shopFilter.value !== 'all') shopFilter.value = orderShopId(order.orderNumber) ?? 'unassigned'
   if (!matchesOrder(order)) orderSearch.value = ''
   expandedOrderId.value = order.id
 })
@@ -374,7 +507,7 @@ function chooseOrder(id: string) {
 
 async function copyOrderNumber(orderNumber: string) {
   try {
-    await copyOrderNumberToClipboard(orderNumber)
+    await copyOrderNumberToClipboard(platformOrderNumber(orderNumber))
     toast('ok', '订单号已复制')
   } catch (error) {
     toast('error', `复制订单号失败：${error}`)
@@ -635,7 +768,7 @@ const exportStatus = computed(() => {
   if (!saved) return ''
   const production = orderProductions(saved.orderNumber).find(row => row.id === saved.id) ?? saved
   if (!saved.orderNumber) return '成品已保存本地（未关联订单）。'
-  const prefix = `订单 ${saved.orderNumber} 的成品`
+  const prefix = `订单 ${orderDisplay(saved.orderNumber)} 的成品`
   switch (production.syncStatus) {
     case 'synced': return `${prefix}已同步服务器。`
     case 'pending': return `${prefix}已保存本地，待回传。`
@@ -648,14 +781,15 @@ const exportStatus = computed(() => {
 function updateEditorHeader() {
   const orderLabel = numberingDocument?.getElementById('desktopOrderNumber')
   if (orderLabel) {
-    orderLabel.textContent = lastInjectedOrder.value ?? ''
-    orderLabel.title = lastInjectedOrder.value ?? ''
+    const label = lastInjectedOrder.value ? orderDisplay(lastInjectedOrder.value) : ''
+    orderLabel.textContent = label
+    orderLabel.title = label
   }
   const feedback = numberingDocument?.getElementById('desktopEditorFeedback')
   if (feedback) feedback.textContent = status.value || exportStatus.value
 }
 
-watch([lastInjectedOrder, status, exportStatus], updateEditorHeader)
+watch([lastInjectedOrder, status, exportStatus, () => store.shopCatalog], updateEditorHeader)
 
 watch(
   [() => store.orders, expandedOrderNumber, () => lastExport.value?.orderNumber],
@@ -1123,6 +1257,18 @@ function orderProductions(orderNumber: string): Production[] {
         <OptionSelect :model-value="orderSort.mode" :options="sortOptions" :disabled="!sortReady"
           compact aria-label="订单排序" @update:model-value="changeOrderSort" />
       </div>
+      <div v-if="store.shopCatalog.shops.length" class="orderSort">
+        <span>店铺</span>
+        <OptionSelect v-model="shopFilter" :options="shopFilterOptions" class="min-w-0 max-w-[58%]" compact aria-label="按店铺筛选" />
+        <Button v-if="shopFilter === 'unassigned' && assignmentShops.length && canDelete && visibleEntries.length"
+          variant="outline" size="xs" @click="openAssignment(visibleEntries.map(entry => entry.summary.orderNumber))">
+          分配当前 {{ visibleEntries.length }} 笔
+        </Button>
+        <Button v-if="selectedShop && orderFilter === 'completed' && canDelete && visibleEntries.length"
+          variant="outline" size="xs" :disabled="archiving || workflowBusy" @click="openArchive">
+          <Archive aria-hidden="true" />归档历史
+        </Button>
+      </div>
       <div class="items">
         <div v-for="entry in visibleEntries" :key="entry.summary.id" class="orderBlock">
           <div
@@ -1136,7 +1282,7 @@ function orderProductions(orderNumber: string): Production[] {
             @drop="dropOrder(entry.summary.orderNumber, $event)"
           >
             <button v-if="orderSort.mode === 'manual'" class="reorderHandle" type="button" draggable="true"
-              :aria-label="'调整订单 ' + entry.summary.orderNumber + ' 的顺序'"
+              :aria-label="'调整订单 ' + orderDisplay(entry.summary.orderNumber) + ' 的顺序'"
               title="拖动调整顺序，也可按方向键 ↑ / ↓"
               @click.stop
               @dragstart="startOrderDrag(entry.summary.orderNumber, $event)"
@@ -1147,14 +1293,14 @@ function orderProductions(orderNumber: string): Production[] {
             <Checkbox v-if="uploadableOrders?.has(entry.summary.orderNumber)"
               class="mt-0.5"
               :model-value="uploadSelection?.includes(entry.summary.orderNumber) ?? false" :disabled="workflowBusy"
-              :aria-label="'勾选订单 ' + entry.summary.orderNumber + ' 上传'" @click.stop
+              :aria-label="'勾选订单 ' + orderDisplay(entry.summary.orderNumber) + ' 上传'" @click.stop
               @update:model-value="emit('toggleUpload', entry.summary.orderNumber, $event === true)" />
             <svg class="chevron" :class="{ open: expandedOrderId === entry.summary.id }" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
             <div class="itemMain">
               <div class="orderHeading">
-                <button type="button" class="num" :title="'点击复制订单号 ' + entry.summary.orderNumber"
-                  :aria-label="'复制订单号 ' + entry.summary.orderNumber"
-                  @click.stop="copyOrderNumber(entry.summary.orderNumber)">{{ entry.summary.orderNumber }}</button>
+                <button type="button" class="num" :title="'点击复制订单号 ' + platformOrderNumber(entry.summary.orderNumber)"
+                  :aria-label="'复制订单号 ' + orderDisplay(entry.summary.orderNumber)"
+                  @click.stop="copyOrderNumber(entry.summary.orderNumber)">{{ platformOrderNumber(entry.summary.orderNumber) }}</button>
                 <time class="orderTime" :datetime="entry.placedAt ?? entry.summary.createdAt"
                   :title="(entry.placedAt ? '下单时间 ' : '入库时间 ') + (entry.placedAt ?? entry.summary.createdAt)"
                 >{{ fmtTime(entry.placedAt ?? entry.summary.createdAt).slice(0, 11) }}</time>
@@ -1162,10 +1308,16 @@ function orderProductions(orderNumber: string): Production[] {
                   role="img" :aria-label="workflowLabel(entry.summary.orderNumber)"
                   :title="store.workflowOrders[entry.summary.orderNumber]?.error ?? undefined">!</span>
               </div>
-              <div v-if="entry.amount !== null || parseMeta(entry.summary.metadata)?.layoutNumber || claimBadge(entry.summary.orderNumber) || isOrderComplete(entry.summary.orderNumber) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
+              <div v-if="entry.amount !== null || parseMeta(entry.summary.metadata)?.layoutNumber || uploadBadges[entry.summary.orderNumber] || claimBadge(entry.summary.orderNumber) || isOrderComplete(entry.summary.orderNumber) || finishLabel(entry.summary.orderNumber) || canDelete" class="orderDetails">
                 <div class="orderDescriptors">
+                  <span v-if="store.shopCatalog.shops.length || orderShopId(entry.summary.orderNumber)" class="orderCode">
+                    {{ orderShopName(entry.summary.orderNumber) }}
+                  </span>
                   <span v-if="parseMeta(entry.summary.metadata)?.layoutNumber" class="orderCode">{{ parseMeta(entry.summary.metadata)?.layoutNumber }}</span>
                   <span v-if="entry.amount !== null" class="orderPrice">¥{{ entry.amount.toFixed(2) }}</span>
+                  <span v-if="uploadBadges[entry.summary.orderNumber]" class="uploadBadge"
+                    :data-state="uploadBadges[entry.summary.orderNumber].kind"
+                    :title="uploadBadges[entry.summary.orderNumber].title">{{ uploadBadges[entry.summary.orderNumber].text }}</span>
                   <span v-if="claimBadge(entry.summary.orderNumber)" class="claimTag" :class="{ mine: claimBadge(entry.summary.orderNumber)?.mine }">
                     {{ claimBadge(entry.summary.orderNumber)?.label }}
                     <button v-if="claimBadge(entry.summary.orderNumber)?.mine" type="button" class="claimRelease"
@@ -1174,8 +1326,14 @@ function orderProductions(orderNumber: string): Production[] {
                   </span>
                   <span v-if="orderFilter === 'all' && isOrderComplete(entry.summary.orderNumber)" class="orderDone">已完成</span>
                 </div>
+                <Button v-if="canDelete && assignmentShops.length && !orderShopId(entry.summary.orderNumber)"
+                  variant="ghost" size="xs" @click.stop="openAssignment([entry.summary.orderNumber])">分配店铺</Button>
+                <Button v-if="orderIsArchived(entry.summary.orderNumber) && canDelete"
+                  variant="outline" size="xs" :disabled="archiving || workflowBusy" @click.stop="restoreArchived(entry.summary.orderNumber)">
+                  <RotateCcw aria-hidden="true" />恢复
+                </Button>
                 <Button
-                  v-if="isOrderComplete(entry.summary.orderNumber)"
+                  v-else-if="isOrderComplete(entry.summary.orderNumber) && !orderIsArchived(entry.summary.orderNumber)"
                   variant="outline"
                   size="xs"
                   class="finishBtn"
@@ -1185,14 +1343,19 @@ function orderProductions(orderNumber: string): Production[] {
                   @click.stop="requestReopen(entry.summary.orderNumber)"
                 ><RotateCcw aria-hidden="true" />返工重开</Button>
                 <Button
-                  v-else-if="finishLabel(entry.summary.orderNumber)"
+                  v-else-if="!orderIsArchived(entry.summary.orderNumber) && finishLabel(entry.summary.orderNumber)"
                   variant="outline"
                   size="xs"
                   class="finishBtn"
                   type="button"
-                  :disabled="workflowBusy"
+                  :disabled="workflowBusy || finishingOrder === entry.summary.orderNumber"
+                  :aria-busy="finishingOrder === entry.summary.orderNumber"
                   @click.stop="requestFinish(entry.summary.orderNumber)"
-                ><Check aria-hidden="true" />{{ finishLabel(entry.summary.orderNumber) }}</Button>
+                >
+                  <LoaderCircle v-if="finishingOrder === entry.summary.orderNumber" class="motion-safe:animate-spin" aria-hidden="true" />
+                  <Check v-else aria-hidden="true" />
+                  {{ finishingOrder === entry.summary.orderNumber ? '正在标记完成…' : finishLabel(entry.summary.orderNumber) }}
+                </Button>
                 <button
                   v-if="canDelete"
                   class="itemDel"
@@ -1351,6 +1514,7 @@ function orderProductions(orderNumber: string): Production[] {
         <div v-if="!visibleEntries.length && searchTerm" class="empty">没有找到匹配的订单。</div>
         <div v-else-if="!visibleEntries.length" class="empty">
           <template v-if="orderFilter === 'completed'">本机暂无已完成订单。</template>
+          <template v-else-if="orderFilter === 'archived'">暂无已归档订单。</template>
           <template v-else-if="orderFilter === 'all'">本机暂无订单。</template>
           <template v-else>
             暂无待制作订单。<br />{{ store.workflow.role === 'production' ? '同步后会显示已接收的订单。' : '在千帆客服里右键买家图片 → 进入排单。' }}
@@ -1380,6 +1544,43 @@ function orderProductions(orderNumber: string): Production[] {
     </section>
 
     <TemplateSaveDialog ref="templateSaveDialog" />
+    <dialog ref="assignmentDialog" class="shopAssignment" aria-labelledby="shop-assignment-title"
+      @cancel="(event) => { if (assigningShop) event.preventDefault() }">
+      <form @submit.prevent="confirmAssignment">
+        <h2 id="shop-assignment-title" class="font-semibold">分配 {{ assignmentNumbers.length }} 笔订单</h2>
+        <label class="grid gap-2">订单所属店铺
+          <select v-model="assignmentShop" class="h-9 rounded-md border bg-background px-2" required :disabled="assigningShop">
+            <option value="" disabled>选择店铺</option>
+            <option v-for="shop in assignmentShops" :key="shop.id" :value="shop.id">{{ shop.name }}</option>
+          </select>
+        </label>
+        <p v-if="assignmentError" role="alert" class="text-destructive">{{ assignmentError }}</p>
+        <div class="flex justify-end gap-2">
+          <Button type="button" variant="outline" :disabled="assigningShop" @click="assignmentDialog?.close()">取消</Button>
+          <Button type="submit" :disabled="assigningShop || !assignmentShop">{{ assigningShop ? '正在分配…' : '确认分配' }}</Button>
+        </div>
+      </form>
+    </dialog>
+    <dialog ref="archiveDialog" class="shopAssignment" aria-labelledby="shop-archive-title"
+      @cancel="(event) => { if (archiving) event.preventDefault() }">
+      <form @submit.prevent="confirmArchive">
+        <h2 id="shop-archive-title" class="font-semibold">归档 {{ archiveShopName }} 的已完成订单</h2>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="grid gap-1 text-sm">起始日期
+            <Input v-model="archiveFrom" type="date" :max="archiveThrough || undefined" :disabled="archiving" />
+          </label>
+          <label class="grid gap-1 text-sm">截止日期
+            <Input v-model="archiveThrough" type="date" :min="archiveFrom || undefined" :disabled="archiving" />
+          </label>
+        </div>
+        <p class="text-sm">共 {{ archiveNumbers.length }} 笔。按下单日期筛选，缺少下单时间时使用入库日期。日期留空表示不限。</p>
+        <p v-if="archiveError" role="alert" class="text-destructive">{{ archiveError }}</p>
+        <div class="flex justify-end gap-2">
+          <Button type="button" variant="outline" :disabled="archiving" @click="archiveDialog?.close()">取消</Button>
+          <Button type="submit" :disabled="archiving || !archiveNumbers.length">{{ archiving ? '正在归档…' : '确认归档' }}</Button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- 订单悬浮详情卡 -->
     <div
@@ -1387,7 +1588,7 @@ function orderProductions(orderNumber: string): Production[] {
       class="hoverCard"
       :style="{ left: hoverPos.x + 'px', top: hoverPos.y + 'px' }"
     >
-      <div class="hcTitle">{{ hoveredEntry.summary.orderNumber }}</div>
+      <div class="hcTitle">{{ orderDisplay(hoveredEntry.summary.orderNumber) }}</div>
       <template v-if="hoveredMeta">
         <div class="hcRow" v-if="hoveredMeta.status">
           <span class="hcLabel">状态</span>{{ hoveredMeta.status }}
@@ -1523,6 +1724,22 @@ function orderProductions(orderNumber: string): Production[] {
   color: var(--text-dim);
   font-size: 12px;
 }
+.shopAssignment {
+  margin: auto;
+  width: min(26rem, calc(100% - 2rem));
+  padding: 1.25rem;
+  border-radius: 12px;
+  background: var(--color-background);
+  color: var(--color-foreground);
+  box-shadow: 0 20px 60px #17263a33;
+}
+.shopAssignment::backdrop {
+  background: #17263a66;
+}
+.shopAssignment form {
+  display: grid;
+  gap: 1rem;
+}
 .items {
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -1642,6 +1859,26 @@ function orderProductions(orderNumber: string): Production[] {
   font-size: 11px;
   color: #14704f;
   white-space: nowrap;
+}
+.uploadBadge {
+  border-radius: 5px;
+  background: #edf1f7;
+  color: #52647d;
+  padding: 1px 5px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.uploadBadge[data-state='uploaded'] {
+  background: #eaf7ef;
+  color: #14704f;
+}
+.uploadBadge[data-state='pending'] {
+  background: #fff4e5;
+  color: #9a5700;
+}
+.uploadBadge[data-state='failed'] {
+  background: #fef0f0;
+  color: #a8373b;
 }
 .claimTag {
   display: inline-flex;

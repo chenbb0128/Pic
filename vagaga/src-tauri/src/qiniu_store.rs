@@ -150,10 +150,7 @@ pub(crate) fn register_capture(
     let (state, error) = match quality {
         CaptureQuality::Original => ("pending", None),
         CaptureQuality::Scaled => ("localOnly", Some("千帆仅返回缩略图，请重新获取原图后排单")),
-        CaptureQuality::Unknown => (
-            "localOnly",
-            Some("无法确认图片来源，请在千帆打开原图后重新排单"),
-        ),
+        CaptureQuality::Unknown => ("localOnly", None),
     };
     tx.execute(
         "INSERT INTO qiniu_assets (id,order_number,kind,quality,state,error)

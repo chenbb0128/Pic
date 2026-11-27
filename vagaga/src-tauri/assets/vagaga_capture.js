@@ -14,7 +14,7 @@
       && !location.pathname.startsWith('/cstools/login')
   }
   if (!onWorkbench()) return
-  var VER = 'v16'
+  var VER = 'v18'
   // 已打开的旧版页面需刷新。旧脚本没有注销入口，重复注入会同时触发两套菜单。
   if (window.__QF_CORE__ === true) return
   window.__QF_CORE__ = true
@@ -31,25 +31,26 @@
 
   let nextCatalogRequest = 0
   const catalogRequests = new Map()
-  window.__qfReceiveTemplateCatalog = (requestId, templates) => {
-    catalogRequests.get(requestId)?.(Array.isArray(templates) ? templates : TEMPLATES)
+  window.__qfReceiveTemplateCatalog = (requestId, templates, shops = []) => {
+    catalogRequests.get(requestId)?.({ templates: Array.isArray(templates) ? templates : TEMPLATES, shops })
   }
 
   function requestTemplateCatalog() {
-    if (typeof window.qianfanBridge !== 'function') return Promise.resolve(TEMPLATES)
+    if (typeof window.qianfanBridge !== 'function') return Promise.resolve({ templates: TEMPLATES, shops: [] })
     const requestId = ++nextCatalogRequest
     return new Promise(resolve => {
-      const timeout = setTimeout(() => complete(TEMPLATES), 1000)
-      const complete = (templates) => {
+      const fallback = { templates: TEMPLATES, shops: null }
+      const timeout = setTimeout(() => complete(fallback), 1000)
+      const complete = (catalog) => {
         clearTimeout(timeout)
         catalogRequests.delete(requestId)
-        resolve(templates)
+        resolve(catalog)
       }
       catalogRequests.set(requestId, complete)
       try {
         send({ type: 'paidan.listTemplates', requestId })
       } catch (_) {
-        complete(TEMPLATES)
+        complete(fallback)
       }
     })
   }
@@ -185,18 +186,18 @@
       if (menu) {
         clearInterval(pollTimer)
         pollTimer = null
-        void catalog.then(templates => {
+        void catalog.then(configuration => {
           if (token !== pollToken || findVisiblePlatformMenu(x, y) !== menu) return
-          embedSection(menu, img, templates)
+          embedSection(menu, img, configuration)
         })
         return
       }
       if (tries >= 100) {
         clearInterval(pollTimer)
         pollTimer = null
-        void catalog.then(templates => {
+        void catalog.then(configuration => {
           if (token !== pollToken) return
-          openStandalone(img, x, y, templates)
+          openStandalone(img, x, y, configuration)
           log('平台菜单未出现，降级独立面板')
         })
       }
@@ -229,11 +230,11 @@
   }
 
   /* ---------- 嵌入 + 溢出校正 ---------- */
-  function embedSection(container, img, templates) {
+  function embedSection(container, img, configuration) {
     try {
       const existing = container.querySelector('#' + SECTION_ID)
       if (existing) existing.remove()
-      const section = buildSection(img, false, templates, () => hidePlatformMenu(container))
+      const section = buildSection(img, false, configuration, () => hidePlatformMenu(container))
       // 平台菜单容器加宽到区块宽度（原宽度装不下排单区块）
       container.style.width = '392px'
       container.style.boxSizing = 'border-box'
@@ -258,7 +259,7 @@
       log('排单区块已嵌入平台菜单')
     } catch (err) {
       log('嵌入失败，降级独立面板', err)
-      openStandalone(img, 120, 120, templates)
+      openStandalone(img, 120, 120, configuration)
     }
   }
 
@@ -268,13 +269,13 @@
     if (p) p.remove()
   }
 
-  function openStandalone(img, x, y, templates) {
+  function openStandalone(img, x, y, configuration) {
     hideStandalone()
     const host = document.createElement('div')
     host.id = PANEL_ID
     host.style.cssText = 'position:fixed;z-index:2147483647;left:0;top:0;'
     const shadow = host.attachShadow({ mode: 'open' })
-    const section = buildSection(img, true, templates, hideStandalone)
+    const section = buildSection(img, true, configuration, hideStandalone)
     shadow.appendChild(section)
     document.body.appendChild(host)
     requestAnimationFrame(() => {
@@ -299,7 +300,7 @@
   /* ---------- 排单区块构建（dark=独立面板配色） ----------
      结构：头部（订单号和备注编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
      嵌入模式：区块透明融入平台菜单容器，行风格与平台菜单项一致 */
-  function buildSection(img, dark, templates, dismiss) {
+  function buildSection(img, dark, { templates, shops }, dismiss) {
     const section = document.createElement('div')
     section.id = SECTION_ID
     section.style.cssText =
@@ -342,6 +343,34 @@
     ordInput.style.cssText += 'flex:1;min-width:0;box-sizing:border-box;'
     head.appendChild(ordInput)
     section.appendChild(head)
+
+    let shopSelect
+    if (shops?.length) {
+      const shopRow = document.createElement('label')
+      shopRow.style.cssText = head.style.cssText
+      const shopLabel = document.createElement('span')
+      shopLabel.textContent = '店铺'
+      shopLabel.style.cssText = ordLabel.style.cssText
+      shopSelect = document.createElement('select')
+      shopSelect.style.cssText = 'flex:1;min-width:0;padding:4px 8px;border-radius:7px;'
+      shopSelect.required = true
+      const placeholder = document.createElement('option')
+      placeholder.value = ''
+      placeholder.textContent = '请选择订单所属店铺'
+      shopSelect.appendChild(placeholder)
+      for (const shop of shops.filter(item => item.active)) {
+        const option = document.createElement('option')
+        option.value = shop.id
+        option.textContent = shop.name
+        shopSelect.appendChild(option)
+      }
+      shopSelect.value = ''
+      shopRow.appendChild(shopLabel)
+      shopRow.appendChild(shopSelect)
+      shopRow.addEventListener('click', ev => ev.stopPropagation())
+      shopSelect.addEventListener('keydown', ev => ev.stopPropagation())
+      section.appendChild(shopRow)
+    }
 
     const layoutRow = document.createElement('label')
     layoutRow.style.cssText = head.style.cssText
@@ -494,6 +523,14 @@
     confirmBtn.addEventListener('click', ev => {
       ev.stopPropagation()
       if (selected.size === 0) return
+      if (shops === null) {
+        toast('读取店铺失败，请重新打开排单菜单。', 'error')
+        return
+      }
+      if (shopSelect && !shopSelect.value) {
+        shopSelect.reportValidity()
+        return
+      }
       const orderNumber = ordInput.value.trim()
       const order = panelOrders.find(o => o.orderNumber === orderNumber)
       const layoutNumber = normalizeLayoutNumber(layoutInput.value.trim())
@@ -505,7 +542,7 @@
       // 订单规格决定初始勾选，入库使用最终选择。
       const picked = Array.from(selected, ([id, qty]) => ({ id, qty }))
       dismiss()
-      capture(img, orderNumber, picked, { ...order, layoutNumber })
+      capture(img, orderNumber, picked, { ...order, layoutNumber, shopId: shopSelect?.value })
     })
 
     // 初始：按第一个订单的规格预选
@@ -573,11 +610,11 @@
         if (original && original !== src) {
           try {
             ;({ bytes, mime, b64 } = await fetchAsB64(original))
-            if (b64) sourceQuality = 'original'
           } catch (_) {
-            scaled = true // 原图拉取失败，退回气泡缩图并明确标记
-            sourceQuality = 'scaled'
+            // 原图拉取失败时退回气泡缩图。
           }
+          scaled = !b64
+          sourceQuality = scaled ? 'scaled' : 'original'
         }
         if (!b64) {
           ;({ bytes, mime, b64 } = await fetchAsB64(src))
@@ -597,6 +634,7 @@
         context: {
           title: document.title,
           orderNo: orderNumber,
+          shopId: meta?.shopId || '',
           status: meta?.status || '',
           amount: meta?.amount || '',
           orderedAt: meta?.orderedAt || '',
@@ -610,7 +648,7 @@
       toast(
         scaled
           ? '已提交排单（原图拉取失败，本次为缩图 ' + (bytes / 1024).toFixed(0) + 'KB）'
-          : '已提交排单：' + (sourceQuality === 'original' ? '原图 ' : '来源未确认的图片 ') + (bytes / 1024).toFixed(0) + 'KB，' + templates.length + ' 个模板',
+          : '已提交排单：' + (sourceQuality === 'original' ? '原图 ' : '图片 ') + (bytes / 1024).toFixed(0) + 'KB，' + templates.length + ' 个模板',
       )
     } catch (err) {
       send({ type: 'paidan.error', error: String(err), ts: Date.now() })

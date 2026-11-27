@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { ArrowRight, GitCompareArrows, X } from '@lucide/vue'
 import { Button } from './ui/button'
 import { workflowFinish, workflowReopen, workflowSync, workflowUpload } from '../lib/tauri'
-import { loadInfo, loadOrders, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
+import { loadInfo, loadOrders, orderDisplay, refreshShops, refreshWorkflowOrders, toast, useOrdersStore } from '../stores/orders'
 import type { WorkflowPreview } from '../types'
 
 const props = defineProps<{
@@ -68,16 +68,21 @@ async function sync() {
   await run('sync', async () => {
     const result = await workflowSync(props.activeOrder)
     showConflicts(result.conflicts)
-    await Promise.all([refresh(), loadInfo().catch(error => toast('error', '刷新模板目录失败：' + error))])
+    await Promise.all([
+      refresh(),
+      loadInfo().catch(error => toast('error', '刷新模板目录失败：' + error)),
+      result.shopsChanged ? refreshShops().catch(error => toast('error', '刷新店铺列表失败：' + error)) : Promise.resolve(),
+    ])
     reportErrors(result.errors)
     const claimsChanged = result.claimsChanged ?? 0
     const templatesUpdated = result.templatesUpdated ?? 0
-    if (!result.errors.length || result.updated || result.completed || claimsChanged || templatesUpdated) {
+    if (!result.errors.length || result.updated || result.completed || claimsChanged || templatesUpdated || result.shopsChanged) {
       const parts: string[] = []
       if (result.updated) parts.push(`更新 ${result.updated} 个订单`)
       if (result.completed) parts.push(`完成 ${result.completed} 单`)
       if (claimsChanged) parts.push(`同步 ${claimsChanged} 条领单状态`)
       if (templatesUpdated) parts.push(`更新 ${templatesUpdated} 个模板`)
+      if (result.shopsChanged) parts.push('更新店铺列表')
       toast('ok', parts.length
         ? `同步成功：${parts.join('，')}。`
         : result.conflicts.length ? '有订单需要确认。' : '没有新数据。')
@@ -112,18 +117,18 @@ async function finish(orderNumber: string) {
   await run('finish', async () => {
     const result = await workflowFinish(orderNumber)
     showConflicts(result.conflicts)
+    reportErrors(result.errors)
     await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
+    if (result.errors.length || result.conflicts.length) return
     const order = store.workflowOrders[orderNumber]
-    if (result.errors.length) {
-      reportErrors(result.errors)
-    } else if (result.conflicts.length) {
-      return
-    } else if (order?.pendingOperation === 'finish' || (order?.localCompleted && order.sharedState === 'pending')) {
+    if (order?.pendingOperation === 'finish' || (order?.localCompleted && order.sharedState === 'pending')) {
       toast('ok', '已标记完成，等待交付。')
     } else if (order?.sharedState === 'completed') {
       toast('ok', '共享交付已完成。')
     } else if (order?.localCompleted) {
       toast('ok', '已标记完成。')
+    } else if (result.completed > 0) {
+      toast('ok', '该订单已完成。')
     }
   })
 }
@@ -132,7 +137,7 @@ async function reopen(orderNumber: string) {
   await run('reopen', async () => {
     await workflowReopen(orderNumber)
     await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
-    toast('ok', `订单 ${orderNumber} 已返工重开为待制作。`)
+    toast('ok', `订单 ${orderDisplay(orderNumber)} 已返工重开为待制作。`)
   })
 }
 
@@ -149,11 +154,11 @@ defineExpose({ upload, sync, finish, reopen, operation })
       <p class="hint">请查看本机与共享订单的差异，再选择如何处理。</p>
       <div v-if="!preview" class="rowList" aria-label="等待确认的订单">
         <Button v-for="row in conflicts" :key="row.reference" variant="outline" class="justify-between" type="button" :disabled="!!operation" @click="showPreview(row)">
-          <span>{{ row.orderNumber }}</span><span class="flex items-center gap-1.5 text-primary">查看差异 <ArrowRight class="size-3.5" aria-hidden="true" /></span>
+          <span>{{ orderDisplay(row.orderNumber) }}</span><span class="flex items-center gap-1.5 text-primary">查看差异 <ArrowRight class="size-3.5" aria-hidden="true" /></span>
         </Button>
       </div>
       <section v-else class="previewDetails" aria-label="订单差异">
-        <h3>{{ preview.orderNumber }}</h3>
+        <h3>{{ orderDisplay(preview.orderNumber) }}</h3>
         <ul><li v-for="change in preview.changes" :key="change">{{ change }}</li></ul>
         <p v-if="preview.localVersion" class="hint">使用共享内容会在本机保留一份原订单及已保存的成品。</p>
         <p v-if="activePreview" class="hint">同步成功后会关闭当前画布。需要保留画布上的调整时，请先导出成品。</p>

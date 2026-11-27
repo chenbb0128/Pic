@@ -272,6 +272,10 @@ fn sanitize_order_number(number: &str) -> String {
 }
 
 impl Store {
+    pub(crate) fn data_root(&self) -> &Path {
+        &self.data_root
+    }
+
     pub fn open(data_root: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::open_with_qiniu(data_root, false)
     }

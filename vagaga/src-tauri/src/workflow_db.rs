@@ -32,6 +32,9 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
              order_number TEXT PRIMARY KEY,
              payload TEXT NOT NULL
          );
+         CREATE TABLE IF NOT EXISTS workflow_local_archives (
+             order_number TEXT PRIMARY KEY
+         );
          CREATE TABLE IF NOT EXISTS workflow_tasks (
              order_number TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL,
              expected INTEGER NOT NULL, generation INTEGER NOT NULL,
@@ -48,6 +51,7 @@ pub(crate) fn init(conn: &Connection) -> rusqlite::Result<()> {
              DELETE FROM workflow_orders WHERE order_number = OLD.order_number;
              DELETE FROM workflow_synced_snapshots WHERE order_number = OLD.order_number;
              DELETE FROM workflow_tasks WHERE order_number = OLD.order_number;
+             DELETE FROM workflow_local_archives WHERE order_number = OLD.order_number;
          END;",
     )?;
     // Existing installations have the original numeric revision schema. Keep the
@@ -379,6 +383,8 @@ pub(crate) struct OrderRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) claimed_at: Option<i64>,
     pub(crate) claimed_by_me: bool,
+    pub(crate) remote_operation_id: Option<String>,
+    pub(crate) local_archived: bool,
 }
 
 pub(crate) fn list(store: &Store) -> rusqlite::Result<Vec<OrderRow>> {
@@ -387,8 +393,9 @@ pub(crate) fn list(store: &Store) -> rusqlite::Result<Vec<OrderRow>> {
     let conn = store.conn.lock().unwrap();
     let mut query = conn.prepare(
         "SELECT o.order_number, COALESCE(s.local_completed,0), s.shared_state, t.kind, t.error,
-                s.claimed_by, s.claimed_name, s.claimed_at
+                s.claimed_by, s.claimed_name, s.claimed_at, s.remote_operation_id, a.order_number IS NOT NULL
          FROM orders o LEFT JOIN workflow_orders s USING(order_number)
+         LEFT JOIN workflow_local_archives a ON a.order_number=o.order_number
          LEFT JOIN workflow_tasks t ON t.order_number=o.order_number AND t.kind=(
              SELECT kind FROM workflow_tasks WHERE order_number=o.order_number AND kind IN ('publish','finish')
              ORDER BY CASE kind WHEN 'finish' THEN 1 WHEN 'publish' THEN 2 ELSE 3 END LIMIT 1
@@ -420,9 +427,28 @@ pub(crate) fn list(store: &Store) -> rusqlite::Result<Vec<OrderRow>> {
             claimed_name,
             claimed_at,
             claimed_by_me,
+            remote_operation_id: r.get(8)?,
+            local_archived: r.get(9)?,
         })
     })?;
     rows.collect()
+}
+
+pub(crate) fn archive_local(store: &Store, numbers: &[String], archived: bool) -> rusqlite::Result<()> {
+    if numbers.is_empty() {
+        return Ok(());
+    }
+    let mut conn = store.conn.lock().unwrap();
+    let tx = conn.transaction()?;
+    let sql = if archived {
+        "INSERT OR IGNORE INTO workflow_local_archives(order_number) VALUES (?1)"
+    } else {
+        "DELETE FROM workflow_local_archives WHERE order_number=?1"
+    };
+    for number in numbers {
+        tx.execute(sql, [number])?;
+    }
+    tx.commit()
 }
 
 pub(crate) fn complete_local(store: &Store, number: &str) -> rusqlite::Result<()> {
@@ -566,6 +592,7 @@ pub(crate) fn reopen_local(
 ) -> rusqlite::Result<()> {
     let mut conn = store.conn.lock().unwrap();
     let tx = conn.transaction()?;
+    tx.execute("DELETE FROM workflow_local_archives WHERE order_number=?1", [number])?;
     let generation: i64 = tx
         .query_row(
             "SELECT COALESCE(generation, 0) FROM workflow_changes WHERE order_number=?1",

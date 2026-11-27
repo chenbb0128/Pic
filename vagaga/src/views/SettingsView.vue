@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { ArrowLeft, ClipboardList, Cloud, Database, FlaskConical, FolderNetwork, HardDrive, Layers, Package, Scissors, Server, Settings2, User, Workflow } from '@lucide/vue'
+import { ArrowLeft, ClipboardList, Cloud, Database, FlaskConical, FolderNetwork, HardDrive, Layers, Package, Scissors, Server, Settings2, Store, User, Workflow } from '@lucide/vue'
 import mysqlIcon from '../assets/mysql.svg'
 import OptionSelect from '../components/OptionSelect.vue'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Label } from '../components/ui/label'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
-import { useOrdersStore, toast, loadInfo, loadOrders, refreshQiniuStatus, refreshWorkflowSettings } from '../stores/orders'
+import { useOrdersStore, toast, loadInfo, loadOrders, refreshQiniuStatus, refreshShops, refreshWorkflowSettings, updateShopCatalog } from '../stores/orders'
 import {
   cloudSyncNow,
   cloudTest,
@@ -23,12 +23,13 @@ import {
   saveCutoutConfig,
   saveMysqlConfig,
   saveQiniuSettings,
+  saveShop,
   testQiniuSettings,
   workflowSetAutoSync,
   workflowSetDeviceName,
   workflowSetRole,
 } from '../lib/tauri'
-import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, SmbConfig, StorageProvider, WebDavConfig, WorkflowRole } from '../types'
+import type { CloudConfig, CloudProvider, CutoutConfig, MysqlConfig, QiniuDevice, QiniuSettings, Shop, SmbConfig, StorageProvider, WebDavConfig, WorkflowRole } from '../types'
 
 defineEmits<{ back: [] }>()
 
@@ -43,6 +44,31 @@ const autoSync = ref(store.workflow.autoSync ?? true)
 const pollSeconds = ref(store.workflow.pollSeconds ?? defaultPollSeconds)
 const deviceBusy = ref(false)
 const deviceMessage = ref('')
+const shopDraft = ref<Shop | null>(null)
+const shopBusy = ref(false)
+const shopError = ref('')
+
+function editShop(shop?: Shop) {
+  shopError.value = ''
+  shopDraft.value = shop ? { ...shop } : { id: '', name: '', active: true }
+}
+
+async function submitShop() {
+  const shop = shopDraft.value
+  if (!shop || shopBusy.value) return
+  shopBusy.value = true
+  shopError.value = ''
+  try {
+    const catalog = await saveShop(shop.id || null, shop.name, shop.active)
+    updateShopCatalog(catalog)
+    shopDraft.value = null
+    toast('ok', '店铺已保存。')
+  } catch (error) {
+    shopError.value = String(error)
+  } finally {
+    shopBusy.value = false
+  }
+}
 const roles = [
   { id: 'customer', label: '排单', detail: '接收千帆订单并上传', icon: ClipboardList },
   { id: 'production', label: '制作', detail: '同步共享订单并制作', icon: Layers },
@@ -187,6 +213,7 @@ const cutBusy = ref(false)
 
 const sections = [
   { key: 'basics', label: '基础信息', icon: Settings2 },
+  { key: 'shops', label: '店铺管理', icon: Store },
   { key: 'database', label: '共享数据库', icon: Database },
   { key: 'storage', label: '共享存储', icon: Cloud },
   { key: 'cutout', label: 'AI 抠图', icon: Scissors },
@@ -196,6 +223,7 @@ const sectionsEl = ref<HTMLElement | null>(null)
 
 function goto(key: string) {
   activeSection.value = key
+  if (key === 'shops') void refreshShops().catch(error => { shopError.value = String(error) })
   sectionsEl.value?.scrollTo({ top: 0 })
 }
 
@@ -277,7 +305,7 @@ function saveQiniu() {
     const saved = await saveQiniuSettings({ enabled: true, pollSeconds: previous.pollSeconds, apiUrl, token })
     qiniuSaved.value = saved
     qiniuForm.value = { apiUrl: saved.apiUrl, token: '' }
-    await refreshWorkflowSettings()
+    await Promise.all([refreshWorkflowSettings(), refreshShops()])
     qiniuMsg.value = '已保存，上传和同步将使用七牛 Kodo。'
   })
 }
@@ -311,6 +339,7 @@ async function saveMysql() {
   try {
     await saveMysqlConfig(config)
     mysqlSaved.value = config
+    await refreshShops()
     mysqlMessage.value = 'MySQL 配置已保存。'
   } catch (error) {
     mysqlMessage.value = String(error)
@@ -339,7 +368,7 @@ async function syncMysql() {
     const result = await mysqlSyncNow(props.activeOrder)
     const conflicts = result.conflicts.length ? '有本机修改的订单，请在订单页点击「同步」查看。' : ''
     mysqlMessage.value = [result.errors[0] || '同步完成。', conflicts].filter(Boolean).join(' ')
-    await Promise.all([loadOrders(), loadInfo()])
+    await Promise.all([loadOrders(), loadInfo(), refreshShops()])
   } catch (error) {
     mysqlMessage.value = String(error)
   } finally {
@@ -385,7 +414,7 @@ function saveCloud() {
   return runCloudAction(provider, async () => {
     await saveCloudConfig(config)
     cloudSaved.value = config
-    await refreshWorkflowSettings()
+    await Promise.all([refreshWorkflowSettings(), refreshShops()])
     setCloudMsg(provider, `已保存，上传和同步将使用 ${storageNames[provider]}。`)
   })
 }
@@ -506,6 +535,35 @@ async function openCutoutLogs() {
               <span class="label">注入器</span>
               <span class="value">每 3 秒扫描工作台页面，自动接入新开账号 tab</span>
             </div>
+          </div>
+
+          <div v-show="activeSection === 'shops'" class="card">
+            <div class="flex items-center justify-between gap-3">
+              <h3>店铺管理</h3>
+              <Button v-if="store.workflow.role !== 'production'" type="button" :disabled="shopBusy" @click="editShop()">新增店铺</Button>
+            </div>
+            <p v-if="!store.shopCatalog.shops.length" class="hint">暂无店铺。请在排单端添加，其他设备同步后可见。</p>
+            <div v-for="shop in store.shopCatalog.shops" :key="shop.id" class="flex items-center gap-3 rounded-md border px-3 py-2">
+              <span class="min-w-0 flex-1 break-all font-medium">{{ shop.name }}</span>
+              <span class="hint">{{ shop.active ? '启用中' : '已停用' }}</span>
+              <Button v-if="store.workflow.role !== 'production'" type="button" variant="outline" size="sm" :disabled="shopBusy"
+                :aria-label="'编辑店铺 ' + shop.name" @click="editShop(shop)">编辑</Button>
+            </div>
+            <form v-if="shopDraft" class="grid gap-3 rounded-md border p-3" @submit.prevent="submitShop">
+              <label class="row">
+                <span class="label">店铺名称</span>
+                <Input v-model.trim="shopDraft.name" class="w-full max-w-64" maxlength="60" required :disabled="shopBusy" />
+              </label>
+              <label class="inline-flex items-center gap-2 text-[13px]">
+                <input v-model="shopDraft.active" type="checkbox" :disabled="shopBusy" />
+                允许此店铺录入新订单
+              </label>
+              <div class="flex justify-end gap-2">
+                <Button type="button" variant="outline" :disabled="shopBusy" @click="shopDraft = null; shopError = ''">取消</Button>
+                <Button type="submit" :disabled="shopBusy || !shopDraft.name">{{ shopBusy ? '正在保存…' : '保存店铺' }}</Button>
+              </div>
+            </form>
+            <p v-if="shopError" role="alert" class="text-destructive">{{ shopError }}</p>
           </div>
 
           <div v-show="activeSection === 'database'" class="card">

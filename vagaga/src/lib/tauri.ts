@@ -20,11 +20,28 @@ import type {
   QiniuSettings,
   QiniuSettingsInput,
   QiniuStatus,
+  ShopCatalog,
   WorkflowOrder,
   WorkflowResult,
   WorkflowRole,
   WorkflowSettings,
 } from '../types'
+
+export function listShops(): Promise<ShopCatalog> {
+  return invoke('list_shops')
+}
+
+export function saveShop(id: string | null, name: string, active: boolean): Promise<ShopCatalog> {
+  return invoke('save_shop', { id, name, active })
+}
+
+export function assignLegacyShops(numbers: string[], shopId: string): Promise<ShopCatalog> {
+  return invoke('assign_legacy_shops', { numbers, shopId })
+}
+
+export function setShopOrdersArchived(shopId: string, numbers: string[], archived: boolean): Promise<ShopCatalog> {
+  return invoke('set_shop_orders_archived', { shopId, numbers, archived })
+}
 
 export function listOrders(): Promise<OrderSummary[]> {
   return invoke('list_orders')
@@ -191,6 +208,10 @@ export function onFailed(handler: (event: PaidanEvent) => void): Promise<() => v
 
 export function workflowSettings(): Promise<WorkflowSettings> {
   return invoke('workflow_settings')
+}
+
+export function markQuickStartSeen(): Promise<void> {
+  return invoke('workflow_mark_quick_start_seen')
 }
 
 export function workflowSetRole(role: WorkflowRole): Promise<WorkflowSettings> {

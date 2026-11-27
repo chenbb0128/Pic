@@ -1222,6 +1222,12 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn receive(listener: &TcpListener, expected: &str) -> (TcpStream, LocalRequest) {
+        let (socket, line, request) = receive_request(listener);
+        assert_eq!(line, format!("{expected} HTTP/1.1"));
+        (socket, request)
+    }
+
+    pub(crate) fn receive_request(listener: &TcpListener) -> (TcpStream, String, LocalRequest) {
         let (socket, _) = listener.accept().unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(5)))
@@ -1229,7 +1235,7 @@ pub(crate) mod tests {
         let mut reader = BufReader::new(socket);
         let mut line = String::new();
         reader.read_line(&mut line).unwrap();
-        assert_eq!(line.trim_end(), format!("{expected} HTTP/1.1"));
+        let request_line = line.trim_end().to_owned();
         let mut headers = HashMap::new();
         loop {
             line.clear();
@@ -1245,7 +1251,7 @@ pub(crate) mod tests {
             .map_or(0, |value| value.parse().unwrap());
         let mut body = vec![0; length];
         reader.read_exact(&mut body).unwrap();
-        (reader.into_inner(), LocalRequest { headers, body })
+        (reader.into_inner(), request_line, LocalRequest { headers, body })
     }
 
     pub(crate) fn reply(mut socket: TcpStream, status: u16, headers: &[(&str, &str)], body: &[u8]) {

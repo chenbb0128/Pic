@@ -135,7 +135,7 @@ fn suggested_filename(order_number: &str, original_name: &str, extension: Option
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or_default();
-    let order = safe_name_part(order_number, "订单");
+    let order = safe_name_part(crate::shops::platform_number(order_number), "订单");
     let name = safe_name_part(original_stem, "原图");
     match extension {
         Some(extension) => format!("{order}_{name}.{extension}"),

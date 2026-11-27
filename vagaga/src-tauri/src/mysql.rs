@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use mysql_async::prelude::*;
 use mysql_async::{Conn, OptsBuilder, Pool};
+use crate::shops::{self, Catalog, Shop};
 
 /* ---------- 配置（数据根/mysql.json） ---------- */
 
@@ -47,6 +48,7 @@ pub fn config_path(data_root: &Path) -> PathBuf {
 pub fn load_config(data_root: &Path) -> MysqlConfig {
     match std::fs::read_to_string(config_path(data_root)) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
+        #[cfg(not(test))]
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             serde_json::from_str(include_str!(concat!(env!("OUT_DIR"), "/mysql-defaults.json")))
                 .unwrap_or_default()
@@ -325,6 +327,35 @@ impl MyClient {
         ensure_column(&mut conn, "orders", "claimed_name VARCHAR(128) NULL").await?;
         ensure_column(&mut conn, "orders", "claimed_at BIGINT NULL").await?;
         ensure_index(&mut conn, "CREATE INDEX idx_orders_change_seq ON orders (change_seq)").await?;
+        conn.query_drop(
+            "CREATE TABLE IF NOT EXISTS vagaga_shops (
+                storage_id VARBINARY(1024) NOT NULL,
+                id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                name VARCHAR(60) NOT NULL, active BOOLEAN NOT NULL,
+                PRIMARY KEY (storage_id, id),
+                UNIQUE KEY shop_name (storage_id, name)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        ).await.map_err(mysql_error)?;
+        conn.query_drop(
+            "CREATE TABLE IF NOT EXISTS vagaga_shop_orders (
+                storage_id VARBINARY(1024) NOT NULL,
+                shop_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                platform_number VARBINARY(256) NOT NULL,
+                order_key VARBINARY(256) NOT NULL,
+                legacy BOOLEAN NOT NULL,
+                PRIMARY KEY (storage_id, shop_id, platform_number),
+                UNIQUE KEY shop_order_key (storage_id, order_key),
+                KEY legacy_orders (storage_id, legacy)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        ).await.map_err(mysql_error)?;
+        conn.query_drop(
+            "CREATE TABLE IF NOT EXISTS vagaga_order_archives (
+                storage_id VARBINARY(1024) NOT NULL,
+                order_key VARBINARY(256) NOT NULL,
+                operation_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+                PRIMARY KEY (storage_id, order_key)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4",
+        ).await.map_err(mysql_error)?;
 
         // Backfill legacy rows with change_seq = 0 so incremental cursors never miss pre-existing orders.
         let legacy: Vec<(Vec<u8>, Vec<u8>)> = conn
@@ -348,6 +379,102 @@ type OrderRowTuple = (String, String, String, bool, u64, Option<String>, Option<
 const ORDER_SELECT_COLUMNS: &str = "order_number, operation_id, payload, completed, change_seq, claimed_by, claimed_name, claimed_at";
 
 impl OrderIndex {
+    pub(crate) async fn shop_catalog(&mut self, storage: &str) -> Result<Catalog, String> {
+        let shops = self.0.exec_map(
+            "SELECT id,name,active FROM vagaga_shops WHERE storage_id=? ORDER BY name,id",
+            (storage,),
+            |(id, name, active)| Shop { id, name, active },
+        ).await.map_err(mysql_error)?;
+        let assignments: Vec<(String, String)> = self.0.exec(
+            "SELECT order_key,shop_id FROM vagaga_shop_orders WHERE storage_id=? AND legacy=TRUE",
+            (storage,),
+        ).await.map_err(mysql_error)?;
+        let archives: Vec<(String, String)> = self.0.exec(
+            "SELECT order_key,operation_id FROM vagaga_order_archives WHERE storage_id=?",
+            (storage,),
+        ).await.map_err(mysql_error)?;
+        Ok(Catalog {
+            shops,
+            legacy_assignments: assignments.into_iter().collect(),
+            shared_archives: archives.into_iter().collect(),
+        })
+    }
+
+    pub(crate) async fn save_shop(&mut self, storage: &str, shop: &Shop, create: bool) -> Result<(), String> {
+        let result = if create {
+            self.0.exec_drop(
+                "INSERT INTO vagaga_shops(storage_id,id,name,active) VALUES(?,?,?,?)",
+                (storage, &shop.id, &shop.name, shop.active),
+            ).await
+        } else {
+            self.0.exec_drop(
+                "UPDATE vagaga_shops SET name=?,active=? WHERE storage_id=? AND id=?",
+                (&shop.name, shop.active, storage, &shop.id),
+            ).await
+        };
+        match result {
+            Err(mysql_async::Error::Server(error)) if error.code == 1062 => Err("已有同名店铺。".into()),
+            result => result.map_err(mysql_error),
+        }
+    }
+
+    pub(crate) async fn assign_legacy_shops(
+        &mut self, storage: &str, shop: &str, numbers: &[String],
+    ) -> Result<(), String> {
+        let mut tx = self.0.start_transaction(mysql_async::TxOpts::default()).await.map_err(mysql_error)?;
+        for number in numbers {
+            reserve_shop_number(&mut tx, storage, shop, number, number, true).await?;
+        }
+        tx.commit().await.map_err(mysql_error)
+    }
+
+    pub(crate) async fn reserve_order_shop(&mut self, storage: &str, order_key: &str) -> Result<(), String> {
+        if let Some((shop, number)) = shops::split_order(order_key) {
+            let exists: Option<u8> = self.0.exec_first(
+                "SELECT 1 FROM vagaga_shops WHERE storage_id=? AND id=?",
+                (storage, shop),
+            ).await.map_err(mysql_error)?;
+            if exists.is_none() {
+                return Err("当前共享空间没有这家店铺，请检查共享存储配置。".into());
+            }
+            reserve_shop_number(&mut self.0, storage, shop, number, order_key, false).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn set_shop_archives(
+        &mut self,
+        storage: &str,
+        orders: &[(String, String)],
+        archived: bool,
+    ) -> Result<(), String> {
+        let mut tx = self.0.start_transaction(mysql_async::TxOpts::default()).await.map_err(mysql_error)?;
+        for (number, version) in orders {
+            let partition = shops::order_partition(storage, number);
+            let current: Option<String> = tx.exec_first(
+                "SELECT operation_id FROM orders
+                 WHERE storage_id=? AND order_number=? AND completed=TRUE FOR UPDATE",
+                (partition.as_ref(), number),
+            ).await.map_err(mysql_error)?;
+            if current.as_ref() != Some(version) {
+                return Err("共享订单状态已变化，请先同步后重试。".into());
+            }
+            if archived {
+                tx.exec_drop(
+                    "INSERT INTO vagaga_order_archives(storage_id,order_key,operation_id) VALUES(?,?,?)
+                     ON DUPLICATE KEY UPDATE operation_id=VALUES(operation_id)",
+                    (storage, number, version),
+                ).await.map_err(mysql_error)?;
+            } else {
+                tx.exec_drop(
+                    "DELETE FROM vagaga_order_archives WHERE storage_id=? AND order_key=? AND operation_id=?",
+                    (storage, number, version),
+                ).await.map_err(mysql_error)?;
+            }
+        }
+        tx.commit().await.map_err(mysql_error)
+    }
+
     async fn next_seq(&mut self) -> Result<u64, String> {
         next_sequence(&mut self.0, "orders").await
     }
@@ -358,6 +485,7 @@ impl OrderIndex {
         expected_operation: Option<&str>,
         order: &SharedOrder,
     ) -> Result<bool, String> {
+        let physical_storage = shops::order_partition(storage, &order.number);
         let seq = self.next_seq().await?;
         if let Some(expected) = expected_operation {
             if order.completed {
@@ -370,7 +498,7 @@ impl OrderIndex {
                             &order.operation_id,
                             &order.payload,
                             seq,
-                            storage,
+                            physical_storage.as_ref(),
                             &order.number,
                             expected,
                         ),
@@ -386,7 +514,7 @@ impl OrderIndex {
                             &order.operation_id,
                             &order.payload,
                             seq,
-                            storage,
+                            physical_storage.as_ref(),
                             &order.number,
                             expected,
                         ),
@@ -401,7 +529,7 @@ impl OrderIndex {
             let result = self.0.exec_drop(
                 "INSERT INTO orders(storage_id,order_number,operation_id,payload,completed,change_seq)
                  VALUES(?,?,?,?,FALSE,?)",
-                (storage, &order.number, &order.operation_id, &order.payload, seq),
+                (physical_storage.as_ref(), &order.number, &order.operation_id, &order.payload, seq),
             ).await;
             match result {
                 Ok(()) => return Ok(true),
@@ -423,6 +551,7 @@ impl OrderIndex {
         expected_operation: &str,
         order: &SharedOrder,
     ) -> Result<bool, String> {
+        let physical_storage = shops::order_partition(storage, &order.number);
         let seq = self.next_seq().await?;
         self.0
             .exec_drop(
@@ -433,7 +562,7 @@ impl OrderIndex {
                     &order.operation_id,
                     &order.payload,
                     seq,
-                    storage,
+                    physical_storage.as_ref(),
                     &order.number,
                     expected_operation,
                 ),
@@ -459,6 +588,7 @@ impl OrderIndex {
         lease_ms: i64,
         force: bool,
     ) -> Result<ClaimResult, String> {
+        let physical_storage = shops::order_partition(storage, number);
         let seq = self.next_seq().await?;
         let expired_before = now_ms.saturating_sub(lease_ms);
         if force {
@@ -466,7 +596,7 @@ impl OrderIndex {
                 .exec_drop(
                     "UPDATE orders SET claimed_by=?,claimed_name=?,claimed_at=?,change_seq=?
                      WHERE storage_id=? AND order_number=? AND NOT completed",
-                    (device_id, device_name, now_ms, seq, storage, number),
+                    (device_id, device_name, now_ms, seq, physical_storage.as_ref(), number),
                 )
                 .await
                 .map_err(mysql_error)?;
@@ -481,7 +611,7 @@ impl OrderIndex {
                         device_name,
                         now_ms,
                         seq,
-                        storage,
+                        physical_storage.as_ref(),
                         number,
                         device_id,
                         expired_before,
@@ -516,13 +646,14 @@ impl OrderIndex {
         device_id: &str,
         force: bool,
     ) -> Result<bool, String> {
+        let physical_storage = shops::order_partition(storage, number);
         let seq = self.next_seq().await?;
         if force {
             self.0
                 .exec_drop(
                     "UPDATE orders SET claimed_by=NULL,claimed_name=NULL,claimed_at=NULL,change_seq=?
                      WHERE storage_id=? AND order_number=? AND claimed_by IS NOT NULL",
-                    (seq, storage, number),
+                    (seq, physical_storage.as_ref(), number),
                 )
                 .await
                 .map_err(mysql_error)?;
@@ -531,7 +662,7 @@ impl OrderIndex {
                 .exec_drop(
                     "UPDATE orders SET claimed_by=NULL,claimed_name=NULL,claimed_at=NULL,change_seq=?
                      WHERE storage_id=? AND order_number=? AND claimed_by=?",
-                    (seq, storage, number, device_id),
+                    (seq, physical_storage.as_ref(), number, device_id),
                 )
                 .await
                 .map_err(mysql_error)?;
@@ -544,6 +675,7 @@ impl OrderIndex {
         storage: &str,
         number: &str,
     ) -> Result<Option<SharedOrderRow>, String> {
+        let physical_storage = shops::order_partition(storage, number);
         let row: Option<OrderRowTuple> = self
             .0
             .exec_first(
@@ -551,7 +683,7 @@ impl OrderIndex {
                     "SELECT {ORDER_SELECT_COLUMNS} FROM orders
                      WHERE storage_id=? AND order_number=?"
                 ),
-                (storage, number),
+                (physical_storage.as_ref(), number),
             )
             .await
             .map_err(mysql_error)?;
@@ -601,6 +733,35 @@ impl OrderIndex {
             .await
             .map_err(mysql_error)
     }
+}
+
+async fn reserve_shop_number(
+    conn: &mut impl Queryable,
+    storage: &str,
+    shop: &str,
+    number: &str,
+    order_key: &str,
+    legacy: bool,
+) -> Result<(), String> {
+    let result = conn.exec_drop(
+        "INSERT INTO vagaga_shop_orders(storage_id,shop_id,platform_number,order_key,legacy)
+         VALUES(?,?,?,?,?)",
+        (storage, shop, number, order_key, legacy),
+    ).await;
+    match result {
+        Ok(()) => return Ok(()),
+        Err(mysql_async::Error::Server(error)) if error.code == 1062 => {}
+        Err(error) => return Err(mysql_error(error)),
+    }
+    let saved: Option<(String, String)> = conn.exec_first(
+        "SELECT shop_id,order_key FROM vagaga_shop_orders
+         WHERE storage_id=? AND shop_id=? AND platform_number=?",
+        (storage, shop, number),
+    ).await.map_err(mysql_error)?;
+    if saved.is_some_and(|(saved_shop, saved_key)| saved_shop == shop && saved_key == order_key) {
+        return Ok(());
+    }
+    Err(format!("订单 {number} 已分配给店铺，或该店已有同号订单。请同步后重新核对。"))
 }
 
 fn shared_order_row(

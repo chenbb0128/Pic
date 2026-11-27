@@ -11,6 +11,7 @@ mod qiniu_settings;
 mod qiniu_store;
 mod qiniu_sync;
 mod qiniu_transport;
+mod shops;
 pub mod store;
 pub mod templates;
 mod workflow;
@@ -127,6 +128,7 @@ pub fn run() {
                             || outcome.completed > 0
                             || outcome.claims_changed > 0
                             || outcome.templates_updated > 0
+                            || outcome.shops_changed
                         {
                             let _ = bg_handle.emit("workflow:changed", &outcome);
                         }
@@ -177,6 +179,7 @@ pub fn run() {
             qiniu_sync::get_qiniu_status,
             qiniu_sync::qiniu_sync_now,
             workflow::workflow_settings,
+            workflow::workflow_mark_quick_start_seen,
             workflow::workflow_set_role,
             workflow::workflow_set_device_name,
             workflow::workflow_set_auto_sync,
@@ -191,6 +194,10 @@ pub fn run() {
             workflow::workflow_sync,
             workflow::workflow_finish,
             workflow::workflow_resolve_conflict,
+            shops::list_shops,
+            shops::save_shop,
+            shops::assign_legacy_shops,
+            shops::set_shop_orders_archived,
         ])
         .run(tauri::generate_context!())
         .expect("vagaga 启动失败");

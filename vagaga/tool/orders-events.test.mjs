@@ -383,7 +383,7 @@ function environment(t, overrides = {}) {
       }).default
       const scope = vue.effectScope()
       scopes.push(scope)
-      const view = scope.run(() => component.setup({}, { expose() {} }))
+      const view = scope.run(() => component.setup({}, { expose() {}, emit() {} }))
       for (const mount of mounted.splice(0)) await mount()
       await flush()
       return view
@@ -485,7 +485,7 @@ test('production rows refresh after a cloud update for an already opened order',
   assert.equal(view.orderProductions('ORDER-one')[0]?.syncStatus, 'synced')
 })
 
-test('Qiniu production checks the local original and exports with its source image ID', async t => {
+test('production accepts unconfirmed images, blocks known thumbnails and retains the source image ID', async t => {
   const env = environment(t)
   env.qiniuStatus({ enabled: true, legacyEnabled: false, role: 'production' })
   env.fetchImage(async () => ({ ok: true, blob: async () => new Blob(['image'], { type: 'image/png' }) }))
@@ -499,7 +499,8 @@ test('Qiniu production checks the local original and exports with its source ima
   assert.equal(view.lastInjectedOrder.value, null)
   assert.match(view.status.value, /原图/)
   await view.injectImage({ ...image('unknown'), sourceQuality: 'unknown' }, order('unknown'))
-  assert.equal(view.lastInjectedOrder.value, null)
+  assert.equal(view.lastInjectedOrder.value, 'ORDER-unknown')
+  assert.equal(view.qualityLabel({ ...image('unknown'), sourceQuality: 'unknown' }), '')
   await view.injectImage({ ...image('original'), sourceQuality: 'original' }, order('one'))
   env.fetchImage(async () => ({ ok: false, status: 404 }))
   await view.injectImage({ ...image('missing'), sourceQuality: 'original' }, order('missing'), 'new-template')
@@ -627,6 +628,56 @@ test('manual sorting saves the global order and keeps hidden rows in place', asy
   const reopened = await env.mountView()
   assert.equal(reopened.orderSort.value.mode, 'manual')
   assert.equal(reopened.visibleEntries.value.map(row => row.summary.id).join(','), 'a2,b,a1,new')
+})
+
+test('shop filtering and date-based archiving keep same-number orders separate', async t => {
+  const a = { id: 'a'.repeat(32), name: '甲店', active: true }
+  const b = { id: 'b'.repeat(32), name: '乙店', active: true }
+  const original = 'P1234567890123456'
+  const one = `~shop~${a.id}~${original}`
+  const two = `~shop~${b.id}~${original}`
+  const newer = `~shop~${a.id}~NEW`
+  const catalog = { shops: [a, b], legacyAssignments: {}, sharedArchives: {} }
+  const operations = []
+  const env = environment(t, {
+    copyOrderNumberToClipboard: async number => operations.push({ copy: number }),
+    workflowOrders: async () => [one, two, newer].map(orderNumber => ({
+      orderNumber, sharedState: 'completed', remoteOperationId: orderNumber,
+    })),
+    setShopOrdersArchived: async (shopId, numbers, value) => {
+      operations.push({ shopId, numbers: [...numbers], archived: value })
+      return { ...catalog, sharedArchives: value ? Object.fromEntries(numbers.map(number => [number, number])) : {} }
+    },
+  })
+  env.store.updateShopCatalog(catalog)
+  env.rows([
+    { ...order('one'), orderNumber: one },
+    { ...order('two'), orderNumber: two },
+    { ...order('newer'), orderNumber: newer, createdAt: '2026-11-22T12:00:00' },
+  ])
+  await env.store.loadOrders()
+  await env.store.refreshWorkflowOrders()
+  const view = await env.mountView()
+  const visible = () => view.visibleEntries.value.map(row => row.summary.id).join(',')
+  view.orderFilter.value = 'completed'
+  view.shopFilter.value = a.id
+  assert.equal(visible(), 'newer,one')
+  await view.copyOrderNumber(one)
+  assert.deepEqual(operations[0], { copy: original })
+  view.openArchive()
+  view.archiveThrough.value = '2026-11-20'
+  assert.deepEqual([...view.archiveNumbers.value], [one])
+  await view.confirmArchive()
+  assert.deepEqual(operations[1], { shopId: a.id, numbers: [one], archived: true })
+  assert.equal(visible(), 'newer')
+  view.shopFilter.value = b.id
+  assert.equal(visible(), 'two')
+  view.shopFilter.value = a.id
+  view.orderFilter.value = 'archived'
+  assert.equal(visible(), 'one')
+  await view.restoreArchived(one)
+  assert.deepEqual(operations[2], { shopId: a.id, numbers: [one], archived: false })
+  assert.equal(visible(), '')
 })
 
 test('capturing material for a completed order reveals its images without reopening the order', async t => {
@@ -930,6 +981,27 @@ test('upload and finish open the comparison without a separate sync action', asy
   await workflow.replace()
   assert.equal(applied[0].reference, conflict.reference)
   assert.equal(dialog.open, false)
+})
+
+test('a finish error is shown while the order refresh is still pending', async t => {
+  let releaseRefresh
+  const refresh = new Promise(resolve => { releaseRefresh = resolve })
+  const message = '共享存储连接超时。'
+  const env = environment(t, {
+    workflowFinish: async () => ({ completed: 0, conflicts: [], errors: [message] }),
+    workflowOrders: () => refresh,
+  })
+  const workflow = env.mountWorkflow({ saveLayout: async () => {}, applySharedVersion: async () => {} })
+  const request = workflow.finish('ORDER-test')
+  try {
+    await flush()
+    assert.equal(workflow.operation.value, 'finish')
+    assert.deepEqual(env.notifications, [{ kind: 'error', text: message }])
+  } finally {
+    releaseRefresh([])
+    await request
+  }
+  assert.equal(workflow.operation.value, null)
 })
 
 test('listOrderEntries populates sidebar entries in one batch without per-order getOrder IPC calls', async t => {

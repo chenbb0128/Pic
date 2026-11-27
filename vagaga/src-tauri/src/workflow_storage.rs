@@ -1,4 +1,5 @@
 use std::path::Path;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
 use crate::{cloud, qiniu_settings, store, workflow_db, workflow_qiniu::Qiniu};
 
@@ -247,7 +248,18 @@ fn template_image_key(id: &str, name: &str) -> Result<String, String> {
 
 fn image_key(kind: &str, reference: &str) -> String {
     match reference.split_once('/') {
-        Some((order, name)) => format!("materials/{order}/{kind}/{name}"),
+        Some((order, name)) => {
+            if let Some(identity) = order.strip_prefix('~')
+                .and_then(|encoded| URL_SAFE_NO_PAD.decode(encoded).ok())
+                .and_then(|bytes| String::from_utf8(bytes).ok())
+            {
+                if let Some((shop, number)) = crate::shops::split_order(&identity) {
+                    let segment = crate::workflow::order_key_segment(number);
+                    return format!("materials/shops/{shop}/{segment}/{kind}/{name}");
+                }
+            }
+            format!("materials/{order}/{kind}/{name}")
+        }
         None => format!("materials/{kind}/{reference}"),
     }
 }

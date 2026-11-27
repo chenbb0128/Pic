@@ -7,7 +7,7 @@ const catalog = readFileSync(new URL('../src-tauri/assets/templates.json', impor
 const source = readFileSync(new URL('../src-tauri/assets/vagaga_capture.js', import.meta.url), 'utf8')
   .replace('/* VAGAGA_TEMPLATES */ []', catalog)
 
-function fixture({ document, bridge, startPoll = setInterval, stopPoll = clearInterval } = {}) {
+function fixture({ document, bridge, fetch, startPoll = setInterval, stopPoll = clearInterval } = {}) {
   const window = { addEventListener(type, callback) { this[type] = callback }, qianfanBridge: bridge }
   window.top = window
   vm.runInNewContext(source.replace(/\}\)\(\)\s*$/, `
@@ -15,18 +15,39 @@ function fixture({ document, bridge, startPoll = setInterval, stopPoll = clearIn
     window.parseOrderPanel = parseOrderPanel
     window.requestTemplateCatalog = () => requestTemplateCatalog()
     window.captureWith = onCapture => { capture = onCapture }
-    window.buildSection = (templates, onCapture) => {
+    window.captureImage = (img, number) => capture(img, number, [])
+    window.buildSection = (templates, onCapture, shops = []) => {
       capture = onCapture
-      return buildSection({}, false, templates, () => {})
+      return buildSection({}, false, { templates, shops }, () => {})
     }
   })()`), {
     window, document, setTimeout, clearTimeout, setInterval: startPoll, clearInterval: stopPoll,
+    URL, fetch, btoa,
     getComputedStyle: element => element.style,
     requestAnimationFrame() {},
     location: { origin: 'https://walle.xiaohongshu.com', pathname: '/cstools/fixtures' },
   })
   return window
 }
+
+test('known resized images remain thumbnails when the original download is empty', async () => {
+  const original = 'https://qimg.xiaohongshu.com/arkgoods/test123'
+  const thumbnail = original + '?imageView2/2/w/200'
+  const responses = []
+  const urls = []
+  const page = fixture({
+    document: { title: 'fixture' },
+    bridge: raw => responses.push(JSON.parse(raw)),
+    fetch: async url => {
+      urls.push(url)
+      return { ok: true, blob: async () => new Blob(url === original ? [] : ['image'], { type: 'image/png' }) }
+    },
+  })
+  await page.captureImage({src: thumbnail}, 'P1234567890123456')
+  assert.deepEqual(urls, [original, thumbnail])
+  assert.equal(responses[0].sourceQuality, 'scaled')
+  assert.equal(responses[0].scaled, true)
+})
 
 const window = fixture()
 const custom = { code: 'A100', name: '自定义模板', id: '0123456789abcdef0123456789abcdef' }
@@ -46,6 +67,7 @@ function panelDocument(specification, textContent = `待发货P1234567890123456�
       remove() { this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1) },
       addEventListener(type, callback) { this[type] = callback },
       setCustomValidity() {},
+      reportValidity() { this.invalid = true },
     }),
   }
 }
@@ -73,18 +95,42 @@ test('reopening the menu requests the latest enabled runtime catalog', async () 
     requests.push(payload)
     capture.__qfReceiveTemplateCatalog(payload.requestId, responses.shift())
   } })
-  assert.deepEqual(await capture.requestTemplateCatalog(), [builtIn])
-  assert.deepEqual(await capture.requestTemplateCatalog(), [builtIn, custom])
-  assert.deepEqual(await capture.requestTemplateCatalog(), [builtIn])
+  assert.deepEqual((await capture.requestTemplateCatalog()).templates, [builtIn])
+  assert.deepEqual((await capture.requestTemplateCatalog()).templates, [builtIn, custom])
+  assert.deepEqual((await capture.requestTemplateCatalog()).templates, [builtIn])
   assert.deepEqual(requests.map(({ type, requestId }) => [type, requestId]), [
     ['paidan.listTemplates', 1], ['paidan.listTemplates', 2], ['paidan.listTemplates', 3],
   ])
 })
 
 test('uses the built-in catalog when the catalog bridge is unavailable', async () => {
-  const templates = await fixture().requestTemplateCatalog()
+  const { templates } = await fixture().requestTemplateCatalog()
   assert.equal(templates[0].code, 'A01')
   assert.equal(templates[0].id, '模板爱心.png')
+})
+
+test('capture requires a shop and submits the selected shop for the original order number', () => {
+  const capture = fixture({ document: panelDocument('A05草莓甜心') })
+  const received = []
+  const a = { id: 'a'.repeat(32), name: '甲店', active: true }
+  const b = { id: 'b'.repeat(32), name: '乙店', active: true }
+  const hidden = { id: 'c'.repeat(32), name: '停用店', active: false }
+  const section = capture.buildSection(JSON.parse(catalog), (_img, number, _templates, meta) => {
+    received.push([number, meta.shopId])
+  }, [a, b, hidden])
+  const find = (node, predicate) => predicate(node) ? node : node.children.map(child => find(child, predicate)).find(Boolean)
+  const select = find(section, node => node.tagName === 'SELECT')
+  const confirm = find(section, node => node.textContent === '确认排单')
+  const click = { stopPropagation() {} }
+  assert.deepEqual(select.children.map(option => option.value), ['', a.id, b.id])
+  confirm.click(click)
+  assert.equal(select.invalid, true)
+  assert.deepEqual(received, [])
+  select.value = a.id
+  confirm.click(click)
+  select.value = b.id
+  confirm.click(click)
+  assert.deepEqual(received, [['P1234567890123456', a.id], ['P1234567890123456', b.id]])
 })
 
 test('the same platform menu reopens on the first poll while a previous capture is pending', async () => {

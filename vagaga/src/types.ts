@@ -197,6 +197,7 @@ export interface WorkflowSettings {
   deviceName?: string
   autoSync?: boolean
   pollSeconds?: number
+  quickStartSeen?: boolean
 }
 
 export interface WorkflowOrder {
@@ -209,6 +210,8 @@ export interface WorkflowOrder {
   claimedName?: string
   claimedAt?: number
   claimedByMe?: boolean
+  remoteOperationId?: string | null
+  localArchived?: boolean
 }
 
 export interface ClaimResponse {
@@ -233,6 +236,19 @@ export interface WorkflowResult {
   completed: number
   claimsChanged?: number
   templatesUpdated?: number
+  shopsChanged?: boolean
   conflicts: WorkflowPreview[]
   errors: string[]
+}
+
+export interface Shop {
+  id: string
+  name: string
+  active: boolean
+}
+
+export interface ShopCatalog {
+  shops: Shop[]
+  legacyAssignments: Record<string, string>
+  sharedArchives: Record<string, string>
 }

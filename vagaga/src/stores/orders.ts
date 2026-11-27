@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 import { toast as notify } from 'vue-sonner'
 import * as api from '../lib/tauri'
-import type { AppInfo, OrderDetail, OrderEntry, OrderSummary, PaidanEvent, QiniuStatus, WorkflowOrder, WorkflowSettings } from '../types'
+import type { AppInfo, OrderDetail, OrderEntry, OrderSummary, PaidanEvent, QiniuStatus, ShopCatalog, WorkflowOrder, WorkflowSettings } from '../types'
 
 interface State {
   orders: OrderSummary[]
@@ -13,6 +13,7 @@ interface State {
   qiniu: QiniuStatus | null
   workflow: WorkflowSettings
   workflowOrders: Record<string, WorkflowOrder>
+  shopCatalog: ShopCatalog
   latestCapture: { orderId: string } | null
 }
 
@@ -26,8 +27,53 @@ const state = reactive<State>({
   qiniu: null,
   workflow: { role: 'both', target: null },
   workflowOrders: {},
+  shopCatalog: { shops: [], legacyAssignments: {}, sharedArchives: {} },
   latestCapture: null,
 })
+
+const shopOrderPattern = /^~shop~([0-9a-f]{32})~(.+)$/
+
+export function platformOrderNumber(orderKey: string) {
+  return shopOrderPattern.exec(orderKey)?.[2] ?? orderKey
+}
+
+export function orderShopId(orderKey: string) {
+  return shopOrderPattern.exec(orderKey)?.[1] ?? (
+    Object.prototype.hasOwnProperty.call(state.shopCatalog.legacyAssignments, orderKey)
+      ? state.shopCatalog.legacyAssignments[orderKey]
+      : null
+  )
+}
+
+export function orderShopName(orderKey: string) {
+  const shopId = orderShopId(orderKey)
+  return shopId ? state.shopCatalog.shops.find(shop => shop.id === shopId)?.name ?? '店铺待同步' : '待归属'
+}
+
+export function orderDisplay(orderKey: string) {
+  const number = platformOrderNumber(orderKey)
+  return orderShopId(orderKey) ? `${orderShopName(orderKey)} · ${number}` : number
+}
+
+export function orderIsArchived(orderKey: string) {
+  const workflow = state.workflowOrders[orderKey]
+  if (workflow?.sharedState === 'completed' && workflow.remoteOperationId) {
+    return state.shopCatalog.sharedArchives?.[orderKey] === workflow.remoteOperationId
+  }
+  return !!workflow?.localCompleted && !!workflow.localArchived
+}
+
+let shopsRequest = 0
+export function updateShopCatalog(catalog: ShopCatalog) {
+  shopsRequest++
+  state.shopCatalog = catalog
+}
+
+export async function refreshShops() {
+  const request = ++shopsRequest
+  const catalog = await api.listShops()
+  if (request === shopsRequest) state.shopCatalog = catalog
+}
 
 export function toast(kind: 'ok' | 'error', text: string) {
   if (kind === 'ok') notify.success(text)
@@ -109,7 +155,7 @@ export async function handlePaidanEvent(event: PaidanEvent) {
     const note = state.qiniu?.enabled
       ? event.scaled ? '（缩图，仅保存在本机）' : '（已保存本地，同步状态见订单）'
       : event.scaled ? '（缩图）' : ''
-    toast('ok', `排单已入库：订单 ${event.orderNumber}${note}`)
+    toast('ok', `排单已入库：订单 ${orderDisplay(event.orderNumber)}${note}`)
     await Promise.all([loadOrders(), refreshWorkflowOrders().catch(() => {})])
     const target = state.orders.find(o => o.orderNumber === event.orderNumber)
     if (target) {
@@ -117,7 +163,7 @@ export async function handlePaidanEvent(event: PaidanEvent) {
       state.latestCapture = { orderId: target.id }
     }
   } else {
-    toast('error', `排单入库失败（${event.orderNumber}）：${event.detail ?? '未知原因'}`)
+    toast('error', `排单入库失败（${orderDisplay(event.orderNumber)}）：${event.detail ?? '未知原因'}`)
   }
 }
 
@@ -148,8 +194,8 @@ async function registerEvents(): Promise<() => void> {
       toast(
         'ok',
         parts.length
-          ? `同步：订单 ${orderNumber} — ${parts.join('、')}`
-          : `同步：订单 ${orderNumber} 信息已更新`,
+          ? `同步：订单 ${orderDisplay(orderNumber)} — ${parts.join('、')}`
+          : `同步：订单 ${orderDisplay(orderNumber)} 信息已更新`,
       )
       await loadOrders().catch(error => toast('error', `刷新同步订单失败：${error}`))
     }))
@@ -158,6 +204,7 @@ async function registerEvents(): Promise<() => void> {
         await Promise.all([
           loadOrders().catch(() => {}),
           refreshWorkflowOrders().catch(() => {}),
+          outcome.shopsChanged ? refreshShops().catch(() => {}) : Promise.resolve(),
           outcome.templatesUpdated ? loadInfo().catch(() => {}) : Promise.resolve(),
         ])
       }))

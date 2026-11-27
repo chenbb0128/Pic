@@ -149,7 +149,7 @@ impl OrderData {
     }
 }
 
-fn order_key_segment(number: &str) -> String {
+pub(crate) fn order_key_segment(number: &str) -> String {
     // Standard order numbers stay readable. Escape every other form as one
     // reversible segment so it cannot add folders or collide with a literal ID.
     if !number.is_empty()
@@ -310,18 +310,15 @@ fn snapshot(
         .ok_or("订单不存在。")?;
     let mut assets = Vec::new();
     let mut sources = SourceFiles::new();
-    let order_directory = use_order_directory.then(|| order_key_segment(number));
+    let order_directory = (use_order_directory || crate::shops::split_order(number).is_some())
+        .then(|| order_key_segment(number));
     for image in detail.images {
         let quality = store
             .qiniu_asset_state(&image.id)
             .map_err(display)?
             .and_then(|state| state.quality);
-        if kind != "legacy"
-            && quality
-                .as_deref()
-                .is_some_and(|quality| quality != "original")
-        {
-            return Err("订单含缩图或来源未确认的素材，请重新排单取得原图后上传。".into());
+        if kind != "legacy" && quality.as_deref() == Some("scaled") {
+            return Err("订单含缩图，请重新排单取得原图后上传。".into());
         }
         let mut asset = Asset {
             id: db::remote_id(store, &image.id).map_err(display)?,
@@ -476,6 +473,7 @@ pub(crate) struct Outcome {
     pub(crate) completed: usize,
     pub(crate) claims_changed: usize,
     pub(crate) templates_updated: usize,
+    pub(crate) shops_changed: bool,
     pub(crate) uploaded_order_numbers: Vec<String>,
     pub(crate) conflicts: Vec<Preview>,
     pub(crate) errors: Vec<String>,
@@ -491,6 +489,7 @@ pub(crate) struct Settings {
     device_name: String,
     auto_sync: bool,
     poll_seconds: u64,
+    quick_start_seen: bool,
 }
 
 #[derive(Serialize)]
@@ -597,7 +596,13 @@ pub(crate) fn workflow_settings(state: State<'_, AppState>) -> Result<Settings, 
         device_name: db::device_name(&state.store)?,
         auto_sync,
         poll_seconds,
+        quick_start_seen: db::setting(&state.store, "quick-start-seen").map_err(display)?.as_deref() == Some("true"),
     })
+}
+
+#[tauri::command]
+pub(crate) fn workflow_mark_quick_start_seen(state: State<'_, AppState>) -> Result<(), String> {
+    db::put_setting(&state.store, "quick-start-seen", "true").map_err(display)
 }
 
 #[tauri::command]
@@ -656,7 +661,7 @@ pub(crate) fn workflow_set_layout(
     db::set_layout(&state.store, &order_number, &number)
 }
 
-async fn shared_database(root: &Path) -> Result<OrderIndex, String> {
+pub(crate) async fn shared_database(root: &Path) -> Result<OrderIndex, String> {
     let config = crate::mysql::load_config(root);
     if !config.valid() {
         return Err("请先在设置 → 共享数据库中保存完整的 MySQL 配置。".into());
@@ -759,6 +764,7 @@ async fn run_task_attempt(
         Ok(current) => current,
         Err(result) => return Ok(result),
     };
+    index.reserve_order_shop(&task.target, &task.number).await?;
     let mut sources: Option<SourceFiles> = task
         .source_files
         .as_deref()
@@ -1212,7 +1218,7 @@ pub(crate) async fn workflow_upload(
                 result.uploaded_order_numbers.push(number);
             }
             Ok(Some(conflict)) => result.conflicts.push(conflict),
-            Err(error) => result.errors.push(format!("{number}：{error}")),
+            Err(error) => result.errors.push(format!("{}：{error}", crate::shops::display_order(&state.store, &number))),
         }
     }
     Ok(result)
@@ -2109,10 +2115,27 @@ async fn synchronize_locked(
     if include_templates {
         response.templates_updated = crate::templates::sync_shared_quiet(state, &backend).await;
     }
-    let mut cursor = db::sync_cursor(&state.store, &target).map_err(display)?;
+    let catalog = index.shop_catalog(&target).await?;
+    response.shops_changed = crate::shops::cache(&state.store, &target, &catalog)?;
+    synchronize_orders(state, &mut index, &backend, &target, active_order, &mut response).await?;
+    let partition = crate::shops::shared_partition(&target);
+    synchronize_orders(state, &mut index, &backend, &partition, active_order, &mut response).await?;
+    Ok(response)
+}
+
+async fn synchronize_orders(
+    state: &AppState,
+    index: &mut OrderIndex,
+    backend: &Backend,
+    partition: &str,
+    active_order: Option<&str>,
+    response: &mut Outcome,
+) -> Result<(), String> {
+    let mut cursor = db::sync_cursor(&state.store, partition).map_err(display)?;
+    let starting_conflicts = response.conflicts.len();
     let mut can_advance_cursor = true;
     loop {
-        let batch: Vec<SharedOrderRow> = index.read_since(&target, cursor, 200).await?;
+        let batch: Vec<SharedOrderRow> = index.read_since(partition, cursor, 200).await?;
         if batch.is_empty() {
             break;
         }
@@ -2130,32 +2153,32 @@ async fn synchronize_locked(
             let order = match OrderData::from_record(row.order) {
                 Ok(order) => order,
                 Err(error) => {
-                    response.errors.push(format!("{number}：{error}"));
+                    response.errors.push(format!("{}：{error}", crate::shops::display_order(&state.store, &number)));
                     can_advance_cursor = false;
                     continue;
                 }
             };
             match apply_shared_order_with_meta(
                 state,
-                &backend,
+                backend,
                 order,
                 &raw_payload,
                 Some(claim_tuple),
                 active_order,
-                &mut response,
+                response,
             )
             .await
             {
                 Ok(()) => {
-                    if can_advance_cursor && response.conflicts.is_empty() {
+                    if can_advance_cursor && response.conflicts.len() == starting_conflicts {
                         cursor = row.change_seq;
-                        let _ = db::set_sync_cursor(&state.store, &target, cursor);
+                        let _ = db::set_sync_cursor(&state.store, partition, cursor);
                     } else {
                         can_advance_cursor = false;
                     }
                 }
                 Err(error) => {
-                    response.errors.push(format!("{number}：{error}"));
+                    response.errors.push(format!("{}：{error}", crate::shops::display_order(&state.store, &number)));
                     can_advance_cursor = false;
                 }
             }
@@ -2169,7 +2192,7 @@ async fn synchronize_locked(
             cursor = last_seen_seq;
         }
     }
-    Ok(response)
+    Ok(())
 }
 
 #[tauri::command]
@@ -2254,6 +2277,28 @@ mod tests {
             .store
             .ingest_image(number, bytes.get_ref(), "image/png", &[], "fixture")
             .unwrap();
+    }
+
+    #[test]
+    fn publishing_accepts_unconfirmed_captures_and_still_rejects_known_thumbnails() {
+        use crate::qiniu_store::CaptureQuality;
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = workstation(&dir);
+        let store = &state.store;
+        let mut capture = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(3, 5).write_to(&mut capture, image::ImageFormat::Png).unwrap();
+        for (number, quality) in [("unconfirmed", CaptureQuality::Unknown), ("thumbnail", CaptureQuality::Scaled)] {
+            store.ingest_local_capture(number, capture.get_ref(), "image/png", &[], quality, None).unwrap();
+        }
+        let operation = random_hex_pub(16);
+        let (order, sources) = snapshot(store, dir.path(), "unconfirmed", "publish", None, true, &operation).unwrap();
+        let asset = &order.assets[0];
+        assert_eq!(asset.quality.as_deref(), Some("unknown"));
+        let root = dir.path().canonicalize().unwrap();
+        assert_eq!(sources[&asset.id].read(&root, asset.bytes).unwrap(), *capture.get_ref());
+        let failed = snapshot(store, dir.path(), "thumbnail", "publish", None, true, &operation);
+        assert!(failed.err().unwrap().contains("缩图"));
     }
 
     #[tokio::test]
@@ -2446,6 +2491,151 @@ mod tests {
         let path =
             std::env::var_os("VAGAGA_TEST_MYSQL_CONFIG").expect("set VAGAGA_TEST_MYSQL_CONFIG");
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a dedicated MySQL test database"]
+    async fn shared_shop_orders_keep_same_number_separate() {
+        use crate::qiniu_transport::tests::{local_server, receive, receive_request, reply};
+        use crate::shops::{self, Shop};
+        use tauri::Manager;
+
+        let sender_dir = tempfile::tempdir().unwrap();
+        let receiver_dir = tempfile::tempdir().unwrap();
+        let sender = workstation(&sender_dir);
+        let receiver = workstation(&receiver_dir);
+        let (listener, endpoint) = local_server();
+        let config = crate::cloud::CloudConfig {
+            enabled: true,
+            endpoint,
+            bucket: format!("test-{}", random_hex_pub(8)),
+            access_key: "fixture".into(),
+            secret_key: "fixture".into(),
+            ..Default::default()
+        };
+        let bucket = config.bucket.clone();
+        let mysql = live_config();
+        for state in [&sender, &receiver] {
+            std::fs::write(
+                crate::cloud::config_path(&state.data_root),
+                serde_json::to_vec(&config).unwrap(),
+            ).unwrap();
+            crate::mysql::save_config(&state.data_root, &mysql).unwrap();
+        }
+        db::put_setting(&receiver.store, "role", "production").unwrap();
+        let mut index = MyClient::new(&mysql).order_index().await.unwrap();
+        let target = config.target();
+        let a = Shop { id: random_hex_pub(16), name: "甲店".into(), active: true };
+        let b = Shop { id: random_hex_pub(16), name: "乙店".into(), active: true };
+        index.save_shop(&target, &a, true).await.unwrap();
+        index.save_shop(&target, &b, true).await.unwrap();
+        shops::cache(&sender.store, &target, &index.shop_catalog(&target).await.unwrap()).unwrap();
+        let platform_number = "P1234567890123456";
+        let old = "P9876543210987654".to_owned();
+        let first = shops::capture_order(&sender.store, platform_number, Some(&a.id)).unwrap();
+        let second = shops::capture_order(&sender.store, platform_number, Some(&b.id)).unwrap();
+        assert!(shops::capture_order(&sender.store, platform_number, None).is_err());
+        let orders = [old.clone(), first.clone(), second.clone()];
+        let mut objects = Vec::new();
+        for number in &orders {
+            capture_order(&sender, number);
+            let order = sender.store.get_order_by_number(number).unwrap().unwrap();
+            let image = &order.images[0];
+            sender.store.set_image_remark(&image.id, number).unwrap();
+            let dir = match shops::split_order(number) {
+                Some((shop, platform)) => format!("shops/{shop}/{platform}"),
+                None => number.clone(),
+            };
+            objects.push((format!("/{bucket}/materials/{dir}/original/"), std::fs::read(&image.file_path).unwrap()));
+        }
+        let (server_done, wait_for_server) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let probe = || {
+                let (socket, _) = receive(&listener, &format!("GET /{bucket}/?list-type=2&max-keys=1"));
+                reply(socket, 200, &[], b"<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>");
+            };
+            probe();
+            let mut uploaded_paths = Vec::new();
+            for (directory, bytes) in &objects {
+                let (socket, line, request) = receive_request(&listener);
+                let path = line.strip_prefix("PUT ").unwrap().strip_suffix(" HTTP/1.1").unwrap();
+                let name = path.strip_prefix(directory).unwrap();
+                assert!(hex_id(name.strip_suffix(".png").unwrap(), 32));
+                uploaded_paths.push(path.to_owned());
+                assert_eq!(&request.body, bytes);
+                reply(socket, 200, &[], b"");
+            }
+            probe();
+            for (path, (_, bytes)) in uploaded_paths.iter().zip(&objects) {
+                let (socket, _) = receive(&listener, &format!("GET {path}"));
+                reply(socket, 200, &[], bytes);
+            }
+            probe();
+            probe();
+            probe();
+            server_done.send(()).unwrap();
+        });
+        let sender_app = tauri::test::mock_builder().manage(sender)
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let receiver_app = tauri::test::mock_builder().manage(receiver)
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let result = workflow_upload(sender_app.state(), orders.to_vec()).await.unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.updated, 3);
+        assert_eq!(index.read(&target).await.unwrap().len(), 1);
+        assert_eq!(index.read(&shops::shared_partition(&target)).await.unwrap().len(), 2);
+        assert!(index.assign_legacy_shops(&target, &a.id, &[platform_number.into()]).await.is_err());
+        let catalog = shops::assign_legacy_shops(sender_app.state(), vec![old.clone()], a.id.clone()).await.unwrap();
+        assert_eq!(catalog.legacy_assignments[&old], a.id);
+        let receiver = receiver_app.state::<AppState>();
+        let imported = synchronize_locked(&receiver, None, false).await.unwrap();
+        assert!(imported.errors.is_empty(), "{:?}", imported.errors);
+        assert_eq!(imported.updated, 3);
+        for number in &orders {
+            let imported = receiver.store.get_order_by_number(number).unwrap().unwrap();
+            assert_eq!(imported.images[0].remark, *number);
+            assert!(Path::new(&imported.images[0].file_path).is_file());
+        }
+        assert_eq!(shops::capture_order(&receiver.store, &old, Some(&a.id)).unwrap(), old);
+        let result = workflow_finish(receiver_app.state(), first.clone()).await.unwrap();
+        assert!(result.errors.is_empty(), "{:?}", result.errors);
+        assert_eq!(result.completed, 1);
+        let sender = sender_app.state::<AppState>();
+        let updated = synchronize_locked(&sender, None, false).await.unwrap();
+        assert!(updated.errors.is_empty(), "{:?}", updated.errors);
+        assert_eq!(updated.completed, 1);
+        assert_eq!(db::order_state(&sender.store, &first).unwrap().unwrap().shared_state.as_deref(), Some("completed"));
+        assert_eq!(db::order_state(&sender.store, &second).unwrap().unwrap().shared_state.as_deref(), Some("pending"));
+        assert!(
+            shops::set_shop_orders_archived(sender_app.state(), b.id.clone(), vec![first.clone()], true)
+                .await.is_err()
+        );
+        assert!(
+            shops::set_shop_orders_archived(sender_app.state(), b.id.clone(), vec![second.clone()], true)
+                .await.is_err()
+        );
+        let local_number = shops::capture_order(&sender.store, "P9999999999999999", Some(&a.id)).unwrap();
+        capture_order(&sender, &local_number);
+        db::complete_local(&sender.store, &local_number).unwrap();
+        let archived = shops::set_shop_orders_archived(
+            sender_app.state(), a.id.clone(), vec![first.clone(), local_number.clone()], true,
+        ).await.unwrap();
+        assert!(archived.shared_archives.contains_key(&first));
+        assert!(!archived.shared_archives.contains_key(&local_number));
+        assert!(db::list(&sender.store).unwrap().iter().any(|row| row.order_number == local_number && row.local_archived));
+        assert!(synchronize_locked(&receiver, None, false).await.unwrap().shops_changed);
+        let remote = shops::cached(&receiver.store, &target).unwrap();
+        assert_eq!(remote.shared_archives, archived.shared_archives);
+        assert!(receiver.store.get_order_by_number(&second).unwrap().is_some());
+        let restored = shops::set_shop_orders_archived(
+            sender_app.state(), a.id, vec![first.clone(), local_number.clone()], false,
+        ).await.unwrap();
+        assert!(!restored.shared_archives.contains_key(&first));
+        assert!(!db::list(&sender.store).unwrap().iter().any(|row| row.local_archived));
+        assert!(synchronize_locked(&receiver, None, false).await.unwrap().shops_changed);
+        assert!(shops::cached(&receiver.store, &target).unwrap().shared_archives.is_empty());
+        wait_for_server.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        server.join().unwrap();
     }
 
     #[tokio::test]

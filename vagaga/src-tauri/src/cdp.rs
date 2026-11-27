@@ -418,8 +418,13 @@ async fn attach_target(
                                 eprintln!("[paidan-cdp] 模板目录读取失败: {error}");
                                 Value::Null
                             });
-                        let expression =
-                            format!("window.__qfReceiveTemplateCatalog?.({request_id},{catalog})");
+                        let shops = crate::shops::current(&reader_store)
+                            .map(|catalog| catalog.shops)
+                            .map(|shops| json!(shops))
+                            .unwrap_or(Value::Null);
+                        let expression = format!(
+                            "window.__qfReceiveTemplateCatalog?.({request_id},{catalog},{shops})"
+                        );
                         let id = reader_next_id.fetch_add(1, Ordering::Relaxed) + 1;
                         if send_command(
                             &reader_sink,
@@ -572,15 +577,21 @@ fn capture_metadata(payload: &Value) -> Option<String> {
 }
 
 async fn handle_capture(store: &Store, events_tx: &mpsc::Sender<PaidanEvent>, parsed: &Value) {
-    let order_number = parsed["context"]["orderNo"]
+    let platform_number = parsed["context"]["orderNo"]
         .as_str()
         .unwrap_or_default()
-        .trim()
-        .to_string();
-    if order_number.is_empty() {
-        eprintln!("[paidan-cdp] 未识别到订单号，跳过入库");
-        return;
-    }
+        .trim();
+    let shop = parsed["context"]["shopId"].as_str();
+    let order_number = match crate::shops::capture_order(store, platform_number, shop) {
+        Ok(number) => number,
+        Err(detail) => {
+            let _ = events_tx.send(PaidanEvent::Failed {
+                order_number: platform_number.to_owned(),
+                detail,
+            }).await;
+            return;
+        }
+    };
     let metadata = capture_metadata(parsed);
     let Some(encoded) = parsed["b64"].as_str() else {
         eprintln!("[paidan-cdp] payload 缺少图片数据");
