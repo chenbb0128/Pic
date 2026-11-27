@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import PricingCalculator from '../components/PricingCalculator.vue'
+
 const paperPrices = [
   { size: 'A3', area: '293 × 420mm', price: '9.92元/张' },
   { size: 'A4', area: '293 × 210mm', price: '5.05元/张', current: true },
@@ -20,6 +22,8 @@ const paperPrices = [
         返回工作台
       </RouterLink>
     </div>
+
+    <PricingCalculator />
 
     <div class="grid items-start gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
       <aside class="space-y-4 lg:sticky lg:top-5">
