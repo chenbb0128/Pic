@@ -7,8 +7,8 @@ const catalog = readFileSync(new URL('../src-tauri/assets/templates.json', impor
 const source = readFileSync(new URL('../src-tauri/assets/vagaga_capture.js', import.meta.url), 'utf8')
   .replace('/* VAGAGA_TEMPLATES */ []', catalog)
 
-function fixture({ document, bridge, fetch, startPoll = setInterval, stopPoll = clearInterval } = {}) {
-  const window = { addEventListener(type, callback) { this[type] = callback }, qianfanBridge: bridge }
+function fixture({ document, bridge, fetch, sessionStorage, startPoll = setInterval, stopPoll = clearInterval } = {}) {
+  const window = { addEventListener(type, callback) { this[type] = callback }, qianfanBridge: bridge, sessionStorage }
   window.top = window
   vm.runInNewContext(source.replace(/\}\)\(\)\s*$/, `
     window.readLayoutNumber = readLayoutNumber
@@ -131,6 +131,41 @@ test('capture requires a shop and submits the selected shop for the original ord
   select.value = b.id
   confirm.click(click)
   assert.deepEqual(received, [['P1234567890123456', a.id], ['P1234567890123456', b.id]])
+})
+
+test('reopening the menu and reloading the same tab remember only an active shop', () => {
+  const values = new Map()
+  const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) }
+  const document = panelDocument('A05草莓甜心')
+  const templates = JSON.parse(catalog)
+  const shops = [
+    { id: 'a'.repeat(32), name: '甲店', active: true },
+    { id: 'b'.repeat(32), name: '乙店', active: true },
+  ]
+  const selector = (page, available = shops) => page.buildSection(templates, () => {}, available)
+    .children[1].children.find(node => node.tagName === 'SELECT')
+  const page = fixture({ document, sessionStorage: storage })
+  const first = selector(page)
+  assert.equal(first.value, '')
+
+  first.value = shops[0].id
+  first.change()
+  const next = selector(page)
+  assert.equal(next.value, shops[0].id)
+
+  next.value = shops[1].id
+  next.change()
+  const reloaded = fixture({ document, sessionStorage: storage })
+  assert.equal(selector(reloaded).value, shops[1].id)
+  assert.equal(selector(reloaded, [shops[0], { ...shops[1], active: false }]).value, '')
+  assert.equal(selector(reloaded, [shops[0]]).value, '')
+  assert.equal(selector(fixture({ document })).value, '')
+
+  const noStorage = fixture({ document })
+  const temporary = selector(noStorage)
+  temporary.value = shops[0].id
+  temporary.change()
+  assert.equal(selector(noStorage).value, shops[0].id)
 })
 
 test('the same platform menu reopens on the first poll while a previous capture is pending', async () => {

@@ -14,7 +14,7 @@
       && !location.pathname.startsWith('/cstools/login')
   }
   if (!onWorkbench()) return
-  var VER = 'v18'
+  var VER = 'v19'
   // 已打开的旧版页面需刷新。旧脚本没有注销入口，重复注入会同时触发两套菜单。
   if (window.__QF_CORE__ === true) return
   window.__QF_CORE__ = true
@@ -24,8 +24,15 @@
   const SECTION_ID = '__qf_section__'
   const PANEL_ID = '__qf_menu__'
   const PLATFORM_MENU_SEL = '.copy-paste'
+  const LAST_SHOP_KEY = 'vagaga.paidan.lastShopId'
   const ORDER_NUMBER_PATTERN = /P\d{15,22}(?!\d)/g
   let restorePlatformMenu = null
+  let lastShopId = ''
+  try {
+    lastShopId = window.sessionStorage.getItem(LAST_SHOP_KEY) ?? ''
+  } catch (_) {
+    // 排单菜单也可在工作台限制存储时使用。
+  }
 
   const TEMPLATES = /* VAGAGA_TEMPLATES */ []
 
@@ -298,7 +305,7 @@
   }
 
   /* ---------- 排单区块构建（dark=独立面板配色） ----------
-     结构：头部（订单号和备注编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
+     结构：头部（订单号、店铺和备注编号）→ 模板清单行（勾选框 + 编号 + 名称 + 份数步进器）→ 底部确认排单
      嵌入模式：区块透明融入平台菜单容器，行风格与平台菜单项一致 */
   function buildSection(img, dark, { templates, shops }, dismiss) {
     const section = document.createElement('div')
@@ -358,13 +365,22 @@
       placeholder.value = ''
       placeholder.textContent = '请选择订单所属店铺'
       shopSelect.appendChild(placeholder)
-      for (const shop of shops.filter(item => item.active)) {
+      const activeShops = shops.filter(shop => shop.active)
+      for (const shop of activeShops) {
         const option = document.createElement('option')
         option.value = shop.id
         option.textContent = shop.name
         shopSelect.appendChild(option)
       }
-      shopSelect.value = ''
+      shopSelect.value = activeShops.some(shop => shop.id === lastShopId) ? lastShopId : ''
+      shopSelect.addEventListener('change', () => {
+        lastShopId = shopSelect.value
+        try {
+          window.sessionStorage.setItem(LAST_SHOP_KEY, lastShopId)
+        } catch (_) {
+          // 存储不可用时，仍在当前页面的排单菜单间记住选择。
+        }
+      })
       shopRow.appendChild(shopLabel)
       shopRow.appendChild(shopSelect)
       shopRow.addEventListener('click', ev => ev.stopPropagation())
