@@ -51,10 +51,10 @@ function showConflicts(rows: WorkflowPreview[]) {
   if (rows.length && !dialog.value?.open) dialog.value?.showModal()
 }
 
-async function upload(orderNumbers: string[]) {
+async function upload(orderNumbers: string[], unpublishedOnly = false) {
   if (!orderNumbers.length) return []
   const result = await run('upload', async () => {
-    const result = await workflowUpload(orderNumbers)
+    const result = await workflowUpload(orderNumbers, unpublishedOnly)
     showConflicts(result.conflicts)
     await refresh().catch(error => toast('error', `刷新订单失败：${error}`))
     if (result.updated) toast('ok', `已上传 ${result.updated} 个订单。`)

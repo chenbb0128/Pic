@@ -254,8 +254,8 @@ export function onWorkflowChanged(handler: (outcome: WorkflowResult) => void): P
   return listen<WorkflowResult>('workflow:changed', e => handler(e.payload))
 }
 
-export function workflowUpload(orderNumbers: string[]): Promise<WorkflowResult> {
-  return invoke('workflow_upload', { orderNumbers })
+export function workflowUpload(orderNumbers: string[], unpublishedOnly = false): Promise<WorkflowResult> {
+  return invoke('workflow_upload', { orderNumbers, unpublishedOnly })
 }
 
 export function workflowSync(activeOrder: string | null): Promise<WorkflowResult> {

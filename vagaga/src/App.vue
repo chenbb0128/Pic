@@ -25,6 +25,7 @@ const ordersView = ref<InstanceType<typeof OrdersView> | null>(null)
 const workflow = ref<InstanceType<typeof WorkflowDialog> | null>(null)
 const quickStart = ref<InstanceType<typeof QuickStartDialog> | null>(null)
 const finishingOrder = ref<string | null>(null)
+const uploadingUnpublished = ref(false)
 const selectedUploadOrders = ref<string[]>([])
 const uploadableOrders = computed(() => new Set(store.workflow.role === 'production' ? [] :
   store.orders.filter(({ orderNumber, imageCount }) => {
@@ -36,11 +37,22 @@ const uploadableOrders = computed(() => new Set(store.workflow.role === 'product
 const uploadSelection = computed(() => {
   return selectedUploadOrders.value.filter(number => uploadableOrders.value.has(number))
 })
+const unpublishedOrders = computed(() => [...uploadableOrders.value].filter(number => {
+  const state = store.workflowOrders[number]
+  return state && !state.sharedState && !state.remoteOperationId
+    && !state.localCompleted && state.pendingOperation !== 'finish'
+}))
 
-async function upload() {
-  if (!uploadSelection.value.length) return
-  const uploaded = new Set(await workflow.value?.upload(uploadSelection.value))
-  selectedUploadOrders.value = uploadSelection.value.filter(number => !uploaded.has(number))
+async function upload(orderNumbers: string[], unpublishedOnly = false) {
+  const dialog = workflow.value
+  if (!dialog || dialog.operation || !orderNumbers.length) return
+  uploadingUnpublished.value = unpublishedOnly
+  try {
+    const uploaded = new Set(await dialog.upload(orderNumbers, unpublishedOnly))
+    selectedUploadOrders.value = uploadSelection.value.filter(number => !uploaded.has(number))
+  } finally {
+    uploadingUnpublished.value = false
+  }
 }
 
 function toggleUpload(orderNumber: string, checked: boolean) {
@@ -154,10 +166,16 @@ onBeforeUnmount(() => {
         >
           <template #workflow-actions>
             <Button v-if="store.workflow.role !== 'production'" type="button" size="xs"
-              :disabled="!!workflow?.operation || !uploadSelection.length" @click="upload">
-              <LoaderCircle v-if="workflow?.operation === 'upload'" class="motion-safe:animate-spin" aria-hidden="true" />
+              :disabled="!!workflow?.operation || !uploadSelection.length" @click="upload(uploadSelection)">
+              <LoaderCircle v-if="workflow?.operation === 'upload' && !uploadingUnpublished" class="motion-safe:animate-spin" aria-hidden="true" />
               <CloudUpload v-else aria-hidden="true" />
-              {{ workflow?.operation === 'upload' ? '正在上传…' : uploadSelection.length ? `上传（${uploadSelection.length}）` : '上传' }}
+              {{ workflow?.operation === 'upload' && !uploadingUnpublished ? '正在上传…' : uploadSelection.length ? `上传（${uploadSelection.length}）` : '上传' }}
+            </Button>
+            <Button v-if="unpublishedOrders.length || uploadingUnpublished" type="button" size="xs" variant="outline"
+              title="上传所有店铺的未上传订单" :disabled="!!workflow?.operation" :aria-busy="uploadingUnpublished"
+              @click="upload(unpublishedOrders, true)">
+              <LoaderCircle v-if="uploadingUnpublished" class="motion-safe:animate-spin" aria-hidden="true" />
+              {{ uploadingUnpublished ? '正在批量上传…' : `上传全部未上传（${unpublishedOrders.length}）` }}
             </Button>
             <Button type="button" size="xs"
               :variant="store.workflow.role === 'production' ? 'default' : 'outline'" :disabled="!!workflow?.operation" @click="sync">

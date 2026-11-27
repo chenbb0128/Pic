@@ -1704,6 +1704,9 @@ function orderProductions(orderNumber: string): Production[] {
 }
 .orderActions {
   display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
 }
 .orderTools {

@@ -1059,12 +1059,22 @@ async fn upload_one(
     index: &mut OrderIndex,
     number: &str,
     kind: &str,
+    unpublished_only: bool,
     checks: Option<&mut StorageChecks>,
 ) -> Result<Option<Preview>, String> {
     let local = db::order_state(&state.store, number)
         .map_err(display)?
         .ok_or("订单不存在。")?;
+    if unpublished_only && (local.shared_state.is_some() || local.remote_operation_id.is_some()) {
+        return Err("这笔订单已上传，已跳过。".into());
+    }
+    if unpublished_only && local.local_completed {
+        return Err("这笔订单已标记完成，已跳过。".into());
+    }
     if let Some(task) = db::task(&state.store, number, kind).map_err(display)? {
+        if unpublished_only && task.expected_operation_id.is_some() {
+            return Err("这笔订单已有共享版本，已跳过。".into());
+        }
         if let Ok(order) = OrderData::parse(task.payload.as_bytes()) {
             verify_provider_role(&state.store, &task.target, kind)?;
             let backend = Backend::bound(&state.store, &state.data_root, &task.target)?;
@@ -1098,7 +1108,7 @@ async fn upload_one(
     let expected = local.remote_operation_id.as_deref();
     let operation = random_hex_pub(16);
     if !current_matches(previous.as_ref(), expected) {
-        if kind == "publish" {
+        if kind == "publish" && !unpublished_only {
             if let Some(remote) = previous.as_ref() {
                 if remote.state == SharedState::Pending {
                     let base = db::synced_snapshot(&state.store, number)
@@ -1196,6 +1206,7 @@ fn verify_provider_role(store: &Store, target: &str, kind: &str) -> Result<(), S
 pub(crate) async fn workflow_upload(
     state: State<'_, AppState>,
     order_numbers: Vec<String>,
+    unpublished_only: Option<bool>,
 ) -> Result<Outcome, String> {
     if db::role(&state.store) == "production" {
         return Err("当前是制作端，不能发布待制作订单。".into());
@@ -1206,13 +1217,14 @@ pub(crate) async fn workflow_upload(
         return Ok(result);
     }
     let mut index = shared_database(&state.data_root).await?;
+    let unpublished_only = unpublished_only.unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
     let mut checks = StorageChecks::new();
     for number in order_numbers {
         if !seen.insert(number.clone()) {
             continue;
         }
-        match upload_one(&state, &mut index, &number, "publish", Some(&mut checks)).await {
+        match upload_one(&state, &mut index, &number, "publish", unpublished_only, Some(&mut checks)).await {
             Ok(None) => {
                 result.updated += 1;
                 result.uploaded_order_numbers.push(number);
@@ -1249,7 +1261,7 @@ pub(crate) async fn workflow_finish(
     }
     if local.target.is_some() {
         let mut index = shared_database(&state.data_root).await?;
-        match upload_one(&state, &mut index, &order_number, "finish", None).await {
+        match upload_one(&state, &mut index, &order_number, "finish", false, None).await {
             Ok(None) => {}
             Ok(Some(conflict)) => {
                 result.conflicts.push(conflict);
@@ -2502,8 +2514,10 @@ mod tests {
 
         let sender_dir = tempfile::tempdir().unwrap();
         let receiver_dir = tempfile::tempdir().unwrap();
+        let unrefreshed_dir = tempfile::tempdir().unwrap();
         let sender = workstation(&sender_dir);
         let receiver = workstation(&receiver_dir);
+        let unrefreshed = workstation(&unrefreshed_dir);
         let (listener, endpoint) = local_server();
         let config = crate::cloud::CloudConfig {
             enabled: true,
@@ -2515,7 +2529,7 @@ mod tests {
         };
         let bucket = config.bucket.clone();
         let mysql = live_config();
-        for state in [&sender, &receiver] {
+        for state in [&sender, &receiver, &unrefreshed] {
             std::fs::write(
                 crate::cloud::config_path(&state.data_root),
                 serde_json::to_vec(&config).unwrap(),
@@ -2566,6 +2580,7 @@ mod tests {
                 reply(socket, 200, &[], b"");
             }
             probe();
+            probe();
             for (path, (_, bytes)) in uploaded_paths.iter().zip(&objects) {
                 let (socket, _) = receive(&listener, &format!("GET {path}"));
                 reply(socket, 200, &[], bytes);
@@ -2579,9 +2594,22 @@ mod tests {
             .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
         let receiver_app = tauri::test::mock_builder().manage(receiver)
             .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
-        let result = workflow_upload(sender_app.state(), orders.to_vec()).await.unwrap();
+        let result = workflow_upload(sender_app.state(), orders.to_vec(), Some(true)).await.unwrap();
         assert!(result.errors.is_empty(), "{:?}", result.errors);
         assert_eq!(result.updated, 3);
+        let repeat = workflow_upload(sender_app.state(), orders.to_vec(), Some(true)).await.unwrap();
+        assert_eq!(repeat.updated, 0);
+        assert_eq!(repeat.errors.len(), 3);
+        // A device may still show a local order after another device has published it.
+        capture_order(&unrefreshed, &first);
+        let unrefreshed_app = tauri::test::mock_builder().manage(unrefreshed)
+            .build(tauri::test::mock_context(tauri::test::noop_assets())).unwrap();
+        let remote_before = index.get(&target, &first).await.unwrap().unwrap();
+        let duplicate = workflow_upload(unrefreshed_app.state(), vec![first.clone()], Some(true)).await.unwrap();
+        assert_eq!(duplicate.updated, 0);
+        assert!(duplicate.errors.is_empty(), "{:?}", duplicate.errors);
+        assert_eq!(duplicate.conflicts.len(), 1);
+        assert_eq!(index.get(&target, &first).await.unwrap(), Some(remote_before));
         assert_eq!(index.read(&target).await.unwrap().len(), 1);
         assert_eq!(index.read(&shops::shared_partition(&target)).await.unwrap().len(), 2);
         assert!(index.assign_legacy_shops(&target, &a.id, &[platform_number.into()]).await.is_err());
@@ -2792,7 +2820,7 @@ mod tests {
             });
             reply(socket, 200, &[], &bytes);
         });
-        let first = workflow_upload(app.state(), vec![number.clone()])
+        let first = workflow_upload(app.state(), vec![number.clone()], None)
             .await
             .unwrap();
         assert_eq!(first.updated, 0);
@@ -2809,7 +2837,7 @@ mod tests {
             .write(&target, Some(&expected), &record)
             .await
             .unwrap());
-        let second = workflow_upload(app.state(), vec![number.clone()])
+        let second = workflow_upload(app.state(), vec![number.clone()], None)
             .await
             .unwrap();
         let error = resolve(second.conflicts.into_iter().next().unwrap())
